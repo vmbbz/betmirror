@@ -261,7 +261,6 @@ const App = () => {
               console.error("Failed to load local config", e);
           }
       }
-      setBridgeHistory(lifiService.getHistory());
 
       // Theme Loader
       const savedTheme = localStorage.getItem('theme') as 'light' | 'dark';
@@ -269,6 +268,13 @@ const App = () => {
           setTheme(savedTheme);
       }
   }, []);
+
+  useEffect(() => {
+      if(userAddress) {
+          lifiService.setUserId(userAddress);
+          lifiService.fetchHistory().then(setBridgeHistory);
+      }
+  }, [userAddress]);
 
   // Apply Theme Class
   useEffect(() => {
@@ -380,6 +386,8 @@ const App = () => {
           const addr = await web3Service.connect();
           setUserAddress(addr);
           setConfig(prev => ({...prev, coldWalletAddress: prev.coldWalletAddress || addr })); 
+          
+          lifiService.setUserId(addr);
 
           // Check Status on Server
           const res = await axios.post('/api/wallet/status', { userId: addr });
@@ -492,7 +500,8 @@ const App = () => {
           
           alert("✅ Bridging Complete! Funds are arriving in your Smart Account.");
           setBridgeQuote(null);
-          setBridgeHistory(lifiService.getHistory());
+          // Refetch from server
+          lifiService.fetchHistory().then(setBridgeHistory);
       } catch (e: any) {
           alert("Bridge Failed: " + e.message);
       } finally {

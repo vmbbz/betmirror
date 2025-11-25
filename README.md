@@ -71,4 +71,3 @@ POLYMARKET_API_PASSPHRASE=
 npm run dev:all
 ```
 Open `http://localhost:5173`.
-# betmirror

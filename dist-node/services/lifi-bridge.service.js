@@ -1,4 +1,5 @@
 import { createConfig, getRoutes, executeRoute } from '@lifi/sdk';
+import axios from 'axios';
 // Initialize LiFi Config
 const lifiConfig = createConfig({
     integrator: 'polycafe-BetMirror',
@@ -7,13 +8,10 @@ const lifiConfig = createConfig({
 export class LiFiBridgeService {
     constructor() {
         this.history = [];
-        // Load local history if available
-        try {
-            const saved = localStorage.getItem('bridge_history');
-            if (saved)
-                this.history = JSON.parse(saved);
-        }
-        catch (e) { }
+        this.userId = '';
+    }
+    setUserId(userId) {
+        this.userId = userId;
     }
     /**
      * Get a quote to bridge funds from User's Chain -> Polygon Proxy
@@ -60,7 +58,7 @@ export class LiFiBridgeService {
             tool: route.steps[0]?.toolDetails?.name || 'LiFi',
             fees: route.gasCostUSD
         };
-        this.saveRecord(record);
+        await this.saveRecord(record);
         try {
             // 2. Execute
             const result = await executeRoute(route, {
@@ -87,20 +85,33 @@ export class LiFiBridgeService {
             const txHash = lastStep.execution?.toTx ||
                 lastStep.execution?.process?.find((p) => p.txHash)?.txHash ||
                 lastStep.execution?.process?.slice(-1)[0]?.txHash;
-            this.saveRecord({ ...record, status: 'COMPLETED', txHash });
+            await this.saveRecord({ ...record, status: 'COMPLETED', txHash });
             return result;
         }
         catch (e) {
             // 4. Fail
-            this.saveRecord({ ...record, status: 'FAILED' });
+            await this.saveRecord({ ...record, status: 'FAILED' });
             throw e;
+        }
+    }
+    async fetchHistory() {
+        if (!this.userId)
+            return [];
+        try {
+            const res = await axios.get(`/api/bridge/history/${this.userId}`);
+            this.history = res.data;
+            return this.history;
+        }
+        catch (e) {
+            console.error("Failed to fetch bridge history", e);
+            return [];
         }
     }
     getHistory() {
         return this.history;
     }
-    saveRecord(record) {
-        // Update or Add
+    async saveRecord(record) {
+        // Update Local State
         const index = this.history.findIndex(r => r.id === record.id);
         if (index >= 0) {
             this.history[index] = record;
@@ -108,7 +119,18 @@ export class LiFiBridgeService {
         else {
             this.history.unshift(record);
         }
-        localStorage.setItem('bridge_history', JSON.stringify(this.history));
+        // Persist to DB
+        if (this.userId) {
+            try {
+                await axios.post('/api/bridge/record', {
+                    userId: this.userId,
+                    transaction: record
+                });
+            }
+            catch (e) {
+                console.error("Failed to persist bridge record", e);
+            }
+        }
     }
     getChainName(chainId) {
         switch (chainId) {

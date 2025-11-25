@@ -27,13 +27,15 @@ Private Key:    ${wallet.privateKey}
 `;
     console.log(output);
     // Optional: Save to a file (gitignored)
+    // Wrapped in try/catch to ensure this script doesn't crash in production environments
+    // where the filesystem might be read-only or ephemeral.
     try {
         const envPath = path.resolve(process.cwd(), '.env.generated');
         fs.appendFileSync(envPath, `\n# Generated ${new Date().toISOString()}\nPUBLIC_KEY=${wallet.address}\nPRIVATE_KEY=${wallet.privateKey}\n`);
         console.log(`(Saved backup to .env.generated)`);
     }
     catch (e) {
-        console.warn('Could not save to file, please copy manually.');
+        console.warn('Could not save to file (filesystem might be read-only), please copy credentials manually from the console output above.');
     }
 }
 generate();

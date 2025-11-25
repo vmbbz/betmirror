@@ -1,3 +1,4 @@
+
 import type { ClobClient } from '@polymarket/clob-client';
 import type { RuntimeEnv } from '../config/env.js';
 import type { Logger } from '../utils/logger.util.js';
@@ -32,15 +33,18 @@ export class TradeMonitorService {
   private readonly processedHashes: Set<string> = new Set();
   private readonly lastFetchTime: Map<string, number> = new Map();
   private isPolling = false;
+  private startTimestamp: number = 0;
 
   constructor(deps: TradeMonitorDeps) {
     this.deps = deps;
   }
 
-  async start(): Promise<void> {
+  async start(startTime: number = 0): Promise<void> {
     const { logger, env } = this.deps;
+    this.startTimestamp = startTime || Math.floor(Date.now() / 1000);
+    
     logger.info(
-      `Initializing Monitor for ${this.deps.userAddresses.length} target wallets...`,
+      `Initializing Monitor for ${this.deps.userAddresses.length} target wallets (Start Time: ${new Date(this.startTimestamp * 1000).toLocaleTimeString()})...`,
     );
     
     // Initial sync
@@ -88,8 +92,12 @@ export class TradeMonitorService {
       if (!activities || !Array.isArray(activities)) return;
 
       const now = Math.floor(Date.now() / 1000);
-      // Increased lookback window for reliability
-      const cutoffTime = now - Math.max(env.aggregationWindowSeconds, 600); 
+      
+      // Use the greater of: Aggregation Window OR Start Time (Prevent fetching trades before bot start)
+      const effectiveCutoff = Math.max(
+          now - Math.max(env.aggregationWindowSeconds, 600), 
+          this.startTimestamp
+      );
 
       for (const activity of activities) {
         if (activity.type !== 'TRADE' && activity.type !== 'ORDER_FILLED') continue;
@@ -97,7 +105,7 @@ export class TradeMonitorService {
         const activityTime = typeof activity.timestamp === 'number' ? activity.timestamp : Math.floor(new Date(activity.timestamp).getTime() / 1000);
         
         // Skip old trades
-        if (activityTime < cutoffTime) continue;
+        if (activityTime < effectiveCutoff) continue;
         
         // Dedup logic
         if (this.processedHashes.has(activity.transactionHash)) continue;

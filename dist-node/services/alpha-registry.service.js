@@ -1,12 +1,11 @@
 import axios from 'axios';
 /**
  * Client-side service to talk to the Global Registry API.
- * No simulation. Real HTTP calls.
+ * Uses relative paths by default to support production deployments where frontend and backend share a domain.
  */
 export class AlphaRegistryService {
     constructor(apiUrl) {
-        // Default to localhost, or set via env in index.tsx config
-        this.apiUrl = 'http://localhost:3000/api';
+        this.apiUrl = '/api';
         if (apiUrl)
             this.apiUrl = apiUrl;
     }

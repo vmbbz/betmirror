@@ -15,7 +15,6 @@ import { ClobClient, Chain, ApiKeyCreds } from '@polymarket/clob-client';
 import { Wallet, AbstractSigner, Provider, JsonRpcProvider, TransactionRequest } from 'ethers';
 
 // --- ADAPTER: ZeroDev (Viem) -> Ethers.js Signer ---
-// This allows the Polymarket SDK to use the Smart Account for signing orders.
 class KernelEthersSigner extends AbstractSigner {
     private kernelClient: any;
     private address: string;
@@ -31,7 +30,6 @@ class KernelEthersSigner extends AbstractSigner {
     }
 
     async signMessage(message: string | Uint8Array): Promise<string> {
-        // ZeroDev/Kernel handles EIP-1271/6492 signing automatically via the client
         const signature = await this.kernelClient.signMessage({ 
             message: typeof message === 'string' ? message : { raw: message } 
         });
@@ -39,13 +37,10 @@ class KernelEthersSigner extends AbstractSigner {
     }
 
     async signTypedData(domain: any, types: any, value: any): Promise<string> {
-        // Adapter for EIP-712 Typed Data
-        // Viem expects strictly typed params, Ethers passes them loosely
-        // We rely on the kernel client's implementation
         return await this.kernelClient.signTypedData({
             domain,
             types,
-            primaryType: Object.keys(types)[0], // Inference
+            primaryType: Object.keys(types)[0], 
             message: value
         });
     }
@@ -55,14 +50,11 @@ class KernelEthersSigner extends AbstractSigner {
     }
 
     async sendTransaction(tx: TransactionRequest): Promise<any> {
-        // Maps Ethers tx request to ZeroDev UserOp
         const hash = await this.kernelClient.sendTransaction({
             to: tx.to,
             data: tx.data,
             value: tx.value ? BigInt(tx.value.toString()) : BigInt(0)
         });
-        // Return a mock response that mimics ethers TransactionResponse structure if needed
-        // or allow the caller to wait on the hash separately.
         return {
             hash,
             wait: async () => this.provider?.getTransactionReceipt(hash)
@@ -92,19 +84,23 @@ export interface BotConfig {
     destinationAddress: string;
   };
   activePositions?: ActivePosition[];
+  stats?: UserStats; // Inject existing stats from DB
   zeroDevRpc?: string;
   // Admin Credentials (Optional)
   polymarketApiKey?: string;
   polymarketApiSecret?: string;
   polymarketApiPassphrase?: string;
+  // Restart Logic
+  startCursor?: number; // Timestamp to resume from
+  registryApiUrl?: string; // URL for internal API calls
 }
 
 export interface BotCallbacks {
-  onCashout?: (record: CashoutRecord) => void;
-  onFeePaid?: (record: FeeDistributionEvent) => void;
-  onTradeComplete?: (trade: TradeHistoryEntry) => void;
-  onStatsUpdate?: (stats: UserStats) => void;
-  onPositionsUpdate?: (positions: ActivePosition[]) => void;
+  onCashout?: (record: CashoutRecord) => Promise<void>;
+  onFeePaid?: (record: FeeDistributionEvent) => Promise<void>;
+  onTradeComplete?: (trade: TradeHistoryEntry) => Promise<void>;
+  onStatsUpdate?: (stats: UserStats) => Promise<void>;
+  onPositionsUpdate?: (positions: ActivePosition[]) => Promise<void>;
 }
 
 export class BotEngine {
@@ -115,7 +111,7 @@ export class BotEngine {
   private watchdogTimer?: NodeJS.Timeout;
   
   private logs: any[] = [];
-  private history: TradeHistoryEntry[] = [];
+  // History is now primarily stored in DB, we only keep recent logs here if needed
   private activePositions: ActivePosition[] = [];
   
   private stats: UserStats = {
@@ -134,10 +130,12 @@ export class BotEngine {
       if (config.activePositions) {
           this.activePositions = config.activePositions;
       }
+      if (config.stats) {
+          this.stats = config.stats;
+      }
   }
 
   public getLogs() { return this.logs; }
-  public getHistory() { return this.history; }
   public getStats() { return this.stats; }
 
   private addLog(type: 'info' | 'warn' | 'error' | 'success', message: string) {
@@ -151,14 +149,12 @@ export class BotEngine {
     if (this.logs.length > 200) this.logs.pop();
   }
 
-  private addHistory(entry: Omit<TradeHistoryEntry, 'id' | 'timestamp'>) {
+  private async recordTrade(entry: Omit<TradeHistoryEntry, 'id' | 'timestamp'>) {
       const historyItem: TradeHistoryEntry = {
           id: Math.random().toString(36).substr(2, 9),
           timestamp: new Date().toISOString(),
           ...entry
       };
-      this.history.unshift(historyItem);
-      if (this.history.length > 100) this.history.pop();
       
       if (entry.status !== 'SKIPPED') {
           this.stats.tradesCount++;
@@ -166,16 +162,10 @@ export class BotEngine {
           if (entry.pnl) {
               this.stats.totalPnl += entry.pnl;
           }
-          
-          const closedTrades = this.history.filter(t => t.status === 'CLOSED' && t.pnl !== undefined);
-          if (closedTrades.length > 0) {
-              const wins = closedTrades.filter(t => t.pnl! > 0).length;
-              this.stats.winRate = Number(((wins / closedTrades.length) * 100).toFixed(1));
-          }
       }
 
-      if (this.callbacks?.onTradeComplete) this.callbacks.onTradeComplete(historyItem);
-      if (this.callbacks?.onStatsUpdate) this.callbacks.onStatsUpdate(this.stats);
+      if (this.callbacks?.onTradeComplete) await this.callbacks.onTradeComplete(historyItem);
+      if (this.callbacks?.onStatsUpdate) await this.callbacks.onStatsUpdate(this.stats);
   }
 
   async revokePermissions() {
@@ -208,7 +198,7 @@ export class BotEngine {
         enableNotifications: this.config.enableNotifications,
         adminRevenueWallet: process.env.ADMIN_REVENUE_WALLET || '0x0000000000000000000000000000000000000000',
         usdcContractAddress: '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174',
-        registryApiUrl: 'http://localhost:3000/api'
+        registryApiUrl: this.config.registryApiUrl || 'http://localhost:3000/api'
       };
 
       // --- ACCOUNT STRATEGY SELECTION ---
@@ -216,28 +206,22 @@ export class BotEngine {
       let walletAddress: string;
       let clobCreds: ApiKeyCreds | undefined = undefined;
 
-      // 1. Smart Account Strategy (ZeroDev) - SaaS USERS
+      // 1. Smart Account Strategy
       if (this.config.walletConfig?.type === 'SMART_ACCOUNT' && this.config.walletConfig.serializedSessionKey) {
           this.addLog('info', '🔐 Initializing ZeroDev Smart Account Session...');
           
           const aaService = new ZeroDevService(this.config.zeroDevRpc || 'https://rpc.zerodev.app/api/v2/bundler/DEFAULT');
-          
-          // Reconstruct the Bot Client from the session key
           const { address, client: kernelClient } = await aaService.createBotClient(this.config.walletConfig.serializedSessionKey);
           
           walletAddress = address;
           this.addLog('success', `Smart Account Active: ${walletAddress.slice(0,6)}... (Session Key)`);
           
-          // Use Adapter to make ZeroDev compatible with Ethers-based ClobClient
           const provider = new JsonRpcProvider(this.config.rpcUrl);
           signerImpl = new KernelEthersSigner(kernelClient, address, provider);
-          
-          // NOTE: Regular users do NOT have API keys. 
-          // The ClobClient will run in "Public Mode" which is sufficient for copy trading (mostly reads + occasional writes).
           clobCreds = undefined; 
 
       } else {
-          // 2. Legacy EOA Strategy - ADMINS / HEADLESS
+          // 2. Legacy EOA Strategy
           this.addLog('info', 'Using Standard EOA Wallet');
           const activeKey = this.config.privateKey || this.config.walletConfig?.sessionPrivateKey;
           if (!activeKey) throw new Error("No valid signing key found for EOA.");
@@ -246,7 +230,6 @@ export class BotEngine {
           signerImpl = new Wallet(activeKey, provider);
           walletAddress = signerImpl.address;
 
-          // Only Admins have API Keys injected via Env/Config
           if (this.config.polymarketApiKey && this.config.polymarketApiSecret && this.config.polymarketApiPassphrase) {
               this.addLog('info', '⚡ API Keys Loaded (High Performance Mode)');
               clobCreds = {
@@ -261,11 +244,10 @@ export class BotEngine {
       const clobClient = new ClobClient(
           'https://clob.polymarket.com',
           Chain.POLYGON,
-          signerImpl, // Accepts either Wallet or KernelEthersSigner
-          clobCreds   // Undefined for Users, Populated for Admins
+          signerImpl, 
+          clobCreds   
       );
 
-      // Attach wallet property for compatibility with existing services
       this.client = Object.assign(clobClient, { wallet: signerImpl });
 
       this.addLog('success', `Bot Online: ${walletAddress.slice(0,6)}...`);
@@ -279,7 +261,6 @@ export class BotEngine {
           usdcContractAddress: env.usdcContractAddress
       };
 
-      // Fund Manager needs the wallet to check balances and sign transfers
       const fundManager = new FundManagerService(this.client.wallet, fundManagerConfig, logger, notifier);
       const feeDistributor = new FeeDistributorService(this.client.wallet, env, logger);
       
@@ -291,15 +272,12 @@ export class BotEngine {
       });
 
       this.addLog('info', 'Checking Token Allowances...');
-      // For Smart Accounts, approvals are often batched or handled via session policies, 
-      // but checking allowance ensures the underlying contract state is valid.
       const approved = await this.executor.ensureAllowance();
       this.stats.allowanceApproved = approved;
 
-      // Initial Auto Cashout Check
       try {
          const cashoutResult = await fundManager.checkAndSweepProfits();
-         if (cashoutResult && this.callbacks?.onCashout) this.callbacks.onCashout(cashoutResult);
+         if (cashoutResult && this.callbacks?.onCashout) await this.callbacks.onCashout(cashoutResult);
       } catch (e) { /* ignore start up cashout error */ }
 
       // Start Trade Monitor
@@ -349,7 +327,6 @@ export class BotEngine {
                     };
                     this.activePositions.push(newPosition);
                 } else if (signal.side === 'SELL') {
-                    // Find the matching position to calculate REAL PnL
                     const posIndex = this.activePositions.findIndex(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
                     if (posIndex !== -1) {
                         const entry = this.activePositions[posIndex];
@@ -363,10 +340,10 @@ export class BotEngine {
                     }
                 }
 
-                if (this.callbacks?.onPositionsUpdate) this.callbacks.onPositionsUpdate(this.activePositions);
+                if (this.callbacks?.onPositionsUpdate) await this.callbacks.onPositionsUpdate(this.activePositions);
 
-                // Log History
-                this.addHistory({
+                // Log History (Database)
+                await this.recordTrade({
                     marketId: signal.marketId,
                     outcome: signal.outcome,
                     side: signal.side,
@@ -386,16 +363,16 @@ export class BotEngine {
                     const feeEvent = await feeDistributor.distributeFeesOnProfit(signal.marketId, realPnl, signal.trader);
                     if (feeEvent) {
                         this.stats.totalFeesPaid += (feeEvent.platformFee + feeEvent.listerFee);
-                        if (this.callbacks?.onFeePaid) this.callbacks.onFeePaid(feeEvent);
+                        if (this.callbacks?.onFeePaid) await this.callbacks.onFeePaid(feeEvent);
                     }
                 }
                 
-                if (this.callbacks?.onStatsUpdate) this.callbacks.onStatsUpdate(this.stats);
+                if (this.callbacks?.onStatsUpdate) await this.callbacks.onStatsUpdate(this.stats);
 
                 // Check for cashout after a profitable trade
                 setTimeout(async () => {
                    const cashout = await fundManager.checkAndSweepProfits();
-                   if (cashout && this.callbacks?.onCashout) this.callbacks.onCashout(cashout);
+                   if (cashout && this.callbacks?.onCashout) await this.callbacks.onCashout(cashout);
                 }, 15000);
 
             } catch (err: any) {
@@ -403,7 +380,7 @@ export class BotEngine {
             }
           } else {
              // Log Skipped Trade
-             this.addHistory({
+             await this.recordTrade({
                 marketId: signal.marketId,
                 outcome: signal.outcome,
                 side: signal.side,
@@ -417,7 +394,8 @@ export class BotEngine {
         }
       });
 
-      await this.monitor.start();
+      // Pass the startCursor to monitor to prevent replaying old trades
+      await this.monitor.start(this.config.startCursor);
       
       // Watchdog for Auto-Take Profit
       this.watchdogTimer = setInterval(() => this.checkAutoTp(), 10000) as unknown as NodeJS.Timeout;
@@ -430,7 +408,6 @@ export class BotEngine {
     }
   }
 
-  // Checks active positions to see if they hit TP threshold
   private async checkAutoTp() {
       if (!this.config.autoTp || !this.executor || !this.client || this.activePositions.length === 0) return;
       
@@ -439,22 +416,21 @@ export class BotEngine {
       for (const pos of positionsToCheck) {
           try {
               const orderBook = await this.client.getOrderBook(pos.tokenId);
-              // Selling YES/NO into bids
               if (orderBook.bids && orderBook.bids.length > 0) {
                   const bestBid = parseFloat(orderBook.bids[0].price);
                   const gainPercent = ((bestBid - pos.entryPrice) / pos.entryPrice) * 100;
                   
                   if (gainPercent >= this.config.autoTp) {
-                      this.addLog('success', `🎯 Auto TP Hit! ${pos.outcome} is up +${gainPercent.toFixed(1)}% (Entry: ${pos.entryPrice}, Current: ${bestBid})`);
+                      this.addLog('success', `🎯 Auto TP Hit! ${pos.outcome} is up +${gainPercent.toFixed(1)}%`);
                       
                       const success = await this.executor.executeManualExit(pos, bestBid);
                       
                       if (success) {
                           this.activePositions = this.activePositions.filter(p => p.tokenId !== pos.tokenId);
-                          if (this.callbacks?.onPositionsUpdate) this.callbacks.onPositionsUpdate(this.activePositions);
+                          if (this.callbacks?.onPositionsUpdate) await this.callbacks.onPositionsUpdate(this.activePositions);
                           
                           const realPnl = pos.sizeUsd * (gainPercent / 100);
-                          this.addHistory({
+                          await this.recordTrade({
                               marketId: pos.marketId,
                               outcome: pos.outcome,
                               side: 'SELL',

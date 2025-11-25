@@ -1,6 +1,4 @@
-
 import 'dotenv/config';
-import { createRequire } from 'module';
 import { loadEnv } from '../config/env.js';
 import { createPolymarketClient } from '../infrastructure/clob-client.factory.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
@@ -10,8 +8,6 @@ import { NotificationService } from '../services/notification.service.js';
 import { FeeDistributorService } from '../services/fee-distributor.service.js';
 import { ConsoleLogger } from '../utils/logger.util.js';
 import { getUsdBalanceApprox, getPolBalance } from '../utils/get-balance.util.js';
-
-const require = createRequire(import.meta.url);
 
 async function main(): Promise<void> {
   const logger = new ConsoleLogger();
@@ -32,15 +28,6 @@ async function main(): Promise<void> {
     logger.warn('To run the Headless Bot, you must configure a local .env file.');
     logger.warn('To run the Web Platform, use: npm run build && npm start');
     process.exit(1);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mcp = require('mcp-polymarket');
-  
-  try {
-     mcp.mcpServerRip({ encoding: 'utf8', resolveFromCwd: false });
-  } catch (e) {
-     logger.debug('MCP Server skipped');
   }
 
   const client = await createPolymarketClient({
@@ -108,7 +95,8 @@ async function main(): Promise<void> {
     },
   });
 
-  await monitor.start();
+  // Start immediately with current time as cursor
+  await monitor.start(Math.floor(Date.now() / 1000));
 }
 
 main().catch((err) => {

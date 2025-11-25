@@ -1,5 +1,6 @@
 
 import { createConfig, getRoutes, executeRoute } from '@lifi/sdk';
+import axios from 'axios';
 
 // Initialize LiFi Config
 const lifiConfig = createConfig({
@@ -31,13 +32,10 @@ export interface BridgeTransactionRecord {
 
 export class LiFiBridgeService {
   private history: BridgeTransactionRecord[] = [];
+  private userId: string = '';
 
-  constructor() {
-      // Load local history if available
-      try {
-          const saved = localStorage.getItem('bridge_history');
-          if(saved) this.history = JSON.parse(saved);
-      } catch(e) {}
+  setUserId(userId: string) {
+      this.userId = userId;
   }
   
   /**
@@ -87,7 +85,8 @@ export class LiFiBridgeService {
          tool: route.steps[0]?.toolDetails?.name || 'LiFi',
          fees: route.gasCostUSD
      };
-     this.saveRecord(record);
+     
+     await this.saveRecord(record);
 
      try {
          // 2. Execute
@@ -116,28 +115,51 @@ export class LiFiBridgeService {
                         lastStep.execution?.process?.find((p: any) => p.txHash)?.txHash ||
                         lastStep.execution?.process?.slice(-1)[0]?.txHash;
 
-         this.saveRecord({ ...record, status: 'COMPLETED', txHash });
+         await this.saveRecord({ ...record, status: 'COMPLETED', txHash });
          return result;
      } catch (e) {
          // 4. Fail
-         this.saveRecord({ ...record, status: 'FAILED' });
+         await this.saveRecord({ ...record, status: 'FAILED' });
          throw e;
      }
+  }
+
+  async fetchHistory(): Promise<BridgeTransactionRecord[]> {
+      if (!this.userId) return [];
+      try {
+          const res = await axios.get(`/api/bridge/history/${this.userId}`);
+          this.history = res.data;
+          return this.history;
+      } catch (e) {
+          console.error("Failed to fetch bridge history", e);
+          return [];
+      }
   }
 
   getHistory(): BridgeTransactionRecord[] {
       return this.history;
   }
 
-  private saveRecord(record: BridgeTransactionRecord) {
-      // Update or Add
+  private async saveRecord(record: BridgeTransactionRecord) {
+      // Update Local State
       const index = this.history.findIndex(r => r.id === record.id);
       if (index >= 0) {
           this.history[index] = record;
       } else {
           this.history.unshift(record);
       }
-      localStorage.setItem('bridge_history', JSON.stringify(this.history));
+
+      // Persist to DB
+      if (this.userId) {
+          try {
+              await axios.post('/api/bridge/record', {
+                  userId: this.userId,
+                  transaction: record
+              });
+          } catch (e) {
+              console.error("Failed to persist bridge record", e);
+          }
+      }
   }
 
   getChainName(chainId: number): string {

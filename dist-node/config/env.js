@@ -15,11 +15,11 @@ export function loadEnv() {
             .map((s) => s.trim())
             .filter(Boolean);
     };
-    // Removed the strict 'required' check function to allow graceful startup without .env
     const userAddresses = parseList(process.env.USER_ADDRESSES);
+    // Use the provided Atlas URI as the default if env var is missing
+    const defaultMongoUri = 'mongodb+srv://limeikenji_db_user:lT4HIyBhbui8vFQr@cluster0.bwk2i6s.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
     const env = {
         userAddresses,
-        // Allow empty strings. Main.ts will handle the check.
         proxyWallet: process.env.PUBLIC_KEY || '',
         privateKey: process.env.PRIVATE_KEY || '',
         rpcUrl: process.env.RPC_URL || 'https://polygon-rpc.com',
@@ -32,7 +32,6 @@ export function loadEnv() {
         polymarketApiKey: process.env.POLYMARKET_API_KEY,
         polymarketApiSecret: process.env.POLYMARKET_API_SECRET,
         polymarketApiPassphrase: process.env.POLYMARKET_API_PASSPHRASE,
-        // Default to localhost for dev, but this should be your deployed server URL
         registryApiUrl: process.env.REGISTRY_API_URL || 'http://localhost:3000/api',
         adminRevenueWallet: process.env.ADMIN_REVENUE_WALLET || '0xAdminRevenueWalletHere',
         // Automation
@@ -47,7 +46,10 @@ export function loadEnv() {
         userPhoneNumber: process.env.USER_PHONE_NUMBER,
         // AA
         zeroDevRpc: process.env.ZERODEV_RPC || 'https://rpc.zerodev.app/api/v2/bundler/your-project-id',
-        zeroDevProjectId: process.env.ZERODEV_PROJECT_ID
+        zeroDevProjectId: process.env.ZERODEV_PROJECT_ID,
+        // Database
+        mongoUri: process.env.MONGODB_URI || defaultMongoUri,
+        mongoEncryptionKey: process.env.MONGO_ENCRYPTION_KEY || 'MmExQl8lTwgxA40wxbL5k5m+UCPb/0YvO5CDjypmiT0='
     };
     return env;
 }

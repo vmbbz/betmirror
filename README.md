@@ -1,73 +1,188 @@
 
-# Bet Mirror | Pro Cloud Terminal
+```
+  ____  _____ _____   __  __   _   ____  ____   ___  ____  
+ | __ )| ____|_   _| |  \/  | | | |  _ \|  _ \ / _ \|  _ \ 
+ |  _ \|  _|   | |   | |\/| | | | | |_) | |_) | | | | |_) |
+ | |_) | |___  | |   | |  | | | | |  _ <|  _ <| |_| |  _ < 
+ |____/|_____| |_|   |_|  |_| |_| |_| \_\_| \_\\___/|_| \_\
+                                                           
+              >>> PRO CLOUD TERMINAL v3.0 <<<
+```
 
-**The world's first AI-powered, 24/7 server-side copy trading platform for Polymarket.**
+> **The world's first Non-Custodial, AI-Powered, Server-Side Copy Trading Platform for Polymarket.**
 
-## 🏗 Architecture
+![License](https://img.shields.io/badge/license-Apache_2.0-blue)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)
+![React](https://img.shields.io/badge/React-18-blue)
+![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-green)
+![ZeroDev](https://img.shields.io/badge/ZeroDev-AA-purple)
 
-1.  **Trustless Auth (Account Abstraction):** 
-    - Users connect via **MetaMask/Phantom**.
-    - The system deploys a **ZeroDev Smart Account** (Kernel v3.1) on Polygon.
-    - Users sign a **Session Key** giving the server permission to trade (but not withdraw).
+**Bet Mirror Pro** is a sophisticated trading terminal that allows users to mirror high-performance Polymarket traders automatically. Unlike traditional bots that require your private keys, Bet Mirror Pro uses **Account Abstraction (ERC-4337)** to separate *Ownership* from *Trading Permissions*.
+
+---
+
+## 🚀 How It Works
+
+Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step process for the end user.
+
+### 1. The Smart Onboarding
+- **Connect:** User connects their standard EOA (Metamask, Phantom, Rabinbow).
+- **Deploy:** The app automatically deploys a **ZeroDev Smart Account** (Kernel v3.1) owned by the user.
+- **Session Keys:** The user signs a specific "Session Key" that grants the Bot Server permission to **Trade Only**. The server cannot withdraw funds.
+
+### 2. The Cloud Engine (Server-Side)
+- **Persistence:** Once the bot is started, it runs on our Node.js cloud cluster backed by **MongoDB**.
+- **Offline Trading:** The user can close their browser or turn off their computer. The bot continues to monitor markets and execute trades 24/7.
+- **AI Analysis:** Before every trade, the **Google Gemini 2.5** Agent analyzes the market question to ensure it aligns with the user's risk profile (Conservative, Balanced, or Degen).
+
+### 3. The Marketplace & Profit
+- **Copy Trading:** Users browse the **Alpha Registry** to find whales with high win rates.
+- **Fee Sharing:** When a user profits from a copied trade, a **1% fee** is automatically sent to the original trader (The Lister) and **1%** to the Platform.
+- **Trustless Withdraw:** Users can trigger a forced withdrawal from the dashboard at any time, bypassing the server entirely.
+
+---
+
+## 🖥️ Interface Preview
+
+### 📊 The Dashboard
+The command center. View your Real-Time PnL, Active Positions, and System Logs.
+> *Displays wallet balances (Native & Smart Account), Live Trade Console, and Performance Metrics.*
+
+### 🔒 The Vault
+Security first. Configure your AI Risk settings and manage automation.
+> *Manage API Keys, Risk Profiles (Conservative/Degen), Auto-Cashout thresholds, and SMS Notification settings.*
+
+### 🌍 The Alpha Registry
+A decentralized marketplace for trading signals.
+> *A leaderboard of top Polymarket traders. Users can "One-Click Copy" any wallet listed here. Listers earn passive income from copiers.*
+
+### 🌉 Cross-Chain Bridge
+Fund your bot from anywhere.
+> *Integrated Li.Fi Widget allows deposits from Ethereum, Base, Solana, and Arbitrum directly into the Polygon Smart Account.*
+
+---
+
+## 🏗 System Architecture
+
+The platform uses a hybrid architecture combining the speed of centralized execution with the security of decentralized custody.
+
+[📖 **Read the Full Architecture Guide**](./ARCHITECTURE.md)
+
+```mermaid
+graph TD
+    User[User / Wallet] -->|Signs Session Key| React[Web Terminal]
+    React -->|Encrypted Key| API[Node.js API Server]
     
-2.  **Server Engine (Node.js):**
-    - Runs 24/7.
-    - Tracks **Real PnL** by remembering entry prices.
-    - Uses the Session Key to sign UserOps.
+    subgraph "Cloud Infrastructure"
+        API -->|Persist State| DB[(MongoDB Atlas)]
+        API -->|AI Analysis| Gemini[Gemini 2.5 Flash]
+        API -->|Bridge Quotes| LiFi[Li.Fi Protocol]
+    end
+    
+    subgraph "Blockchain (Polygon)"
+        API -->|Execute Trade (Session Key)| SmartAccount[ZeroDev Smart Account]
+        SmartAccount -->|Interact| Poly[Polymarket CTF]
+    end
+```
 
-3.  **Cross-Chain Bridging (Li.Fi):**
-    - Fund your bot directly from Base, BSC, Arbitrum, or Solana.
-    - **0.5% Protocol Fee** applied to bridge transactions.
+### 💎 Key Features
 
-## 🚀 Features
+#### 1. 🛡️ Non-Custodial Smart Accounts (ZeroDev)
+We do not ask for your Private Key. Instead, the app deploys a **Smart Contract Wallet** owned by you.
+- **Security:** You can revoke the bot's access on-chain at any time.
+- **Gas Abstraction:** Future-proofed for gasless transactions.
 
-*   **Wallet (Formerly Vault):** Manage your Smart Account, view keys, and configure strategy.
-*   **System:** View global platform metrics (Volume, Revenue, Active Bots).
-*   **Registry:** Copy high-performance traders and earn 1% fees if you list your own wallet.
-*   **Bridge:** Seamlessly deposit funds from any chain.
+#### 2. ☁️ Cloud Persistence (MongoDB Atlas)
+Your bot runs 24/7 on the server.
+- **Auto-Recovery:** If the server restarts, your bot automatically rehydrates from the database and resumes trading.
+- **Trade History:** Every trade, PnL, and AI reasoning log is permanently stored.
 
-## 🛠 Quick Start
+#### 3. 🌉 Cross-Chain Bridge (Li.Fi)
+Fund your trading bot from anywhere.
+- **Supported Chains:** Ethereum, Base, Arbitrum, BSC, Solana.
+- **One-Click:** Swaps and Bridges funds directly into your Polygon Smart Account in one transaction.
 
-### 1. Installation
+---
+
+---
+
+## 📸 Screenshots
+
+![Dashboard View](./docs/assets/dashboard_view.png)
+*Real-time Dashboard with Asset Matrix and Performance Metrics.*
+
+![Bridge Interface](./docs/assets/bridge_view.png)
+*Cross-Chain Deposit via Li.Fi.*
+
+---
+
+## 🛠️ Technology Stack
+
+*   **Frontend:** React, Vite, TailwindCSS, Lucide Icons.
+*   **Backend:** Node.js, Express, TypeScript.
+*   **Database:** MongoDB (Mongoose ODM).
+*   **Web3:** Viem, Ethers.js, ZeroDev SDK (Kernel v3.1), Li.Fi SDK.
+*   **AI:** Google GenAI SDK (Gemini 2.5).
+
+---
+
+## 🚀 Quick Start Guide
+
+### 1. Prerequisites
+- Node.js v18+
+- MongoDB Atlas Cluster (Free Tier is fine)
+- ZeroDev Project ID (Free Tier)
+- Google Gemini API Key (Free)
+
+### 2. Installation
 ```bash
+git clone https://github.com/your-repo/bet-mirror.git
+cd bet-mirror
 npm install
 ```
 
-### 2. Configuration (.env)
+### 3. Configuration
+Create a `.env` file in the root directory:
 
-You must configure the `.env` file for the application to function correctly.
-
-**Admin Revenue**
 ```env
-# Revenue Wallet (Where 1% Fees are sent)
-ADMIN_REVENUE_WALLET=0xYourColdWallet
+# --- Database (Required) ---
+MONGODB_URI=mongodb+srv://<user>:<pass>@cluster.mongodb.net/?retryWrites=true&w=majority
+
+# --- Account Abstraction (Required) ---
+# Get this from dashboard.zerodev.app (Polygon Mainnet)
+ZERODEV_PROJECT_ID=your_project_id
+ZERODEV_RPC=https://rpc.zerodev.app/api/v2/bundler/your_project_id
+
+# --- Admin Revenue ---
+# Wallet that receives 1% platform fees
+ADMIN_REVENUE_WALLET=0xYourColdWalletAddress
 ```
 
-**ZeroDev (Account Abstraction)**
-*Required for Smart Accounts to work on Polygon.*
-1.  Go to [ZeroDev Dashboard](https://dashboard.zerodev.app).
-2.  Create a Project on **Polygon Mainnet**.
-3.  Copy your Project ID.
-```env
-ZERODEV_RPC=https://rpc.zerodev.app/api/v2/bundler/YOUR_PROJECT_ID_HERE
-ZERODEV_PROJECT_ID=YOUR_PROJECT_ID_HERE
-```
-
-**Polymarket API Keys (Admin Only)**
-*Note: Regular users use Smart Accounts and do not need these keys. These are only for Headless/Admin bots.*
-```env
-POLYMARKET_API_KEY=
-POLYMARKET_API_SECRET=
-POLYMARKET_API_PASSPHRASE=
-```
-
-**Li.Fi (Bridging)**
-*Required for official integration and fee collection.*
-1.  The app works out of the box with public endpoints.
-2.  To collect the 0.5% integrator fee, register your project name with Li.Fi and update the `integrator` string in `src/services/lifi-bridge.service.ts`.
-
-### 3. Run
+### 4. Run Development Environment
+This starts both the Backend API (Port 3000) and Frontend (Port 5173).
 ```bash
 npm run dev:all
 ```
-Open `http://localhost:5173`.
+
+### 5. Production Build (Docker)
+Deploying to a cloud provider (Railway, Sliplane, DigitalOcean)? Use the Dockerfile.
+```bash
+docker build -t bet-mirror .
+docker run -p 3000:3000 -e MONGODB_URI=... bet-mirror
+```
+
+---
+
+## 🔒 Security Model
+
+| Component | Responsibility | Access Level |
+| :--- | :--- | :--- |
+| **Owner Key** | Held by User (Metamask) | **Full Admin**. Can withdraw funds, pause bot, change settings. |
+| **Session Key** | Held by Server (Encrypted DB) | **Limited**. Can only execute trades. Cannot withdraw. |
+| **Database** | MongoDB Atlas | Stores Config, History, and Encrypted Session Keys. |
+
+---
+
+## ⚠️ Disclaimer
+
+This software is for educational purposes only. Prediction markets involve risk. The "Trustless" architecture protects against server-side theft, but it does not protect against bad trading decisions or smart contract bugs. Use at your own risk.

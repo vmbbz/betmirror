@@ -7,7 +7,7 @@ import {
   TrendingUp, History, Copy, ExternalLink, AlertTriangle, Smartphone, Coins, PlusCircle, X,
   CheckCircle2, ArrowDownCircle, ArrowUpCircle, Brain, AlertCircle, Trophy, Globe, Zap, LogOut,
   Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLeft, LifeBuoy,
-  Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3
+  Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -627,166 +627,20 @@ const App = () => {
 
   // --- VIEW: LANDING ---
   if (!isConnected) {
-      return (
-          <div className="fixed inset-0 z-[100] bg-white dark:bg-[#050505] overflow-y-auto overflow-x-hidden font-sans">
-              {/* Ambient Background */}
-              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100/50 via-white to-white dark:from-blue-900/20 dark:via-[#050505] dark:to-[#050505] pointer-events-none"></div>
-              <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150 pointer-events-none mix-blend-overlay"></div>
-
-              <div className="relative min-h-screen flex flex-col items-center justify-center p-6">
-                  
-                  {/* Header / Branding */}
-                  <div className="text-center space-y-8 max-w-4xl w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
-                      
-                      {/* Logo */}
-                      <div className="group relative w-24 h-24 mx-auto cursor-pointer">
-                          <div className="absolute inset-0 bg-blue-500 rounded-3xl blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
-                          <div className="relative w-full h-full bg-gradient-to-tr from-blue-600 to-indigo-700 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-500/20 transform group-hover:scale-105 transition-all duration-300">
-                              <Activity size={48} className="text-white" />
-                          </div>
-                      </div>
-
-                      {/* Title Text */}
-                      <div>
-                          <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-gray-900 dark:text-white mb-6 drop-shadow-sm">
-                              BET MIRROR <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-500">PRO</span>
-                          </h1>
-                          <p className="text-lg md:text-2xl text-gray-500 dark:text-gray-400 font-medium max-w-2xl mx-auto leading-relaxed">
-                              The institutional-grade prediction market terminal. <br/>
-                              <span className="text-gray-900 dark:text-gray-200">Non-Custodial. AI-Powered. 24/7 Cloud Execution.</span>
-                          </p>
-                      </div>
-
-                      {/* CTA */}
-                      <div className="max-w-md mx-auto w-full pt-4">
-                          <button 
-                              onClick={handleConnect} 
-                              className="group relative w-full py-5 bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-lg rounded-2xl hover:shadow-2xl hover:shadow-blue-500/20 hover:-translate-y-1 transition-all duration-300 overflow-hidden"
-                          >
-                              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out"></div>
-                              <span className="relative flex items-center justify-center gap-3">
-                                  <Wallet className="w-6 h-6" /> Connect Terminal
-                              </span>
-                          </button>
-                          <div className="flex justify-center gap-6 mt-4 text-[10px] uppercase tracking-widest font-bold text-gray-400">
-                              <span className="flex items-center gap-1"><Shield size={10}/> Audited</span>
-                              <span className="flex items-center gap-1"><Zap size={10}/> Gasless</span>
-                              <span className="flex items-center gap-1"><Globe size={10}/> Global</span>
-                          </div>
-                      </div>
-
-                      {/* Divider */}
-                      <div className="w-full max-w-xs mx-auto h-px bg-gradient-to-r from-transparent via-gray-200 dark:via-gray-800 to-transparent my-12"></div>
-
-                      {/* Supported Chains - Logos */}
-                      <div className="space-y-6">
-                          <p className="text-sm font-semibold text-gray-500 dark:text-gray-500 uppercase tracking-widest">
-                              Built for Prediction Markets on
-                          </p>
-                          <div className="flex flex-wrap justify-center items-center gap-6 px-4 opacity-80 hover:opacity-100 transition-opacity">
-                              <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                              <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                              <img src="https://raw.githubusercontent.com/base-org/brand-kit/master/logo/in-product/Base_Network_Logo.svg" alt="Base" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                              <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                              <img src="https://cryptologos.cc/logos/bnb-bnb-logo.svg?v=026" alt="BSC" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                              <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                          </div>
-                      </div>
-
-                      {/* Markets Status Grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto pt-12 text-left w-full">
-                          
-                          {/* Active Market Card */}
-                          <div className="relative overflow-hidden p-6 rounded-3xl bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 shadow-xl hover:shadow-2xl hover:border-blue-500/30 transition-all duration-300 group">
-                              <div className="absolute top-0 right-0 p-4 opacity-5 transform group-hover:scale-110 transition-transform duration-500">
-                                  <TrendingUp size={100} />
-                              </div>
-                              <div className="relative z-10">
-                                  <div className="flex items-center gap-2 mb-4">
-                                      <span className="relative flex h-2.5 w-2.5">
-                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
-                                      </span>
-                                      <span className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">Live Integration</span>
-                                  </div>
-                                  <div className="flex items-center gap-3 mb-4">
-                                      {/* Polymarket Logic: If no logo, use blue icon */}
-                                      <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-xl">P</div>
-                                      <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Polymarket</h3>
-                                  </div>
-                                  <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-4">Current Copy Trading Volume Leader</p>
-                                  <div className="inline-flex items-baseline gap-2 px-3 py-1 rounded-lg bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
-                                      <Users size={14} className="text-gray-400"/>
-                                      <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">1.2M+</span>
-                                      <span className="text-[10px] text-gray-500 uppercase font-bold">Users</span>
-                                  </div>
-                              </div>
-                          </div>
-
-                          {/* Coming Soon Card */}
-                          <div className="relative overflow-hidden p-6 rounded-3xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/5 opacity-90 hover:opacity-100 transition-opacity duration-300">
-                              <div className="relative z-10">
-                                  <div className="flex items-center gap-2 mb-4">
-                                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500"></span>
-                                      <span className="text-xs font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider">Coming Soon</span>
-                                  </div>
-                                  <div className="flex items-center gap-3 mb-4">
-                                       {/* PredictBase Placeholder */}
-                                      <div className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-white font-bold text-xl border border-white/10">pb</div>
-                                      <h3 className="text-2xl font-bold text-gray-900 dark:text-white">PredictBase</h3>
-                                  </div>
-                                  <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-4">Next-Gen Sports & Crypto Markets</p>
-                                  <div className="inline-flex items-baseline gap-2 px-3 py-1 rounded-lg bg-white/50 dark:bg-white/5 border border-gray-200 dark:border-white/5">
-                                      <Users size={14} className="text-gray-400"/>
-                                      <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">85k+</span>
-                                      <span className="text-[10px] text-gray-500 uppercase font-bold">Waitlist</span>
-                                  </div>
-                              </div>
-                          </div>
-
-                      </div>
-
-                      {/* Powered By Strip */}
-                      <div className="pt-16 pb-8 border-t border-gray-200 dark:border-white/5 w-full max-w-3xl mx-auto mt-12">
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-6">Infrastructure Partners</p>
-                          <div className="flex flex-wrap justify-center gap-8 md:gap-12 opacity-50 hover:opacity-80 transition-opacity">
-                              <div className="flex items-center gap-2">
-                                  <Zap size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">ZeroDev</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                  <Globe size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">LI.FI</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                  <Brain size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">Google Gemini</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                  <Server size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">MongoDB Atlas</span>
-                              </div>
-                          </div>
-                      </div>
-
-                      {/* Suggestion Input */}
-                      <div className="pt-4 pb-12">
-                          <div className="inline-flex flex-col items-center gap-3 group cursor-pointer">
-                              <div className="p-3 rounded-full bg-gray-100 dark:bg-white/5 text-gray-400 group-hover:text-blue-500 group-hover:scale-110 transition-all duration-300">
-                                  <MessageSquare size={20} />
-                              </div>
-                              <p className="text-sm font-medium text-gray-500 group-hover:text-gray-800 dark:group-hover:text-white transition-colors">
-                                  What would you like to see? <span className="underline decoration-dotted underline-offset-4">Suggest here...</span>
-                              </p>
-                          </div>
-                      </div>
-
-                  </div>
-              </div>
-          </div>
-      );
+      return <Landing onConnect={handleConnect} theme={theme} toggleTheme={toggleTheme} />;
   }
 
   // --- VIEW: ACTIVATION (Account Abstraction) ---
   if (needsActivation) {
       return (
           <div className="min-h-screen bg-white dark:bg-[#050505] flex flex-col items-center justify-center text-gray-900 dark:text-white p-4 transition-colors duration-200">
+              {/* Theme Toggle */}
+              <div className="absolute top-6 right-6">
+                  <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-white/10 text-gray-600 dark:text-gray-400 transition-colors">
+                     {theme === 'light' ? <Moon size={20}/> : <Sun size={20}/>}
+                  </button>
+              </div>
+
               <div className="max-w-xl w-full bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-8 space-y-6 relative overflow-hidden shadow-2xl">
                   <div className="absolute top-0 right-0 p-8 opacity-5 text-blue-600">
                       <Shield size={120} />
@@ -1662,18 +1516,54 @@ const App = () => {
       <FeedbackWidget userId={userAddress} />
       
       {/* Landing View Helper */}
-      {!isConnected && <Landing onConnect={handleConnect} />}
+      {!isConnected && <Landing onConnect={handleConnect} theme={theme} toggleTheme={toggleTheme} />}
     </div>
   );
 };
 
-const Landing = ({ onConnect }: { onConnect: () => void }) => (
-    <div className="fixed inset-0 z-[100] bg-white dark:bg-[#050505] overflow-y-auto overflow-x-hidden font-sans">
+const SmartLogo = ({ src, fallbackText, className }: { src: string, fallbackText: string, className?: string }) => {
+    const [error, setError] = useState(false);
+    
+    if(error) {
+        return (
+            <div className={`flex items-center justify-center text-white font-bold text-xl border border-white/10 ${className}`}>
+                {fallbackText}
+            </div>
+        )
+    }
+    
+    return (
+        <img 
+            src={src} 
+            onError={() => setError(true)} 
+            className={`object-cover ${className}`} 
+            alt={fallbackText}
+        />
+    )
+}
+
+const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, theme: string, toggleTheme: () => void }) => (
+    <div className="fixed inset-0 z-[100] bg-white dark:bg-[#050505] overflow-y-auto overflow-x-hidden font-sans transition-colors duration-300">
+        
+        {/* Floating Header */}
+        <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-50">
+             <div className="flex items-center gap-2 opacity-50">
+                 <Activity size={20} className="text-blue-600 dark:text-white"/>
+                 <span className="font-bold text-sm text-gray-900 dark:text-white tracking-widest">BET MIRROR</span>
+             </div>
+             <button 
+                onClick={toggleTheme} 
+                className="p-3 bg-gray-100 dark:bg-white/10 rounded-full hover:scale-110 transition-all shadow-lg backdrop-blur-md text-gray-600 dark:text-white"
+             >
+                {theme === 'light' ? <Moon size={18}/> : <Sun size={18}/>}
+             </button>
+        </div>
+
         {/* Ambient Background */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100/50 via-white to-white dark:from-blue-900/20 dark:via-[#050505] dark:to-[#050505] pointer-events-none"></div>
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150 pointer-events-none mix-blend-overlay"></div>
 
-        <div className="relative min-h-screen flex flex-col items-center justify-center p-6">
+        <div className="relative min-h-screen flex flex-col items-center pt-32 pb-16 px-6">
             
             {/* Header / Branding */}
             <div className="text-center space-y-8 max-w-4xl w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
@@ -1750,8 +1640,11 @@ const Landing = ({ onConnect }: { onConnect: () => void }) => (
                                 <span className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">Live Integration</span>
                             </div>
                             <div className="flex items-center gap-3 mb-4">
-                                {/* Polymarket Logic: If no logo, use blue icon */}
-                                <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-xl">P</div>
+                                <SmartLogo 
+                                    src="https://assets.polymarket.com/static/logo-round.svg" 
+                                    fallbackText="P" 
+                                    className="w-10 h-10 rounded-full bg-blue-600"
+                                />
                                 <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Polymarket</h3>
                             </div>
                             <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-4">Current Copy Trading Volume Leader</p>
@@ -1771,8 +1664,11 @@ const Landing = ({ onConnect }: { onConnect: () => void }) => (
                                 <span className="text-xs font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider">Coming Soon</span>
                             </div>
                             <div className="flex items-center gap-3 mb-4">
-                                 {/* PredictBase Placeholder */}
-                                <div className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center text-white font-bold text-xl border border-white/10">pb</div>
+                                 <SmartLogo 
+                                    src="/predictbase.png" 
+                                    fallbackText="pb" 
+                                    className="w-10 h-10 rounded-full bg-gray-800"
+                                />
                                 <h3 className="text-2xl font-bold text-gray-900 dark:text-white">PredictBase</h3>
                             </div>
                             <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-4">Next-Gen Sports & Crypto Markets</p>
@@ -1818,28 +1714,63 @@ const Landing = ({ onConnect }: { onConnect: () => void }) => (
                 </div>
 
             </div>
-        </div>
-    </div>
-);
-
-const Activation = ({ onActivate, isActivating }: { onActivate: () => void, isActivating: boolean }) => (
-    <div className="fixed inset-0 z-[100] bg-white dark:bg-[#050505] flex flex-col items-center justify-center text-gray-900 dark:text-white p-4">
-        <div className="max-w-xl w-full bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-10 space-y-8 relative overflow-hidden shadow-2xl">
-            <div className="absolute top-0 right-0 p-8 opacity-5"><Shield size={150} className="text-blue-600"/></div>
-            <div className="flex items-center gap-4">
-                <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-500/30"><Zap size={40} className="text-blue-600 dark:text-blue-400" /></div>
-                <div><h2 className="text-3xl font-bold text-gray-900 dark:text-white">Activate Smart Bot</h2><p className="text-gray-500">Deploy your non-custodial trading engine.</p></div>
+            
+            <div className="animate-bounce">
+                <ChevronDown className="text-gray-400"/>
             </div>
-            <div className="space-y-4">
-                <div className="flex items-start gap-4 p-4 bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-200 dark:border-white/5">
-                    <CheckCircle2 size={24} className="text-green-500 mt-1" />
-                    <div><span className="text-lg font-bold text-gray-900 dark:text-white">Trustless Security</span><p className="text-sm text-gray-500">You hold the admin keys. We only get trade permissions.</p></div>
+
+            {/* --- HOW IT WORKS SECTION --- */}
+            <div className="w-full max-w-6xl mx-auto mt-24 pb-24">
+                <div className="text-center mb-16">
+                    <span className="text-blue-600 dark:text-blue-500 text-sm font-bold uppercase tracking-widest">The Architecture</span>
+                    <h2 className="text-3xl md:text-5xl font-black text-gray-900 dark:text-white mt-2">How Bet Mirror Works</h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    {/* Step 1 */}
+                    <div className="relative group">
+                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-3xl transform group-hover:scale-105 transition-transform duration-500"></div>
+                        <div className="relative p-8 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-3xl h-full flex flex-col">
+                            <div className="w-14 h-14 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl flex items-center justify-center mb-6">
+                                <Wallet size={28}/>
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">1. Connect & Deploy</h3>
+                            <p className="text-gray-500 text-sm leading-relaxed">
+                                Link your wallet (MetaMask/Phantom). We instantly deploy a non-custodial <strong>Smart Account</strong> (ZeroDev Kernel) on Polygon. This is your dedicated trading vault.
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Step 2 */}
+                    <div className="relative group">
+                        <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-pink-500/10 rounded-3xl transform group-hover:scale-105 transition-transform duration-500"></div>
+                        <div className="relative p-8 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-3xl h-full flex flex-col">
+                            <div className="w-14 h-14 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-2xl flex items-center justify-center mb-6">
+                                <Key size={28}/>
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">2. Grant Permission</h3>
+                            <p className="text-gray-500 text-sm leading-relaxed">
+                                Sign a restricted <strong>Session Key</strong>. This grants our cloud server permission to <em>execute trades only</em>. It physically cannot withdraw your funds. You remain in full control.
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Step 3 */}
+                    <div className="relative group">
+                        <div className="absolute inset-0 bg-gradient-to-br from-green-500/10 to-emerald-500/10 rounded-3xl transform group-hover:scale-105 transition-transform duration-500"></div>
+                        <div className="relative p-8 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-3xl h-full flex flex-col">
+                            <div className="w-14 h-14 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-2xl flex items-center justify-center mb-6">
+                                <Server size={28}/>
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">3. 24/7 Cloud Trading</h3>
+                            <p className="text-gray-500 text-sm leading-relaxed">
+                                Close your laptop. Our Node.js engine monitors the blockchain 24/7, uses <strong>Gemini AI</strong> to analyze risk, and executes copy-trades instantly.
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <button onClick={onActivate} disabled={isActivating} className="w-full py-5 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-3 text-lg shadow-lg shadow-blue-500/20">
-                {isActivating ? <RefreshCw className="animate-spin" /> : <Rocket size={24} />}
-                {isActivating ? 'DEPLOYING...' : 'CREATE SMART ACCOUNT'}
-            </button>
+
         </div>
     </div>
 );

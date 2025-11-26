@@ -1736,7 +1736,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                     
                     <div className="flex gap-8">
                         <a href="#" className="text-gray-500 hover:text-blue-600 dark:hover:text-white transition-colors"><FileText size={16}/></a>
-                        <a href="#" className="text-gray-500 hover:text-blue-600 dark:hover:text-white transition-colors"><Twitter size={16}/></a>
+                        <a href="https://x.com/ai_quants" className="text-gray-500 hover:text-blue-600 dark:hover:text-white transition-colors"><Twitter size={16}/></a>
                         <a href="#" className="text-gray-500 hover:text-blue-600 dark:hover:text-white transition-colors"><Github size={16}/></a>
                     </div>
 

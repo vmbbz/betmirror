@@ -88,7 +88,7 @@ const FeedbackWidget = ({ userId }: { userId: string }) => {
             {!isOpen && (
                 <button 
                     onClick={() => setIsOpen(true)} 
-                    className="w-14 h-14 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-full flex items-center justify-center text-white shadow-lg hover:scale-110 transition-all hover:shadow-blue-500/30 group relative"
+                    className="w-14 h-14 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-lg hover:scale-110 transition-all hover:shadow-blue-500/30 group relative"
                 >
                     <MessageSquare size={24} className="group-hover:rotate-12 transition-transform" />
                     <span className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-black"></span>
@@ -695,12 +695,14 @@ const App = () => {
       <header className="h-16 border-b border-gray-200 dark:border-terminal-border bg-white/80 dark:bg-terminal-card/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
             <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <div className="w-8 h-8 rounded bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
                     <Activity className="text-white" size={18} />
                 </div>
                 <div>
-                    <h1 className="font-bold text-gray-900 dark:text-white tracking-tight leading-none">BET MIRROR</h1>
-                    <span className="text-[10px] text-blue-600 dark:text-terminal-accent font-mono tracking-widest uppercase">PRO TERMINAL</span>
+                    <h1 className="font-bold text-gray-900 dark:text-white tracking-tight leading-none">
+                        <span className="text-blue-600">BET</span> MIRROR
+                    </h1>
+                    <span className="text-[10px] text-gray-500 font-mono tracking-widest uppercase">TERMINAL</span>
                 </div>
             </div>
 
@@ -930,7 +932,7 @@ const App = () => {
                 </div>
             </div>
         )}
-
+        
         {/* SYSTEM PAGE */}
         {activeTab === 'system' && systemStats && (
             <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -1570,8 +1572,8 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 
                 {/* Logo */}
                 <div className="group relative w-24 h-24 mx-auto cursor-pointer">
-                    <div className="absolute inset-0 bg-blue-500 rounded-3xl blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
-                    <div className="relative w-full h-full bg-gradient-to-tr from-blue-600 to-indigo-700 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-500/20 transform group-hover:scale-105 transition-all duration-300">
+                    <div className="absolute inset-0 bg-blue-600 rounded-3xl blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
+                    <div className="relative w-full h-full bg-blue-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-600/30 transform group-hover:scale-105 transition-all duration-300">
                         <Activity size={48} className="text-white" />
                     </div>
                 </div>
@@ -1579,7 +1581,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 {/* Title Text */}
                 <div>
                     <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-gray-900 dark:text-white mb-6 drop-shadow-sm">
-                        BET MIRROR <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-500">PRO</span>
+                        <span className="text-blue-600">BET</span> MIRROR
                     </h1>
                     <p className="text-lg md:text-2xl text-gray-500 dark:text-gray-400 font-medium max-w-2xl mx-auto leading-relaxed">
                         The institutional-grade prediction market terminal. <br/>
@@ -1613,13 +1615,15 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                     <p className="text-sm font-semibold text-gray-500 dark:text-gray-500 uppercase tracking-widest">
                         Built for Prediction Markets on
                     </p>
-                    <div className="flex flex-wrap justify-center items-center gap-6 px-4 opacity-80 hover:opacity-100 transition-opacity">
-                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                        <img src="https://raw.githubusercontent.com/base-org/brand-kit/master/logo/in-product/Base_Network_Logo.svg" alt="Base" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                        <img src="https://cryptologos.cc/logos/bnb-bnb-logo.svg?v=026" alt="BSC" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
-                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-8 md:h-10 w-auto filter grayscale hover:grayscale-0 transition-all duration-300" />
+                    {/* REMOVED GRAYSCALE FILTER */}
+                    <div className="flex flex-wrap justify-center items-center gap-8 px-4 hover:opacity-100 transition-opacity">
+                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
+                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
+                        {/* UPDATED BASE LOGO */}
+                        <img src="https://cryptologos.cc/logos/base-base-logo.svg?v=026" alt="Base" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
+                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
+                        <img src="https://cryptologos.cc/logos/bnb-bnb-logo.svg?v=026" alt="BSC" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
+                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
                     </div>
                 </div>
 

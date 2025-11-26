@@ -1542,77 +1542,62 @@ const SmartLogo = ({ src, fallbackText, className }: { src: string, fallbackText
     )
 }
 
-// --- MIRROR BACKGROUND COMPONENT ---
-const MirrorBackground = () => {
+// --- PROFESSIONAL SVG LOGOS (INLINE TO FIX LOADING ISSUES) ---
+const SvgLogos = {
+    Polygon: (props: any) => (
+        <svg viewBox="0 0 2500 2500" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M1893.94 1250L1606.06 1748.66L1030.3 1748.66L742.42 1250L1030.3 751.34L1606.06 751.34L1893.94 1250Z" fill="#8247E5"/><path d="M1250 2500L1537.88 2001.34L2113.64 2001.34L2401.52 1502.68L2113.64 1004.02L1537.88 1004.02L1250 1502.68L962.12 1004.02L386.36 1004.02L98.48 1502.68L386.36 2001.34L962.12 2001.34L1250 2500Z" fill="#8247E5" fillOpacity="0.2"/><path d="M1250 0L962.12 498.66L386.36 498.66L98.48 997.32L386.36 1495.98L962.12 1495.98L1250 997.32L1537.88 1495.98L2113.64 1495.98L2401.52 997.32L2113.64 498.66L1537.88 498.66L1250 0Z" fill="#8247E5" fillOpacity="0.2"/></svg>
+    ),
+    Ethereum: (props: any) => (
+        <svg viewBox="0 0 784 1277" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M392.07 0L383.5 29.11V873.74L392.07 882.29L784.13 650.54L392.07 0Z" fill="#343434"/><path d="M392.07 0L0 650.54L392.07 882.29V494.16V0Z" fill="#8C8C8C"/><path d="M392.07 882.29L383.5 892.78V1276.82L392.07 1276.92L784.19 729.08L392.07 882.29Z" fill="#3C3C3B"/><path d="M392.07 1276.92V882.29L0 729.08L392.07 1276.92Z" fill="#8C8C8C"/><path d="M392.07 882.29L784.13 650.54L392.07 494.16V882.29Z" fill="#141414"/><path d="M0 650.54L392.07 882.29V494.16L0 650.54Z" fill="#393939"/></svg>
+    ),
+    Base: (props: any) => (
+        <svg viewBox="0 0 550 550" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path fillRule="evenodd" clipRule="evenodd" d="M275 550C426.878 550 550 426.878 550 275C550 123.122 426.878 0 275 0C123.122 0 0 123.122 0 275C0 426.878 123.122 550 275 550ZM376 155H366V395H376C381.523 395 386 390.523 386 385V165C386 159.477 381.523 155 376 155Z" fill="#0052FF"/></svg>
+    ),
+    Arbitrum: (props: any) => (
+        <svg viewBox="0 0 1000 1000" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M500 0L281.7 375H435.1L500 263.5L564.9 375H718.3L500 0Z" fill="#2D374B"/><path d="M500 500L125 1000H875L500 500Z" fill="#28A0F0"/><path d="M783.3 531.2L500 153.1L216.7 531.2H365.6L500 351.9L634.4 531.2H783.3Z" fill="#96BFE5"/></svg>
+    ),
+    Solana: (props: any) => (
+        <svg viewBox="0 0 397 311" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M64.6 237.9C67.7 232.5 73.6 229.2 79.9 229.2H390.1C395.7 229.2 399.3 235.3 396.5 240.1L332.2 351.8C329.1 357.2 323.2 360.5 316.9 360.5H6.7C1.1 360.5 -2.5 354.4 0.3 349.6L64.6 237.9ZM332.4 172.1C329.3 177.5 323.4 180.8 317.1 180.8H6.9C1.3 180.8 -2.3 174.7 0.5 169.9L64.8 58.2C67.9 52.8 73.8 49.5 80.1 49.5H390.3C395.9 49.5 399.5 55.6 396.7 60.4L332.4 172.1ZM64.6 122.7C67.7 117.3 73.6 114 79.9 114H390.1C395.7 114 399.3 120.1 396.5 124.9L332.2 236.6C329.1 242 323.2 245.3 316.9 245.3H6.7C1.1 245.3 -2.5 239.2 0.3 234.4L64.6 122.7Z" fill="url(#paint0_linear)"/><defs><linearGradient id="paint0_linear" x1="66.2" y1="150" x2="330.8" y2="150" gradientUnits="userSpaceOnUse"><stop stopColor="#9945FF"/><stop offset="1" stopColor="#14F195"/></linearGradient></defs></svg>
+    ),
+    Polymarket: (props: any) => (
+       <svg viewBox="0 0 100 100" fill="none" {...props}>
+           <rect width="100" height="100" rx="50" fill="#007AFF"/>
+           <path d="M30 65L45 35L60 65L70 45" stroke="white" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round"/>
+       </svg>
+    )
+};
+
+// --- HERO BACKGROUND (PROFESSIONAL) ---
+const HeroBackground = () => {
   return (
-    <div className="fixed inset-0 overflow-hidden pointer-events-none z-0 perspective-[1000px]">
-       {/* Styles for the animation */}
-       <style>{`
-         @keyframes riseAndShine {
-           0% { transform: translateY(120vh) scale(0.5) rotateX(10deg) rotateY(0deg); opacity: 0; }
-           20% { opacity: 0.6; }
-           100% { transform: translateY(-20vh) scale(1.5) rotateX(20deg) rotateY(5deg); opacity: 0; }
-         }
-         @keyframes glare {
-           0% { background-position: -200% 0; }
-           100% { background-position: 200% 0; }
-         }
-         .mirror-pane {
-           background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 50%, rgba(255,255,255,0.05) 100%);
-           box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
-           backdrop-filter: blur(4px);
-           -webkit-backdrop-filter: blur(4px);
-           border: 1px solid rgba(255, 255, 255, 0.18);
-           position: absolute;
-           overflow: hidden;
-         }
-         .mirror-pane::after {
-           content: '';
-           position: absolute;
-           top: 0; left: 0; right: 0; bottom: 0;
-           background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.4) 25%, transparent 30%);
-           transform: skewX(-20deg);
-           animation: glare 4s infinite linear;
-           background-size: 200% 100%;
-         }
-       `}</style>
-
-       {/* Ambient Background Layer */}
-       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900/10 via-[#050505] to-[#050505] pointer-events-none"></div>
-
-       {/* Zone 1: Left Cluster */}
-       <div className="mirror-pane w-64 h-96 left-[5%] bottom-[-20%] rounded-xl opacity-0" 
-            style={{ animation: 'riseAndShine 15s infinite linear', animationDelay: '0s' }}></div>
-       <div className="mirror-pane w-48 h-64 left-[12%] bottom-[-20%] rounded-lg opacity-0" 
-            style={{ animation: 'riseAndShine 12s infinite linear', animationDelay: '5s' }}></div>
-
-       {/* Zone 2: Center Deep */}
-       <div className="mirror-pane w-96 h-[600px] left-[35%] bottom-[-40%] rounded-3xl blur-[2px] opacity-0" 
-            style={{ animation: 'riseAndShine 20s infinite linear', animationDelay: '2s', zIndex: -1 }}></div>
-
-       {/* Zone 3: Right Cluster */}
-       <div className="mirror-pane w-56 h-80 right-[8%] bottom-[-20%] rounded-xl opacity-0" 
-            style={{ animation: 'riseAndShine 18s infinite linear', animationDelay: '1s' }}></div>
-        <div className="mirror-pane w-40 h-60 right-[18%] bottom-[-20%] rounded-lg opacity-0" 
-            style={{ animation: 'riseAndShine 14s infinite linear', animationDelay: '8s' }}></div>
+    <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+       {/* Clean Grid Pattern */}
+       <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-soft-light"></div>
+       <div className="absolute inset-0 bg-grid-slate-200/[0.04] bg-[bottom_1px_center] dark:bg-grid-slate-400/[0.05]" style={{ backgroundSize: '40px 40px', maskImage: 'linear-gradient(to bottom, transparent, black)' }}></div>
+       
+       {/* Subtle Spotlights - Mode Aware */}
+       <div className="absolute top-[-20%] left-[20%] w-[500px] h-[500px] bg-blue-500/10 dark:bg-blue-500/20 rounded-full blur-[100px]"></div>
+       <div className="absolute bottom-[-20%] right-[20%] w-[600px] h-[600px] bg-purple-500/10 dark:bg-purple-500/20 rounded-full blur-[120px]"></div>
     </div>
   )
 }
 
 const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, theme: string, toggleTheme: () => void }) => (
-    <div className="fixed inset-0 z-[100] bg-white dark:bg-[#050505] overflow-y-auto overflow-x-hidden font-sans transition-colors duration-300">
+    <div className="fixed inset-0 z-[100] bg-gray-50 dark:bg-[#050505] overflow-y-auto overflow-x-hidden font-sans transition-colors duration-300">
         
-        <MirrorBackground />
+        <HeroBackground />
 
         {/* Floating Header */}
         <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-50">
              <div className="flex items-center gap-2 opacity-80">
-                 <Activity size={20} className="text-blue-600 dark:text-white"/>
+                 <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <Activity size={18} className="text-white"/>
+                 </div>
                  <span className="font-bold text-sm text-gray-900 dark:text-white tracking-widest">BET MIRROR</span>
              </div>
              <button 
                 onClick={toggleTheme} 
-                className="p-3 bg-white/50 dark:bg-white/10 rounded-full hover:scale-110 transition-all shadow-lg backdrop-blur-md text-gray-600 dark:text-white border border-white/20"
+                className="p-3 bg-white/80 dark:bg-white/5 rounded-full hover:scale-110 transition-all shadow-sm backdrop-blur-md text-gray-600 dark:text-white border border-gray-200 dark:border-white/10"
              >
                 {theme === 'light' ? <Moon size={18}/> : <Sun size={18}/>}
              </button>
@@ -1623,207 +1608,149 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
             {/* Header / Branding */}
             <div className="text-center space-y-8 max-w-4xl w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
                 
-                {/* Logo */}
-                <div className="group relative w-24 h-24 mx-auto cursor-pointer">
-                    <div className="absolute inset-0 bg-blue-600 rounded-3xl blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
-                    <div className="relative w-full h-full bg-blue-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-600/30 transform group-hover:scale-105 transition-all duration-300">
-                        <Activity size={48} className="text-white" />
+                {/* Main Title */}
+                <div className="space-y-2">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase tracking-widest mb-4">
+                        <Zap size={10}/> Account Abstraction V2 Live
                     </div>
-                </div>
-
-                {/* Title Text */}
-                <div>
-                    <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-gray-900 dark:text-white mb-6 drop-shadow-sm">
-                        <span className="text-blue-600">BET</span> MIRROR
+                    <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-gray-900 dark:text-white leading-tight">
+                        Prediction Markets.<br/>
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">Automated.</span>
                     </h1>
-                    <p className="text-lg md:text-2xl text-gray-500 dark:text-gray-400 font-medium max-w-2xl mx-auto leading-relaxed">
-                        The institutional-grade prediction market terminal. <br/>
-                        <span className="text-gray-900 dark:text-gray-200">Non-Custodial. AI-Powered. 24/7 Cloud Execution.</span>
+                    <p className="text-lg md:text-xl text-gray-500 dark:text-gray-400 font-medium max-w-2xl mx-auto leading-relaxed pt-4">
+                        Deploy a non-custodial smart trading bot in seconds. Copy top traders on <strong className="text-gray-900 dark:text-white">Polymarket</strong> with AI risk protection.
                     </p>
                 </div>
 
                 {/* CTA */}
-                <div className="max-w-md mx-auto w-full pt-4">
+                <div className="max-w-sm mx-auto w-full pt-8">
                     <button 
                         onClick={onConnect} 
-                        className="group relative w-full py-5 bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-lg rounded-2xl hover:shadow-2xl hover:shadow-blue-500/20 hover:-translate-y-1 transition-all duration-300 overflow-hidden"
+                        className="group relative w-full py-4 bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-lg rounded-xl shadow-xl shadow-blue-500/10 hover:shadow-blue-500/20 hover:-translate-y-1 transition-all duration-300"
                     >
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out"></div>
                         <span className="relative flex items-center justify-center gap-3">
-                            <Wallet className="w-6 h-6" /> Connect Terminal
+                            Connect Terminal <ArrowRightLeft size={18} className="opacity-50"/>
                         </span>
                     </button>
-                    <div className="flex justify-center gap-6 mt-4 text-[10px] uppercase tracking-widest font-bold text-gray-400">
-                        <span className="flex items-center gap-1"><Shield size={10}/> Audited</span>
-                        <span className="flex items-center gap-1"><Zap size={10}/> Gasless</span>
-                        <span className="flex items-center gap-1"><Globe size={10}/> Global</span>
+                    <div className="flex justify-center gap-6 mt-6 text-[10px] uppercase tracking-widest font-bold text-gray-400">
+                        <span className="flex items-center gap-1"><Shield size={12}/> Audited</span>
+                        <span className="flex items-center gap-1"><Zap size={12}/> Gasless</span>
+                        <span className="flex items-center gap-1"><Globe size={12}/> Global</span>
                     </div>
                 </div>
 
                 {/* Divider */}
-                <div className="w-full max-w-xs mx-auto h-px bg-gradient-to-r from-transparent via-gray-200 dark:via-gray-800 to-transparent my-12"></div>
+                <div className="w-full max-w-xs mx-auto h-px bg-gradient-to-r from-transparent via-gray-200 dark:via-gray-800 to-transparent my-16"></div>
 
                 {/* Supported Chains - Logos */}
-                <div className="space-y-6">
-                    <p className="text-sm font-semibold text-gray-500 dark:text-gray-500 uppercase tracking-widest">
-                        Built for Prediction Markets on
+                <div className="space-y-8">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-[0.2em]">
+                        Powered By
                     </p>
-                    {/* REMOVED GRAYSCALE FILTER */}
-                    <div className="flex flex-wrap justify-center items-center gap-8 px-4 hover:opacity-100 transition-opacity">
-                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
-                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
-                        {/* UPDATED BASE LOGO */}
-                        <img src="https://cryptologos.cc/logos/base-base-logo.svg?v=026" alt="Base" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
-                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
-                        <img src="https://cryptologos.cc/logos/bnb-bnb-logo.svg?v=026" alt="BSC" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
-                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-8 md:h-10 w-auto transition-all duration-300 hover:scale-110" />
+                    <div className="flex flex-wrap justify-center items-center gap-8 md:gap-12 opacity-80 grayscale hover:grayscale-0 transition-all duration-500">
+                        <SvgLogos.Polygon className="h-8 w-auto"/>
+                        <SvgLogos.Ethereum className="h-8 w-auto"/>
+                        <SvgLogos.Base className="h-8 w-auto"/>
+                        <SvgLogos.Arbitrum className="h-8 w-auto"/>
+                        <SvgLogos.Solana className="h-6 w-auto"/>
                     </div>
                 </div>
 
                 {/* Markets Status Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto pt-12 text-left w-full">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto pt-16 text-left w-full">
                     
                     {/* Active Market Card */}
-                    <div className="relative overflow-hidden p-6 rounded-3xl bg-white/80 dark:bg-[#0a0a0a]/80 border border-gray-200 dark:border-white/10 shadow-xl hover:shadow-2xl hover:border-blue-500/30 transition-all duration-300 group backdrop-blur-md">
-                        <div className="absolute top-0 right-0 p-4 opacity-5 transform group-hover:scale-110 transition-transform duration-500">
-                            <TrendingUp size={100} />
+                    <div className="p-6 rounded-2xl bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 shadow-sm hover:shadow-md transition-all duration-300 group">
+                        <div className="flex items-center gap-2 mb-4">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            </span>
+                            <span className="text-[10px] font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">Live Integration</span>
                         </div>
-                        <div className="relative z-10">
-                            <div className="flex items-center gap-2 mb-4">
-                                <span className="relative flex h-2.5 w-2.5">
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
-                                </span>
-                                <span className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">Live Integration</span>
-                            </div>
-                            <div className="flex items-center gap-3 mb-4">
-                                <SmartLogo 
-                                    src="https://assets.polymarket.com/static/logo-round.svg" 
-                                    fallbackText="P" 
-                                    className="w-10 h-10 rounded-full bg-blue-600"
-                                />
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Polymarket</h3>
-                            </div>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-4">Current Copy Trading Volume Leader</p>
-                            <div className="inline-flex items-baseline gap-2 px-3 py-1 rounded-lg bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-white/5">
-                                <Users size={14} className="text-gray-400"/>
-                                <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">1.2M+</span>
-                                <span className="text-[10px] text-gray-500 uppercase font-bold">Users</span>
-                            </div>
+                        <div className="flex items-center gap-3 mb-4">
+                            <SvgLogos.Polymarket className="w-10 h-10"/>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white">Polymarket</h3>
                         </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-4">
+                            The world's largest prediction market. Copy trade politics, sports, and crypto events.
+                        </p>
                     </div>
 
                     {/* Coming Soon Card */}
-                    <div className="relative overflow-hidden p-6 rounded-3xl bg-gray-50/50 dark:bg-white/5 border border-gray-200 dark:border-white/5 opacity-90 hover:opacity-100 transition-opacity duration-300 backdrop-blur-md">
-                        <div className="relative z-10">
-                            <div className="flex items-center gap-2 mb-4">
-                                <span className="w-2.5 h-2.5 rounded-full bg-yellow-500"></span>
-                                <span className="text-xs font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider">Coming Soon</span>
-                            </div>
-                            <div className="flex items-center gap-3 mb-4">
-                                 <SmartLogo 
-                                    src="/predictbase.png" 
-                                    fallbackText="pb" 
-                                    className="w-10 h-10 rounded-full bg-gray-800"
-                                />
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">PredictBase</h3>
-                            </div>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-4">Next-Gen Sports & Crypto Markets</p>
-                            <div className="inline-flex items-baseline gap-2 px-3 py-1 rounded-lg bg-white/50 dark:bg-white/5 border border-gray-200 dark:border-white/5">
-                                <Users size={14} className="text-gray-400"/>
-                                <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">85k+</span>
-                                <span className="text-[10px] text-gray-500 uppercase font-bold">Waitlist</span>
-                            </div>
+                    <div className="p-6 rounded-2xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/5 opacity-60 hover:opacity-100 transition-opacity duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                            <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+                            <span className="text-[10px] font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider">Coming Soon</span>
                         </div>
+                        <div className="flex items-center gap-3 mb-4">
+                             <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-800 flex items-center justify-center font-bold text-gray-500">pb</div>
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white">PredictBase</h3>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-4">
+                            Next-generation sports & crypto markets with high-frequency liquidity.
+                        </p>
                     </div>
 
-                </div>
-
-                {/* Powered By Strip */}
-                <div className="pt-16 pb-8 border-t border-gray-200 dark:border-white/5 w-full max-w-3xl mx-auto mt-12">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-6">Infrastructure Partners</p>
-                    <div className="flex flex-wrap justify-center gap-8 md:gap-12 opacity-50 hover:opacity-80 transition-opacity">
-                        <div className="flex items-center gap-2">
-                            <Zap size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">ZeroDev</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Globe size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">LI.FI</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Brain size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">Google Gemini</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Server size={18} className="text-gray-500"/> <span className="font-bold text-gray-500 text-sm">MongoDB Atlas</span>
-                        </div>
-                    </div>
                 </div>
 
                 {/* Suggestion Input */}
-                <div className="pt-4 pb-12">
+                <div className="pt-8 pb-12">
                     <div className="inline-flex flex-col items-center gap-3 group cursor-pointer">
-                        <div className="p-3 rounded-full bg-gray-100 dark:bg-white/5 text-gray-400 group-hover:text-blue-500 group-hover:scale-110 transition-all duration-300">
-                            <MessageSquare size={20} />
+                        <div className="p-2 rounded-full bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-400 group-hover:text-blue-500 group-hover:border-blue-200 transition-all">
+                            <MessageSquare size={16} />
                         </div>
-                        <p className="text-sm font-medium text-gray-500 group-hover:text-gray-800 dark:group-hover:text-white transition-colors">
-                            What would you like to see? <span className="underline decoration-dotted underline-offset-4">Suggest here...</span>
+                        <p className="text-xs font-medium text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors">
+                            Suggest a market integration
                         </p>
                     </div>
                 </div>
 
             </div>
             
-            <div className="animate-bounce">
+            <div className="animate-bounce opacity-30">
                 <ChevronDown className="text-gray-400"/>
             </div>
 
             {/* --- HOW IT WORKS SECTION --- */}
             <div className="w-full max-w-6xl mx-auto mt-24 pb-24">
                 <div className="text-center mb-16">
-                    <span className="text-blue-600 dark:text-blue-500 text-sm font-bold uppercase tracking-widest">The Architecture</span>
-                    <h2 className="text-3xl md:text-5xl font-black text-gray-900 dark:text-white mt-2">How Bet Mirror Works</h2>
+                    <span className="text-blue-600 dark:text-blue-500 text-xs font-bold uppercase tracking-widest">Architecture</span>
+                    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mt-2">How It Works</h2>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 px-4">
                     {/* Step 1 */}
-                    <div className="relative group">
-                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-3xl transform group-hover:scale-105 transition-transform duration-500"></div>
-                        <div className="relative p-8 bg-white/80 dark:bg-[#0a0a0a]/80 border border-gray-200 dark:border-white/10 rounded-3xl h-full flex flex-col backdrop-blur-md">
-                            <div className="w-14 h-14 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl flex items-center justify-center mb-6">
-                                <Wallet size={28}/>
-                            </div>
-                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">1. Connect & Deploy</h3>
-                            <p className="text-gray-500 text-sm leading-relaxed">
-                                Link your wallet (MetaMask/Phantom). We instantly deploy a non-custodial <strong>Smart Account</strong> (ZeroDev Kernel) on Polygon. This is your dedicated trading vault.
-                            </p>
+                    <div className="p-8 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-2xl hover:border-blue-500/30 transition-all">
+                        <div className="w-12 h-12 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl flex items-center justify-center mb-6">
+                            <Wallet size={24}/>
                         </div>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">1. Connect & Deploy</h3>
+                        <p className="text-gray-500 text-sm leading-relaxed">
+                            Link your wallet. We instantly deploy a non-custodial <strong>Smart Account</strong> (ZeroDev Kernel) on Polygon.
+                        </p>
                     </div>
 
                     {/* Step 2 */}
-                    <div className="relative group">
-                        <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-pink-500/10 rounded-3xl transform group-hover:scale-105 transition-transform duration-500"></div>
-                        <div className="relative p-8 bg-white/80 dark:bg-[#0a0a0a]/80 border border-gray-200 dark:border-white/10 rounded-3xl h-full flex flex-col backdrop-blur-md">
-                            <div className="w-14 h-14 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-2xl flex items-center justify-center mb-6">
-                                <Key size={28}/>
-                            </div>
-                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">2. Grant Permission</h3>
-                            <p className="text-gray-500 text-sm leading-relaxed">
-                                Sign a restricted <strong>Session Key</strong>. This grants our cloud server permission to <em>execute trades only</em>. It physically cannot withdraw your funds. You remain in full control.
-                            </p>
+                    <div className="p-8 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-2xl hover:border-purple-500/30 transition-all">
+                        <div className="w-12 h-12 bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 rounded-xl flex items-center justify-center mb-6">
+                            <Key size={24}/>
                         </div>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">2. Grant Permission</h3>
+                        <p className="text-gray-500 text-sm leading-relaxed">
+                            Sign a restricted <strong>Session Key</strong>. This grants our cloud server permission to <em>execute trades only</em>.
+                        </p>
                     </div>
 
                     {/* Step 3 */}
-                    <div className="relative group">
-                        <div className="absolute inset-0 bg-gradient-to-br from-green-500/10 to-emerald-500/10 rounded-3xl transform group-hover:scale-105 transition-transform duration-500"></div>
-                        <div className="relative p-8 bg-white/80 dark:bg-[#0a0a0a]/80 border border-gray-200 dark:border-white/10 rounded-3xl h-full flex flex-col backdrop-blur-md">
-                            <div className="w-14 h-14 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-2xl flex items-center justify-center mb-6">
-                                <Server size={28}/>
-                            </div>
-                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">3. 24/7 Cloud Trading</h3>
-                            <p className="text-gray-500 text-sm leading-relaxed">
-                                Close your laptop. Our Node.js engine monitors the blockchain 24/7, uses <strong>Gemini AI</strong> to analyze risk, and executes copy-trades instantly.
-                            </p>
+                    <div className="p-8 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-2xl hover:border-green-500/30 transition-all">
+                        <div className="w-12 h-12 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 rounded-xl flex items-center justify-center mb-6">
+                            <Server size={24}/>
                         </div>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">3. Cloud Execution</h3>
+                        <p className="text-gray-500 text-sm leading-relaxed">
+                            Our Node.js engine monitors the blockchain 24/7, uses <strong>Gemini AI</strong> to analyze risk, and executes copy-trades.
+                        </p>
                     </div>
                 </div>
             </div>

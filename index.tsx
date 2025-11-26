@@ -1543,31 +1543,6 @@ const SmartLogo = ({ src, fallbackText, className }: { src: string, fallbackText
     )
 }
 
-// --- PROFESSIONAL SVG LOGOS (INLINE TO FIX LOADING ISSUES) ---
-const SvgLogos = {
-    Polygon: (props: any) => (
-        <svg viewBox="0 0 2500 2500" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M1893.94 1250L1606.06 1748.66L1030.3 1748.66L742.42 1250L1030.3 751.34L1606.06 751.34L1893.94 1250Z" fill="#8247E5"/><path d="M1250 2500L1537.88 2001.34L2113.64 2001.34L2401.52 1502.68L2113.64 1004.02L1537.88 1004.02L1250 1502.68L962.12 1004.02L386.36 1004.02L98.48 1502.68L386.36 2001.34L962.12 2001.34L1250 2500Z" fill="#8247E5" fillOpacity="0.2"/><path d="M1250 0L962.12 498.66L386.36 498.66L98.48 997.32L386.36 1495.98L962.12 1495.98L1250 997.32L1537.88 1495.98L2113.64 1495.98L2401.52 997.32L2113.64 498.66L1537.88 498.66L1250 0Z" fill="#8247E5" fillOpacity="0.2"/></svg>
-    ),
-    Ethereum: (props: any) => (
-        <svg viewBox="0 0 784 1277" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M392.07 0L383.5 29.11V873.74L392.07 882.29L784.13 650.54L392.07 0Z" fill="#343434"/><path d="M392.07 0L0 650.54L392.07 882.29V494.16V0Z" fill="#8C8C8C"/><path d="M392.07 882.29L383.5 892.78V1276.82L392.07 1276.92L784.19 729.08L392.07 882.29Z" fill="#3C3C3B"/><path d="M392.07 1276.92V882.29L0 729.08L392.07 1276.92Z" fill="#8C8C8C"/><path d="M392.07 882.29L784.13 650.54L392.07 494.16V882.29Z" fill="#141414"/><path d="M0 650.54L392.07 882.29V494.16L0 650.54Z" fill="#393939"/></svg>
-    ),
-    Base: (props: any) => (
-        <svg viewBox="0 0 550 550" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path fillRule="evenodd" clipRule="evenodd" d="M275 550C426.878 550 550 426.878 550 275C550 123.122 426.878 0 275 0C123.122 0 0 123.122 0 275C0 426.878 123.122 550 275 550ZM376 155H366V395H376C381.523 395 386 390.523 386 385V165C386 159.477 381.523 155 376 155Z" fill="#0052FF"/></svg>
-    ),
-    Arbitrum: (props: any) => (
-        <svg viewBox="0 0 1000 1000" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M500 0L281.7 375H435.1L500 263.5L564.9 375H718.3L500 0Z" fill="#2D374B"/><path d="M500 500L125 1000H875L500 500Z" fill="#28A0F0"/><path d="M783.3 531.2L500 153.1L216.7 531.2H365.6L500 351.9L634.4 531.2H783.3Z" fill="#96BFE5"/></svg>
-    ),
-    Solana: (props: any) => (
-        <svg viewBox="0 0 397 311" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}><path d="M64.6 237.9C67.7 232.5 73.6 229.2 79.9 229.2H390.1C395.7 229.2 399.3 235.3 396.5 240.1L332.2 351.8C329.1 357.2 323.2 360.5 316.9 360.5H6.7C1.1 360.5 -2.5 354.4 0.3 349.6L64.6 237.9ZM332.4 172.1C329.3 177.5 323.4 180.8 317.1 180.8H6.9C1.3 180.8 -2.3 174.7 0.5 169.9L64.8 58.2C67.9 52.8 73.8 49.5 80.1 49.5H390.3C395.9 49.5 399.5 55.6 396.7 60.4L332.4 172.1ZM64.6 122.7C67.7 117.3 73.6 114 79.9 114H390.1C395.7 114 399.3 120.1 396.5 124.9L332.2 236.6C329.1 242 323.2 245.3 316.9 245.3H6.7C1.1 245.3 -2.5 239.2 0.3 234.4L64.6 122.7Z" fill="url(#paint0_linear)"/><defs><linearGradient id="paint0_linear" x1="66.2" y1="150" x2="330.8" y2="150" gradientUnits="userSpaceOnUse"><stop stopColor="#9945FF"/><stop offset="1" stopColor="#14F195"/></linearGradient></defs></svg>
-    ),
-    Polymarket: (props: any) => (
-       <svg viewBox="0 0 100 100" fill="none" {...props}>
-           <rect width="100" height="100" rx="50" fill="#007AFF"/>
-           <path d="M30 65L45 35L60 65L70 45" stroke="white" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round"/>
-       </svg>
-    )
-};
-
 // --- HERO BACKGROUND (PROFESSIONAL) ---
 const HeroBackground = () => {
   return (
@@ -1575,10 +1550,6 @@ const HeroBackground = () => {
        {/* Clean Grid Pattern */}
        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-soft-light"></div>
        <div className="absolute inset-0 bg-grid-slate-200/[0.04] bg-[bottom_1px_center] dark:bg-grid-slate-800/[0.05]" style={{ backgroundSize: '40px 40px', maskImage: 'linear-gradient(to bottom, transparent, black)' }}></div>
-       
-       {/* Subtle Spotlights - Mode Aware */}
-       <div className="absolute top-[-20%] left-[20%] w-[500px] h-[500px] bg-blue-500/10 dark:bg-blue-500/20 rounded-full blur-[100px]"></div>
-       <div className="absolute bottom-[-20%] right-[20%] w-[600px] h-[600px] bg-purple-500/10 dark:bg-purple-500/20 rounded-full blur-[120px]"></div>
     </div>
   )
 }
@@ -1614,12 +1585,12 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                     <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase tracking-widest mb-4">
                         <Zap size={10}/> Account Abstraction V2 Live
                     </div>
-                    <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-gray-900 dark:text-white leading-tight">
-                        Prediction Markets.<br/>
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">Automated.</span>
+                    <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-gray-900 dark:text-white mb-6 drop-shadow-sm">
+                        <span className="text-blue-600">BET</span> MIRROR
                     </h1>
-                    <p className="text-lg md:text-xl text-gray-500 dark:text-gray-400 font-medium max-w-2xl mx-auto leading-relaxed pt-4">
-                        Deploy a non-custodial smart trading bot in seconds. Copy top traders on <strong className="text-gray-900 dark:text-white">Polymarket</strong> with AI risk protection.
+                    <p className="text-lg md:text-2xl text-gray-500 dark:text-gray-400 font-medium max-w-2xl mx-auto leading-relaxed">
+                        The institutional-grade prediction market terminal. <br/>
+                        <span className="text-gray-900 dark:text-gray-200">Non-Custodial. AI-Powered. 24/7 Cloud Execution.</span>
                     </p>
                 </div>
 
@@ -1649,11 +1620,11 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                         Powered By
                     </p>
                     <div className="flex flex-wrap justify-center items-center gap-8 md:gap-12 opacity-80 grayscale hover:grayscale-0 transition-all duration-500">
-                        <SvgLogos.Polygon className="h-8 w-auto"/>
-                        <SvgLogos.Ethereum className="h-8 w-auto"/>
-                        <SvgLogos.Base className="h-8 w-auto"/>
-                        <SvgLogos.Arbitrum className="h-8 w-auto"/>
-                        <SvgLogos.Solana className="h-6 w-auto"/>
+                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/base-base-logo.svg?v=026" alt="Base" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-6 md:h-8 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
                     </div>
                 </div>
 
@@ -1670,7 +1641,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                             <span className="text-[10px] font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">Live Integration</span>
                         </div>
                         <div className="flex items-center gap-3 mb-4">
-                            <SvgLogos.Polymarket className="w-10 h-10"/>
+                            <img src="https://assets.polymarket.com/static/logo-round.svg" alt="Polymarket" className="w-10 h-10 rounded-full" referrerPolicy="no-referrer" onError={(e) => e.currentTarget.src = 'https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026'}/>
                             <h3 className="text-xl font-bold text-gray-900 dark:text-white">Polymarket</h3>
                         </div>
                         <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-4">
@@ -1685,7 +1656,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                             <span className="text-[10px] font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider">Coming Soon</span>
                         </div>
                         <div className="flex items-center gap-3 mb-4">
-                             <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-800 flex items-center justify-center font-bold text-gray-500">pb</div>
+                             <img src="/predictbase.png" alt="PredictBase" className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-800 object-cover"/>
                             <h3 className="text-xl font-bold text-gray-900 dark:text-white">PredictBase</h3>
                         </div>
                         <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-4">

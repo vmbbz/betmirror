@@ -1574,7 +1574,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
              </button>
         </div>
 
-        <div className="flex-1 flex flex-col items-center pt-40 pb-16 px-6 z-10 w-full max-w-7xl mx-auto">
+        <div className="flex-1 flex flex-col items-center pt-48 pb-16 px-6 z-10 w-full max-w-7xl mx-auto">
             
             {/* Header / Branding */}
             <div className="text-center space-y-8 max-w-4xl w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
@@ -1611,7 +1611,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 </div>
 
                 {/* Divider */}
-                <div className="w-full max-w-xs mx-auto h-px bg-gradient-to-r from-transparent via-gray-200 dark:via-gray-800 to-transparent my-24"></div>
+                <div className="w-full max-w-xs mx-auto h-px bg-gradient-to-r from-transparent via-gray-200 dark:via-gray-800 to-transparent my-32"></div>
 
                 {/* Supported Chains - Logos */}
                 <div className="space-y-10">
@@ -1619,16 +1619,16 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                         POWERED BY
                     </p>
                     <div className="flex flex-wrap justify-center items-center gap-16 md:gap-20 opacity-60 grayscale hover:grayscale-0 transition-all duration-500">
-                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                        <img src="https://cryptologos.cc/logos/base-base-logo.svg?v=026" alt="Base" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-8 md:h-10 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
-                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-6 md:h-8 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-6 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-6 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/base-base-logo.svg?v=026" alt="Base" className="h-6 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-6 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
+                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-5 w-auto hover:scale-110 transition-transform" referrerPolicy="no-referrer" />
                     </div>
                 </div>
 
                 {/* Markets Status Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto pt-24 text-left w-full">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto pt-32 text-left w-full">
                     
                     {/* Active Market Card */}
                     <div className="p-8 rounded-3xl bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 shadow-sm hover:shadow-md transition-all duration-300 group hover:-translate-y-1">
@@ -1666,7 +1666,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 </div>
 
                 {/* Suggestion Input */}
-                <div className="pt-12 pb-16">
+                <div className="pt-16 pb-24">
                     <div className="inline-flex flex-col items-center gap-3 group cursor-pointer opacity-60 hover:opacity-100 transition-opacity">
                         <div className="p-3 rounded-full bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-400 group-hover:text-blue-500 group-hover:border-blue-200 transition-all">
                             <MousePointerClick size={20} />

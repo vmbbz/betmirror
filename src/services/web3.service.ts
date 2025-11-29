@@ -17,7 +17,7 @@ export class Web3Service {
 
   async connect(): Promise<string> {
     if (!(window as any).ethereum) {
-      throw new Error("No wallet found. Please install MetaMask or Phantom.");
+      throw new Error("No wallet found. Please install MetaMask, Rabbit, or Coinbase Wallet.");
     }
 
     this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
@@ -34,12 +34,11 @@ export class Web3Service {
    * Returns a Viem Wallet Client (Required for ZeroDev / AA)
    * Automatically enforces the correct chain context.
    */
-  async getViemWalletClient(): Promise<WalletClient> {
+  async getViemWalletClient(targetChainId: number = 137): Promise<WalletClient> {
       if (!(window as any).ethereum) throw new Error("No Wallet");
 
-      // Ensure we are on the correct chain (Polygon) before returning the client
-      // This prevents the "Provider is not connected to the requested chain" error
-      await this.switchToChain(137);
+      // CRITICAL: Force switch before creating client to prevent "Provider not connected to requested chain" error
+      await this.switchToChain(targetChainId);
       
       const [account] = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
           
@@ -64,10 +63,15 @@ export class Web3Service {
           await this.provider!.send("wallet_switchEthereumChain", [{ chainId: hexChainId }]);
       } catch (switchError: any) {
           // Error 4902: Chain not added. Add it.
-          if (switchError.code === 4902 || switchError.code === -32603 || switchError.message?.includes("Unrecognized chain")) {
+          // Also catch generic -32603 which sometimes happens on mobile wallets
+          if (switchError.code === 4902 || switchError.code === -32603 || switchError.data?.originalError?.code === 4902 || switchError.message?.includes("Unrecognized chain")) {
              const chainConfig = this.getChainConfig(chainId);
              if(chainConfig) {
-                 await this.provider!.send("wallet_addEthereumChain", [chainConfig]);
+                 try {
+                    await this.provider!.send("wallet_addEthereumChain", [chainConfig]);
+                 } catch (addError: any) {
+                    throw new Error(`Failed to add network: ${addError.message}`);
+                 }
              } else {
                  throw new Error(`Chain ID ${chainId} configuration not found.`);
              }
@@ -116,6 +120,13 @@ export class Web3Service {
           nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
           rpcUrls: ["https://mainnet.base.org"],
           blockExplorerUrls: ["https://basescan.org"]
+      };
+      if (chainId === 42161) return {
+          chainId: "0xA4B1",
+          chainName: "Arbitrum One",
+          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://arb1.arbitrum.io/rpc"],
+          blockExplorerUrls: ["https://arbiscan.io"]
       };
       return null;
   }

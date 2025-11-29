@@ -110,7 +110,7 @@ export class BotEngine {
   private client?: ClobClient & { wallet: any };
   private watchdogTimer?: NodeJS.Timeout;
   
-  // Use in-memory logs only as a buffer/cache if needed, but primary source is DB
+  // Use in-memory logs as a buffer
   private logs: any[] = [];
   private activePositions: ActivePosition[] = [];
   
@@ -152,13 +152,17 @@ export class BotEngine {
     this.logs.unshift(log);
     if (this.logs.length > 50) this.logs.pop();
 
-    // 2. Write to MongoDB (Fire and Forget)
-    BotLog.create({
-        userId: this.config.userId,
-        type,
-        message,
-        timestamp: new Date()
-    }).catch(e => console.error("Failed to persist log", e));
+    // 2. Write to MongoDB (Persistent Storage)
+    try {
+        await BotLog.create({
+            userId: this.config.userId,
+            type,
+            message,
+            timestamp: new Date()
+        });
+    } catch (e) {
+        console.error("Failed to persist log to DB", e);
+    }
   }
 
   async revokePermissions() {

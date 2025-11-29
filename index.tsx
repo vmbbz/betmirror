@@ -9,8 +9,7 @@ import {
   TrendingUp, History, Copy, ExternalLink, AlertTriangle, Smartphone, Coins, PlusCircle, X,
   CheckCircle2, ArrowDownCircle, ArrowUpCircle, Brain, AlertCircle, Trophy, Globe, Zap, LogOut,
   Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLeft, LifeBuoy,
-  Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
-  Zap as ZapIcon, FileText, Twitter, Github
+  Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -415,9 +414,8 @@ const App = () => {
      setIsActivating(true);
      try {
          // CRITICAL FIX: Ensure chain is Polygon before interaction
-         await web3Service.switchToChain(137);
-
-         const walletClient = await web3Service.getViemWalletClient();
+         // We explicitly pass chainId 137 to force the switch logic inside getViemWalletClient
+         const walletClient = await web3Service.getViemWalletClient(137);
          
          // 1. Create Session Key Client Side
          const session = await zeroDevService.createSessionKeyForServer(walletClient, userAddress);
@@ -437,7 +435,7 @@ const App = () => {
      } catch (e: any) {
          console.error(e);
          // Nicer error handling for chain mismatch
-         if(e.message?.includes('Chain')) {
+         if(e.message?.includes('Chain') || e.message?.includes('Provider')) {
              alert("Activation Failed: Please switch your wallet network to Polygon (Matic) Mainnet.");
          } else {
              alert("Activation failed: " + e.message);
@@ -533,9 +531,8 @@ const App = () => {
 
       try {
          // Auto-switch to Polygon required for managing the Kernel account
-         await web3Service.switchToChain(137);
-
-         const walletClient = await web3Service.getViemWalletClient();
+         const walletClient = await web3Service.getViemWalletClient(137);
+         
          // In a real scenario, fetch exact balance first
          const withdrawAmount = parseUnits("1000", 6); 
          
@@ -759,7 +756,7 @@ const App = () => {
                         onClick={() => web3Service.switchToChain(137)}
                         className="hidden md:flex items-center gap-2 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-500 rounded text-xs font-bold border border-yellow-200 dark:border-yellow-700/30"
                      >
-                         <AlertTriangle size={12}/> WRONG NETWORK
+                         <AlertTriangle size={12}/> WRONG NETWORK (SWITCH)
                      </button>
                  )}
 

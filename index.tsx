@@ -703,10 +703,16 @@ const App = () => {
                   <button 
                       onClick={handleActivateSmartAccount}
                       disabled={isActivating}
-                      className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-3 shadow-lg shadow-blue-500/20"
+                      className="w-full py-3 px-2 sm:py-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-2 sm:gap-3 shadow-lg shadow-blue-500/20 text-sm sm:text-base"
                   >
-                      {isActivating ? <RefreshCw className="animate-spin" /> : <Rocket size={20} />}
-                      {isActivating ? 'DEPLOYING SMART ACCOUNT...' : 'CREATE SMART ACCOUNT'}
+                      {isActivating ? (
+                          <RefreshCw className="animate-spin flex-shrink-0" size={18} />
+                      ) : (
+                          <Rocket className="flex-shrink-0" size={18} />
+                      )}
+                      <span className="whitespace-nowrap overflow-hidden text-ellipsis">
+                          {isActivating ? 'DEPLOYING...' : 'CREATE SMART ACCOUNT'}
+                      </span>
                   </button>
                   <p className="text-center text-[10px] text-gray-500">By clicking Create, you sign a Session Key transaction. <br/>Note: You must be on Polygon Mainnet.</p>
               </div>

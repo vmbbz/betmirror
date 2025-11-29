@@ -1,4 +1,7 @@
 
+import fs from 'fs';
+import path from 'path';
+
 export type RuntimeEnv = {
   userAddresses: string[];
   proxyWallet: string;
@@ -56,7 +59,36 @@ export function loadEnv(): RuntimeEnv {
       .filter(Boolean);
   };
 
-  const userAddresses = parseList(process.env.USER_ADDRESSES);
+  // --- Load Wallets from File (wallets.txt) ---
+  const loadWalletsFromFile = (): string[] => {
+      const fileName = process.env.WALLETS_FILE_PATH || 'wallets.txt';
+      const absolutePath = path.resolve(process.cwd(), fileName);
+      
+      if (fs.existsSync(absolutePath)) {
+          console.log(`📂 Loading system wallets from ${fileName}...`);
+          try {
+              const content = fs.readFileSync(absolutePath, 'utf-8');
+              // Split by newline OR comma, trim, and filter for valid EVM addresses
+              return content
+                  .split(/[\n,]+/) 
+                  .map(s => s.trim())
+                  .filter(s => s.startsWith('0x') && s.length === 42);
+          } catch (e) {
+              console.error(`⚠️ Failed to read ${fileName}`, e);
+              return [];
+          }
+      }
+      return [];
+  };
+
+  let userAddresses = parseList(process.env.USER_ADDRESSES);
+  const fileAddresses = loadWalletsFromFile();
+  
+  // Merge .env addresses with file addresses and remove duplicates
+  if (fileAddresses.length > 0) {
+      userAddresses = Array.from(new Set([...userAddresses, ...fileAddresses]));
+      console.log(`✅ Loaded ${userAddresses.length} unique system wallets.`);
+  }
 
   // Use the provided Atlas URI as the default if env var is missing
   const defaultMongoUri = 'mongodb+srv://limeikenji_db_user:lT4HIyBhbui8vFQr@cluster0.bwk2i6s.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';

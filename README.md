@@ -38,6 +38,28 @@ Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step proce
 
 ---
 
+## 📋 Managing Official Wallets (System Seeding)
+
+You can seed the Marketplace with "Official" or "System" wallets (e.g., trusted whales) using a simple text file. This keeps your `.env` clean.
+
+1.  **Create a file:** Create a file named `wallets.txt` in the root directory.
+2.  **Add Addresses:** Paste wallet addresses using any of the following formats:
+
+**Option A: Newlines (Recommended)**
+```text
+0x8894e0a0c962cb723c1976a4421c95949be2d4e3
+0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+```
+
+**Option B: Commas**
+```text
+0x8894..., 0xd8dA..., 0x1234...
+```
+
+*The server will automatically load these on startup, deduplicate them, mark them as "OFFICIAL" in the database, and display them with a badge in the Marketplace UI.*
+
+---
+
 ## 🖥️ Interface Preview
 
 ### 📊 The Dashboard
@@ -90,8 +112,8 @@ We do not ask for your Private Key. Instead, the app deploys a **Smart Contract 
 
 #### 2. ☁️ Cloud Persistence (MongoDB Atlas)
 Your bot runs 24/7 on the server.
-- **Auto-Recovery:** If the server restarts, your bot automatically rehydrates from the database and resumes trading.
-- **Trade History:** Every trade, PnL, and AI reasoning log is permanently stored.
+- **Database:** Stores user configuration, trade history, and session keys securely.
+- **Auto-Recovery:** If the server restarts, your bot automatically rehydrates from MongoDB and resumes trading without missing a beat.
 
 #### 3. 🌉 Cross-Chain Bridge (Li.Fi)
 Fund your trading bot from anywhere.
@@ -158,7 +180,14 @@ This starts both the Backend API (Port 3000) and Frontend (Port 5173).
 npm run dev:all
 ```
 
-### 5. Production Build (Docker)
+### 5. Developer Tools
+- **Wipe Database:** To reset your local environment (deletes Users/Trades/Registry).
+  ```bash
+  npm run db:wipe
+  ```
+  *(Requires user confirmation. Useful for testing the Activation/Restoration flow from scratch).*
+
+### 6. Production Build (Docker)
 Deploying to a cloud provider (Railway, Sliplane, DigitalOcean)? Use the Dockerfile.
 ```bash
 docker build -t bet-mirror .
@@ -171,7 +200,7 @@ docker run -p 3000:3000 -e MONGODB_URI=... bet-mirror
 
 | Component | Responsibility | Access Level |
 | :--- | :--- | :--- |
-| **Owner Key** | Held by User (Metamask) | **Full Admin**. Can withdraw funds, pause bot, change settings. |
+| **Owner Key** | Held by User (Phantom/Metamask) | **Full Admin**. Can withdraw funds, revoke keys, update settings. |
 | **Session Key** | Held by Server (Encrypted DB) | **Limited**. Can only execute trades. Cannot withdraw. |
 | **Database** | MongoDB Atlas | Stores Config, History, and Encrypted Session Keys. |
 

@@ -1,3 +1,4 @@
+
 {
   "name": "bet-mirror",
   "version": "2.3.0",
@@ -14,7 +15,8 @@
     "start": "npm run build:backend && node --experimental-specifier-resolution=node dist-node/server/server.js",
     "start:server": "npm run build:backend && node --experimental-specifier-resolution=node dist-node/server/server.js",
     "start:cli": "npm run build:backend && node --experimental-specifier-resolution=node dist-node/app/main.js",
-    "generate:wallet": "ts-node src/cli/generate-wallet.ts",
+    "generate:wallet": "node --loader ts-node/esm --experimental-specifier-resolution=node src/cli/generate-wallet.ts",
+    "db:wipe": "node --loader ts-node/esm --experimental-specifier-resolution=node src/cli/wipe-db.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

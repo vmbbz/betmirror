@@ -722,15 +722,13 @@ const App = () => {
       <header className="h-16 border-b border-gray-200 dark:border-terminal-border bg-white/80 dark:bg-terminal-card/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
             <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
-                    <Activity className="text-white" size={18} />
-                </div>
-                <div>
-                    <h1 className="font-bold text-gray-900 dark:text-white tracking-tight leading-none">
-                        <span className="text-blue-600">BET</span> MIRROR
-                    </h1>
-                    <span className="text-[10px] text-gray-500 font-mono tracking-widest uppercase">TERMINAL</span>
-                </div>
+                <button 
+                    onClick={() => setActiveTab('dashboard')}
+                    className="font-bold text-gray-900 dark:text-white tracking-tight leading-none hover:opacity-80 transition-opacity text-2xl"
+                >
+                    <span className="text-blue-600">BET</span> MIRROR
+                </button>
+                <span className="text-[10px] text-gray-500 font-mono tracking-widest uppercase">TERMINAL</span>
             </div>
 
             <nav className="hidden md:flex items-center gap-1 bg-gray-100 dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-lg p-1">
@@ -830,7 +828,7 @@ const App = () => {
                              {/* Proxy Wallet */}
                              <div className="space-y-3">
                                 <div className="flex items-center gap-2 mb-2">
-                                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] text-white bg-purple-600">P</div>
+                                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] text-white bg-green-600">P</div>
                                     <span className="text-sm font-bold text-gray-900 dark:text-white">Smart Bot</span>
                                     <span className="text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-900 px-1.5 rounded">Polygon</span>
                                 </div>
@@ -988,8 +986,8 @@ const App = () => {
                         <div className="text-3xl font-bold text-gray-900 dark:text-white font-mono">${systemStats.totalRevenue.toFixed(2)}</div>
                         <div className="text-[10px] text-green-600 mt-1">1% Fee Share</div>
                     </div>
-                    <div className="glass-panel p-6 rounded-xl border border-purple-100 dark:border-purple-500/20 bg-purple-50 dark:bg-purple-900/10">
-                        <h4 className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase mb-2">Active Bots</h4>
+                    <div className="glass-panel p-6 rounded-xl border border-green-100 dark:border-green-500/20 bg-green-50 dark:bg-green-900/10">
+                        <h4 className="text-xs font-bold text-green-600 dark:text-green-400 uppercase mb-2">Active Bots</h4>
                         <div className="text-3xl font-bold text-gray-900 dark:text-white font-mono">{systemStats.activeBots} / {systemStats.totalUsers}</div>
                     </div>
                     <div className="glass-panel p-6 rounded-xl border border-orange-100 dark:border-orange-500/20 bg-orange-50 dark:bg-orange-900/10">
@@ -1153,19 +1151,28 @@ const App = () => {
         {/* WALLET (VAULT REBRAND) */}
         {activeTab === 'vault' && (
             <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-300 pb-10">
-                <div className="flex items-center gap-4 mb-8 pb-8 border-b border-gray-200 dark:border-terminal-border">
-                    <div className="p-3 bg-blue-50 dark:bg-terminal-accent/10 rounded-xl"><Wallet size={32} className="text-blue-600 dark:text-terminal-accent" /></div>
-                    <div>
-                        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Smart Wallet Config</h2>
-                        <p className="text-gray-500 text-sm">Manage keys, risk profiles, and automation.</p>
+                <div className="flex flex-col md:flex-row items-start md:items-center gap-4 mb-8 pb-8 border-b border-gray-200 dark:border-terminal-border">
+                    <div className="flex items-center gap-4 w-full md:w-auto">
+                        <div className="p-3 bg-blue-50 dark:bg-terminal-accent/10 rounded-xl">
+                            <Wallet size={32} className="text-blue-600 dark:text-terminal-accent" />
+                        </div>
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Smart Wallet Config</h2>
+                            <p className="text-gray-500 text-sm">Manage keys, risk profiles, and automation.</p>
+                        </div>
                     </div>
-                    <div className="ml-auto flex gap-4 items-center">
-                         <div className="flex gap-2">
-                             <div className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400 font-bold">ZeroDev</div>
-                             <div className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400 font-bold">Gelato</div>
-                             <div className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400 font-bold">Polygon</div>
-                         </div>
-                         <button onClick={() => setShowArchitecture(true)} className="text-xs text-blue-600 dark:text-blue-500 hover:text-blue-800 dark:hover:text-white underline">Why is this Secure?</button>
+                    <div className="w-full md:w-auto flex flex-col md:flex-row gap-3 md:items-center md:ml-auto">
+                        <div className="flex flex-wrap gap-2">
+                            <div className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400 font-bold">ZeroDev</div>
+                            <div className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400 font-bold">Gelato</div>
+                            <div className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 dark:text-gray-400 font-bold">Polygon</div>
+                        </div>
+                        <button 
+                            onClick={() => setShowArchitecture(true)} 
+                            className="text-xs text-blue-600 dark:text-blue-500 hover:text-blue-800 dark:hover:text-white underline text-left md:text-center"
+                        >
+                            Why is this Secure?
+                        </button>
                     </div>
                 </div>
 
@@ -1175,13 +1182,13 @@ const App = () => {
                          <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-5 space-y-4 shadow-sm dark:shadow-none">
                              <div className="flex justify-between items-center">
                                  <div className="flex items-center gap-2">
-                                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white bg-purple-600"><Zap size={14}/></div>
+                                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white bg-green-600"><Zap size={14}/></div>
                                      <div>
                                          <div className="text-sm font-bold text-gray-900 dark:text-white">Smart Bot</div>
                                          <div className="text-[10px] text-gray-500">Kernel v3.1</div>
                                      </div>
                                  </div>
-                                 <div className="text-[10px] font-bold px-2 py-1 rounded border border-purple-500 text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-500/10">ACTIVE</div>
+                                 <div className="text-[10px] font-bold px-2 py-1 rounded border border-green-500 text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10">ACTIVE</div>
                              </div>
                              <div className="p-3 bg-gray-50 dark:bg-black/40 rounded border border-gray-200 dark:border-gray-800 space-y-2">
                                  <div className="flex justify-between">

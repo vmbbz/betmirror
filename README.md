@@ -42,21 +42,21 @@ Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step proce
 
 ## 📈 Live Analytics Engine
 
-The Alpha Marketplace is now powered by a dedicated **Registry Analytics Service** (`src/services/registry-analytics.service.ts`).
+The Alpha Marketplace is powered by a dedicated **Registry Analytics Service**.
 
 *   **Real-Time Data:** The system fetches raw trade history from the Polymarket Data API for every listed wallet.
 *   **Win Rate Calculation:** It tracks "Round Trip" trades (Buying an outcome and Selling it later) to calculate realized PnL and Win Rates accurately.
 *   **Auto-Update:** A background worker updates these stats in the MongoDB Registry every 15 minutes.
-*   **Deep Dive:** Users can click on any trader in the Marketplace to see a detailed modal with their last 50 transactions, helping them make informed copy decisions.
+*   **Deep Dive:** Users can click on any trader in the Marketplace to see a detailed modal with their last 50 transactions.
 
 ---
 
 ## 👷 Builder Program Integration
 
-This platform is a registered **Polymarket Builder**. Every trade executed by the bot is cryptographically stamped with attribution headers.
+This platform is a registered **Polymarket Builder**. Every trade executed by the bot is cryptographically stamped with **Attribution Headers**.
 
 **To configure your Builder Keys (For Platform Admins):**
-Add the following to your `.env` file:
+Add the following to your `.env` file to enable stamping:
 
 ```env
 POLY_BUILDER_API_KEY=your_builder_key
@@ -64,29 +64,21 @@ POLY_BUILDER_SECRET=your_builder_secret
 POLY_BUILDER_PASSPHRASE=your_passphrase
 ```
 
-The system will automatically initialize the `BuilderConfig` and stamp all outgoing orders.
-
 ---
 
-## 📋 Managing Official Wallets (System Seeding)
+## 📋 Managing Official Wallets
 
-You can seed the Marketplace with "Official" or "System" wallets (e.g., trusted whales) using a simple text file. This keeps your `.env` clean.
+You can seed the Marketplace with "Official" or "System" wallets (e.g., trusted whales) using a simple text file.
 
 1.  **Create a file:** Create a file named `wallets.txt` in the root directory.
 2.  **Add Addresses:** Paste wallet addresses using any of the following formats:
 
-**Option A: Newlines (Recommended)**
 ```text
 0x8894e0a0c962cb723c1976a4421c95949be2d4e3
 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
 ```
 
-**Option B: Commas**
-```text
-0x8894..., 0xd8dA..., 0x1234...
-```
-
-*The server will automatically load these on startup, deduplicate them, mark them as "OFFICIAL" in the database, and display them with a badge in the Marketplace UI.*
+*The server will automatically load these on startup, mark them as "OFFICIAL", and display them with a badge.*
 
 ---
 
@@ -102,7 +94,7 @@ Security first. Configure your AI Risk settings and manage automation.
 
 ### 🌍 The Alpha Registry
 A decentralized marketplace for trading signals.
-> *A leaderboard of top Polymarket traders. Users can "One-Click Copy" any wallet listed here. Listers earn passive income from copiers.*
+> *A leaderboard of top Polymarket traders. Users can "One-Click Copy" any wallet listed here.*
 
 ### 🌉 Cross-Chain Bridge
 Fund your bot from anywhere.
@@ -112,113 +104,129 @@ Fund your bot from anywhere.
 
 ## 🏗 System Architecture
 
-The platform uses a hybrid architecture combining the speed of centralized execution with the security of decentralized custody.
-
-[📖 **Read the Full Architecture Guide**](./ARCHITECTURE.md)
+The platform uses a hybrid architecture combining centralized execution speed with decentralized custody.
 
 ```mermaid
 graph TD
-    User["User (MetaMask/Phantom)"]
-    Web["Web Terminal (React)"]
-    API["API Server (Node.js)"]
-    DB[("MongoDB Atlas")]
-    ZeroDev["ZeroDev Bundler"]
-    Poly["Polymarket (Polygon)"]
-    LiFi["Li.Fi Protocol"]
+    subgraph "Client Layer"
+        User(("👤 User (EOA)"))
+        Browser["🖥️ Web Terminal (React)"]
+    end
 
-    User -->|"1. Connects & Signs (Polygon)"| Web
-    Web -->|"2. Creates Session Key"| Web
-    Web -->|"3. Sends Encrypted Session"| API
-    API -->|"4. Stores State"| DB
+    subgraph "Cloud Infrastructure"
+        API["⚙️ Node.js API Cluster"]
+        DB[("🗄️ MongoDB Atlas")]
+        Gemini["🧠 Gemini 2.5 AI"]
+    end
+
+    subgraph "Blockchain & Execution"
+        LiFi["🌉 Li.Fi Protocol"]
+        ZeroDev["🛡️ ZeroDev Bundler"]
+        SmartAccount["🏦 Kernel Smart Account (Polygon)"]
+        CLOB["⚡ Polymarket CLOB"]
+    end
+
+    %% Flows
+    User -->|"1. Connect & Sign Session"| Browser
+    Browser -->|"2. Bridge Funds"| LiFi
+    LiFi -.->|"USDC Deposit"| SmartAccount
     
-    subgraph "Funding Flow"
-        Web -->|"5. Bridge Funds"| LiFi
-        LiFi -->|"6. Deposit USDC"| ZeroDev
-    end
-
-    subgraph "Trading Loop"
-        API -->|"7. Monitor Signals"| Poly
-        API -->|"8. AI Analysis (Gemini)"| API
-        API -->|"9. Execute Trade (Session Key)"| ZeroDev
-        ZeroDev -->|"10. On-Chain Settlment"| Poly
-    end
+    Browser -->|"3. Encrypted Session Key"| API
+    API <-->|"4. Persist State"| DB
+    
+    API -->|"5. Risk Analysis"| Gemini
+    
+    API -->|"6. Sign Trade (Builder Headers)"| ZeroDev
+    ZeroDev -->|"7. Execute UserOp"| SmartAccount
+    SmartAccount -->|"8. Settle Trade"| CLOB
 ```
 
 ---
 
-## 3. Account Abstraction (Deep Dive)
+## 📸 Screenshots
 
-We utilize **ZeroDev** and the **Kernel v3.1** smart account standard to implement ERC-4337.
+![Dashboard View](./docs/assets/dashboard_view.png)
+*Real-time Dashboard with Asset Matrix and Performance Metrics.*
 
-### Why is this secure?
-In a standard EOA (Externally Owned Account) wallet, the Private Key can do everything: Trade, Transfer, Burn.
-In our Smart Account architecture, we use **Session Keys**.
-
-### The Key Hierarchy
-
-| Key Type | Location | Permission Level | Expiry |
-| :--- | :--- | :--- | :--- |
-| **Owner Key** | User's Wallet (Browser) | **Root Admin**. Can withdraw funds, revoke keys, update settings. | Never |
-| **Session Key** | Encrypted in MongoDB | **Restricted**. Can ONLY call `createOrder` on Polymarket. Cannot transfer USDC out. | 30 Days |
-
-### Trustless Withdrawal
-Because the User is the "Owner" of the Smart Contract on the blockchain, they can interact with it directly, bypassing our server entirely.
-1.  User signs a `UserOperation` on the frontend.
-2.  The operation calls `transfer(usdc, userAddress, balance)`.
-3.  This operation is submitted to the bundler.
-4.  The Smart Account executes it immediately.
-*The bot server cannot stop this process.*
+![Bridge Interface](./docs/assets/bridge_view.png)
+*Cross-Chain Deposit via Li.Fi.*
 
 ---
 
-## 4. Data Persistence & Recovery
+## 🛠️ Technology Stack
 
-We have migrated from ephemeral `JSON/LocalStorage` to a production-grade **MongoDB** cluster. This ensures reliability during deployments or crashes.
-
-### Database Schema Strategy
-
-*   **Users Collection:** 
-    *   Stores the `SmartAccountAddress`.
-    *   Stores the `SerializedSessionKey` (needed to rebuild the signing instance on server restart).
-    *   Stores `BotConfig` (Targets, Multipliers, Risk Profile).
-    *   Stores `ActivePositions` (Entry prices for PnL calculation).
-
-*   **Trades Collection:**
-    *   Immutable log of every action.
-    *   Includes `AIReasoning` strings and `RiskScores`.
-
-*   **Registry Collection:**
-    *   Stores the Alpha Marketplace data.
-    *   Tracks `CopyCount` and `ProfitGenerated` for revenue sharing calculations.
-
-### Auto-Recovery Protocol
-1.  **Server Restart:** When the Node.js process restarts (e.g., new deployment), memory is wiped.
-2.  **Rehydration:** The server queries MongoDB for all users with `isBotRunning: true`.
-3.  **State Reconstruction:** It pulls the `ActivePositions` and `SessionKey` from the DB.
-4.  **Resume:** The bot calculates the `StartCursor` (timestamp of the last known trade) and resumes monitoring from that exact second. **No trades are missed.**
+*   **Frontend:** React, Vite, TailwindCSS, Lucide Icons.
+*   **Backend:** Node.js, Express, TypeScript.
+*   **Database:** MongoDB (Mongoose ODM).
+*   **Web3:** Viem, Ethers.js, ZeroDev SDK (Kernel v3.1), Li.Fi SDK.
+*   **AI:** Google GenAI SDK (Gemini 2.5).
 
 ---
 
-## 5. Technology Stack & External Services
+## 🚀 Quick Start Guide
 
-### Infrastructure
-*   **Hosting:** Dockerized Node.js (Sliplane/Railway/AWS).
-*   **Database:** MongoDB Atlas (M0/M10 Cluster).
+### 1. Prerequisites
+- Node.js v18+
+- MongoDB Atlas Cluster (Free Tier is fine)
+- ZeroDev Project ID (Free Tier)
+- Google Gemini API Key (Free)
 
-### Web3 Providers
-*   **ZeroDev:** AA Bundler & Paymaster (Gas sponsorship).
-*   **Li.Fi:** Cross-chain bridging (Any Chain -> Polygon).
-*   **Polymarket CLOB:** Order book interaction.
-*   **Viem:** TypeScript interface for Ethereum.
+### 2. Installation
+```bash
+git clone https://github.com/your-repo/bet-mirror.git
+cd bet-mirror
+npm install
+```
 
-### AI
-*   **Google Gemini 2.5 Flash:** Extremely low latency model used to analyze prediction market questions (e.g., "Will Bitcoin hit 100k?") against the user's risk profile (Conservative/Degen) to prevent "bad" copies.
+### 3. Configuration
+Create a `.env` file in the root directory:
+
+```env
+# --- Database (Required) ---
+MONGODB_URI=mongodb+srv://<user>:<pass>@cluster.mongodb.net/?retryWrites=true&w=majority
+
+# --- Account Abstraction (Required) ---
+# Get this from dashboard.zerodev.app (Polygon Mainnet)
+ZERODEV_PROJECT_ID=your_project_id
+ZERODEV_RPC=https://rpc.zerodev.app/api/v2/bundler/your_project_id
+
+# --- Admin Revenue ---
+# Wallet that receives 1% platform fees
+ADMIN_REVENUE_WALLET=0xYourColdWalletAddress
+```
+
+### 4. Run Development Environment
+This starts both the Backend API (Port 3000) and Frontend (Port 5173).
+```bash
+npm run dev:all
+```
+
+### 5. Developer Tools
+- **Wipe Database:** To reset your local environment (deletes Users/Trades/Registry).
+  ```bash
+  npm run db:wipe
+  ```
+  *(Requires user confirmation. Useful for testing the Activation/Restoration flow from scratch).*
+
+### 6. Production Build (Docker)
+Deploying to a cloud provider (Railway, Sliplane, DigitalOcean)? Use the Dockerfile.
+```bash
+docker build -t bet-mirror .
+docker run -p 3000:3000 -e MONGODB_URI=... bet-mirror
+```
 
 ---
 
-## 6. External Resources
+## 🔒 Security Model
 
-*   [ZeroDev Documentation](https://docs.zerodev.app/) - Account Abstraction SDK.
-*   [ERC-4337 Specification](https://eips.ethereum.org/EIPS/eip-4337) - The standard for Smart Accounts.
-*   [Polymarket API](https://docs.polymarket.com/) - CLOB & Data API.
-*   [Li.Fi Docs](https://docs.li.fi/) - Cross-chain bridging SDK.
+| Component | Responsibility | Access Level |
+| :--- | :--- | :--- |
+| **Owner Key** | Held by User (Phantom/Metamask) | **Full Admin**. Can withdraw funds, revoke keys, update settings. |
+| **Session Key** | Held by Server (Encrypted DB) | **Limited**. Can only execute trades. Cannot withdraw. |
+| **Database** | MongoDB Atlas | Stores Config, History, and Encrypted Session Keys. |
+
+---
+
+## ⚠️ Disclaimer
+
+This software is for educational purposes only. Prediction markets involve risk. The "Trustless" architecture protects against server-side theft, but it does not protect against bad trading decisions or smart contract bugs. Use at your own risk.

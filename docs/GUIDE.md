@@ -44,7 +44,7 @@ Bet Mirror is not a derivative platform. We interact directly with the **Polymar
 ### How it works
 1.  **Signal Detection:** We monitor the `Activity` endpoints of target wallets in real-time.
 2.  **Order Construction:** When a target buys `YES` on "Bitcoin > 100k", your bot constructs an identical order.
-3.  **Attribution:** We inject specific **Builder Headers** into the API request. This identifies your trade as coming from "Bet Mirror" infrastructure, allowing us to participate in the Polymarket Builder Program.
+3.  **Attribution:** We inject specific **Builder Headers** (`POLY_BUILDER_API_KEY`) into the API request. This identifies your trade as coming from "Bet Mirror" infrastructure, allowing us to participate in the **Polymarket Builder Program**.
 4.  **Execution:** The order is cryptographically signed by your Session Key and submitted to the Relayer.
 5.  **Settlement:** The trade settles on the CTF Exchange contract on Polygon.
 
@@ -52,12 +52,12 @@ Bet Mirror is not a derivative platform. We interact directly with the **Polymar
 
 We align closely with Polymarket's native architecture but optimize for **High-Frequency Copy Trading**.
 
-| Component | Polymarket Native | Bet Mirror Pro | Why we chose this |
+| Feature | Polymarket Native | Bet Mirror Pro | Why we chose this |
 | :--- | :--- | :--- | :--- |
-| **Smart Account** | Gnosis Safe | **ZeroDev Kernel v3.1** | Kernel is lighter and cheaper for high-volume automated transactions. |
-| **Signing** | User Signs (Metamask) | **Session Keys** | Allows 24/7 server-side execution without user waking up to sign. |
-| **Gas** | Relayer (Gasless) | **ERC-4337 Paymaster** | Standardized, decentralized way to pay fees in USDC. |
-| **Liquidity** | CLOB | **CLOB** | We access the exact same liquidity depth as the main site. |
+| **Smart Account** | Gnosis Safe | **ZeroDev Kernel v3.1** | Kernel is significantly lighter and cheaper for high-volume automated transactions than Safe. |
+| **Signing** | User Signs (Metamask) | **Session Keys** | Allows 24/7 server-side execution without the user needing to be online to sign every trade. |
+| **Gas** | Relayer (Gasless) | **ERC-4337 Paymaster** | Standardized, decentralized infrastructure to pay network fees in USDC. |
+| **Liquidity** | CLOB | **CLOB** | We access the exact same liquidity depth as the main site. No side pools. |
 
 ---
 

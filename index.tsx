@@ -393,7 +393,7 @@ const ActivationView = ({
 
                 const isDeployed = code !== '0x';
                 const hasUsdc = usdcBal > BigInt(0);
-                const hasPol = nativeBal > BigInt(100000000000000000); // > 0.1 POL to be considered "Used"
+                const hasPol = nativeBal > BigInt(10000000000000000); // 0.01 POL (adjusted threshold)
 
                 // Strict Detection: Must be Deployed OR have significant balance
                 if (isDeployed || hasUsdc || hasPol) {
@@ -1420,7 +1420,7 @@ const App = () => {
                                 {history.slice(0, 5).map(trade => (
                                     <div key={trade.id} className="text-xs flex items-center justify-between p-2 bg-gray-50 dark:bg-black/40 rounded border border-gray-200 dark:border-white/5">
                                         <div className="flex items-center gap-2">
-                                            <span className={`w-1.5 h-1.5 rounded-full ${trade.side === 'BUY' ? 'bg-green-500 dark:bg-terminal-success' : 'bg-red-500 dark:bg-terminal-danger'}`}></span>
+                                            <span className={`w-1.5 h-1.5 rounded-full ${trade.side === 'BUY' ? 'bg-green-50 dark:bg-terminal-success' : 'bg-red-50 dark:bg-terminal-danger'}`}></span>
                                             <span className="font-mono text-gray-700 dark:text-gray-300">{trade.side}</span>
                                         </div>
                                         <span className="text-gray-500 text-[10px] max-w-[80px] truncate">{trade.outcome}</span>

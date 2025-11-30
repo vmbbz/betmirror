@@ -1,4 +1,3 @@
-
 {
   "name": "bet-mirror",
   "version": "2.3.0",
@@ -24,7 +23,7 @@
     "@google/genai": "^1.30.0",
     "@lifi/sdk": "^3.1.0",
     "@polymarket/clob-client": "^4.14.0",
-    "@polymarket/builder-signing-sdk": "^0.1.0",
+    "@polymarket/builder-signing-sdk": "*",
     "@zerodev/ecdsa-validator": "^5.3.0",
     "@zerodev/permissions": "^5.3.0",
     "@zerodev/sdk": "^5.3.0",

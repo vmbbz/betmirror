@@ -201,7 +201,7 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
 // 3. Global Stats & Builder Data
 app.get('/api/stats/global', async (req: any, res: any) => {
     try {
-        // Internal Stats
+        // Internal Stats (DB)
         const userCount = await User.countDocuments();
         const tradeAgg = await Trade.aggregate([
             { $group: { _id: null, volume: { $sum: "$size" }, count: { $sum: 1 } } }
@@ -233,9 +233,11 @@ app.get('/api/stats/global', async (req: any, res: any) => {
         let builderHistory: BuilderVolumeData[] = [];
         
         try {
-            // Fetch daily volume series for 'BetMirror' (or configured builder name)
-            const builderName = 'BetMirror'; 
-            const response = await axios.get<BuilderVolumeData[]>(`https://data-api.polymarket.com/v1/builders/volume?builder=${builderName}&timePeriod=ALL`, { timeout: 3000 });
+            // Fetch daily volume series for configured builder ID (Default: BetMirror)
+            const builderId = ENV.builderId || 'BetMirror'; 
+            const url = `https://data-api.polymarket.com/v1/builders/volume?builder=${builderId}&timePeriod=ALL`;
+            
+            const response = await axios.get<BuilderVolumeData[]>(url, { timeout: 4000 });
             
             if (Array.isArray(response.data) && response.data.length > 0) {
                 // Sort by date desc
@@ -244,8 +246,8 @@ app.get('/api/stats/global', async (req: any, res: any) => {
                 builderHistory = sorted.slice(0, 14); // Last 14 days for chart
             }
         } catch (e) {
-            // Builder API might fail or return 404 if no data yet, don't crash the endpoint
-            // console.warn("Builder API fetch failed:", e.message);
+            // Builder API might fail or return 404 if no data yet. 
+            // We send null to indicate "Data Pending" rather than error.
         }
 
         res.json({
@@ -259,7 +261,8 @@ app.get('/api/stats/global', async (req: any, res: any) => {
             },
             builder: {
                 current: builderStats,
-                history: builderHistory
+                history: builderHistory,
+                builderId: ENV.builderId || 'BetMirror'
             }
         });
     } catch (e) {

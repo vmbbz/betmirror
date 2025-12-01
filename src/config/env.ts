@@ -22,6 +22,9 @@ export type RuntimeEnv = {
   builderApiSecret?: string;
   builderApiPassphrase?: string;
   
+  // Builder Profile ID for Stats (e.g. "BetMirror")
+  builderId?: string;
+  
   // The Global Registry (The "Backend" that tracks who listed what)
   registryApiUrl: string;
 
@@ -40,8 +43,8 @@ export type RuntimeEnv = {
   twilioFromNumber?: string;
   userPhoneNumber?: string;
 
-  // Account Abstraction
-  zeroDevRpc?: string;
+  // AA
+  zeroDevRpc: string;
   zeroDevProjectId?: string;
 
   // Database
@@ -120,6 +123,7 @@ export function loadEnv(): RuntimeEnv {
     builderApiKey: process.env.POLY_BUILDER_API_KEY,
     builderApiSecret: process.env.POLY_BUILDER_SECRET,
     builderApiPassphrase: process.env.POLY_BUILDER_PASSPHRASE,
+    builderId: process.env.POLY_BUILDER_ID || 'BetMirror',
     
     registryApiUrl: process.env.REGISTRY_API_URL || 'http://localhost:3000/api',
 

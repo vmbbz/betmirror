@@ -63,6 +63,7 @@ async function startUserBot(userId: string, config: BotConfig) {
                 outcome: trade.outcome,
                 side: trade.side,
                 size: trade.size,
+                executedSize: (trade as any).executedSize || 0, // Save actual size
                 price: trade.price,
                 pnl: trade.pnl,
                 status: trade.status,
@@ -204,9 +205,10 @@ app.get('/api/stats/global', async (req: any, res: any) => {
         // Internal Stats (DB)
         const userCount = await User.countDocuments();
         const tradeAgg = await Trade.aggregate([
-            { $group: { _id: null, volume: { $sum: "$size" }, count: { $sum: 1 } } }
+            { $group: { _id: null, signalVolume: { $sum: "$size" }, executedVolume: { $sum: "$executedSize" }, count: { $sum: 1 } } }
         ]);
-        const internalVolume = tradeAgg[0]?.volume || 0;
+        const signalVolume = tradeAgg[0]?.signalVolume || 0;
+        const executedVolume = tradeAgg[0]?.executedVolume || 0;
         const internalTrades = tradeAgg[0]?.count || 0;
 
         // Platform Revenue (1% Fees)
@@ -229,31 +231,40 @@ app.get('/api/stats/global', async (req: any, res: any) => {
         const totalLiquidity = totalBridged + totalDirect;
 
         // External Builder API Stats (Polymarket)
+        // A. Our Profile
         let builderStats: BuilderVolumeData | null = null;
         let builderHistory: BuilderVolumeData[] = [];
         
+        // B. Ecosystem Total (Leaderboard Sum)
+        let ecosystemVolume = 0;
+
         try {
-            // Fetch daily volume series for configured builder ID (Default: BetMirror)
+            // Fetch Our Stats
             const builderId = ENV.builderId || 'BetMirror'; 
             const url = `https://data-api.polymarket.com/v1/builders/volume?builder=${builderId}&timePeriod=ALL`;
-            
             const response = await axios.get<BuilderVolumeData[]>(url, { timeout: 4000 });
             
             if (Array.isArray(response.data) && response.data.length > 0) {
-                // Sort by date desc
                 const sorted = response.data.sort((a, b) => new Date(b.dt).getTime() - new Date(a.dt).getTime());
                 builderStats = sorted[0]; // Most recent day
-                builderHistory = sorted.slice(0, 14); // Last 14 days for chart
+                builderHistory = sorted.slice(0, 14); // Last 14 days
             }
+
+            // Fetch Ecosystem Leaderboard (Top 50)
+            const lbUrl = `https://data-api.polymarket.com/v1/builders?timePeriod=ALL`;
+            const lbResponse = await axios.get<BuilderVolumeData[]>(lbUrl, { timeout: 4000 });
+             if (Array.isArray(lbResponse.data)) {
+                 ecosystemVolume = lbResponse.data.reduce((acc, curr) => acc + curr.volume, 0);
+             }
         } catch (e) {
-            // Builder API might fail or return 404 if no data yet. 
-            // We send null to indicate "Data Pending" rather than error.
+            // Graceful fail
         }
 
         res.json({
             internal: {
                 totalUsers: userCount,
-                totalVolume: internalVolume,
+                signalVolume: signalVolume, // Whale Volume
+                executedVolume: executedVolume, // Bot Volume
                 totalTrades: internalTrades,
                 totalRevenue,
                 totalLiquidity,
@@ -262,7 +273,8 @@ app.get('/api/stats/global', async (req: any, res: any) => {
             builder: {
                 current: builderStats,
                 history: builderHistory,
-                builderId: ENV.builderId || 'BetMirror'
+                builderId: ENV.builderId || 'BetMirror',
+                ecosystemVolume // Total volume of all builders
             }
         });
     } catch (e) {

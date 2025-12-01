@@ -313,7 +313,10 @@ export class BotEngine {
             await this.addLog('info', `Executing Copy: ${signal.side} ${signal.outcome}`);
             
             try {
-                if(this.executor) await this.executor.copyTrade(signal);
+                let executedSize = 0;
+                if(this.executor) {
+                    executedSize = await this.executor.copyTrade(signal);
+                }
                 await this.addLog('success', `Trade Executed Successfully!`);
                 
                 let realPnl = 0;
@@ -324,7 +327,7 @@ export class BotEngine {
                         tokenId: signal.tokenId,
                         outcome: signal.outcome,
                         entryPrice: signal.price,
-                        sizeUsd: signal.sizeUsd,
+                        sizeUsd: executedSize, // Track executed size for PnL
                         timestamp: Date.now()
                     };
                     this.activePositions.push(newPosition);
@@ -333,7 +336,7 @@ export class BotEngine {
                     if (posIndex !== -1) {
                         const entry = this.activePositions[posIndex];
                         const yieldPercent = (signal.price - entry.entryPrice) / entry.entryPrice;
-                        realPnl = signal.sizeUsd * yieldPercent;
+                        realPnl = entry.sizeUsd * yieldPercent; // Calculate PnL on actual size
                         await this.addLog('info', `Realized PnL: $${realPnl.toFixed(2)} (${(yieldPercent*100).toFixed(1)}%)`);
                         this.activePositions.splice(posIndex, 1);
                     } else {
@@ -350,7 +353,8 @@ export class BotEngine {
                     outcome: signal.outcome,
                     side: signal.side,
                     price: signal.price,
-                    size: signal.sizeUsd,
+                    size: signal.sizeUsd, // Whale Size
+                    executedSize: executedSize, // Bot Size
                     aiReasoning: aiReasoning,
                     riskScore: riskScore,
                     pnl: realPnl,
@@ -388,6 +392,7 @@ export class BotEngine {
                 side: signal.side,
                 price: signal.price,
                 size: signal.sizeUsd,
+                executedSize: 0,
                 aiReasoning: aiReasoning,
                 riskScore: riskScore,
                 status: 'SKIPPED'
@@ -438,6 +443,7 @@ export class BotEngine {
                               side: 'SELL',
                               price: bestBid,
                               size: pos.sizeUsd,
+                              executedSize: pos.sizeUsd,
                               aiReasoning: 'Auto Take-Profit Trigger',
                               riskScore: 0,
                               pnl: realPnl,
@@ -456,6 +462,7 @@ export class BotEngine {
       side: 'BUY' | 'SELL';
       price: number;
       size: number;
+      executedSize: number;
       aiReasoning?: string;
       riskScore?: number;
       pnl?: number;
@@ -470,7 +477,7 @@ export class BotEngine {
 
       if (data.status !== 'SKIPPED') {
           this.stats.tradesCount = (this.stats.tradesCount || 0) + 1;
-          this.stats.totalVolume = (this.stats.totalVolume || 0) + data.size;
+          this.stats.totalVolume = (this.stats.totalVolume || 0) + data.executedSize; // Update stats with REAL volume
           if (data.pnl) {
               this.stats.totalPnl = (this.stats.totalPnl || 0) + data.pnl;
           }

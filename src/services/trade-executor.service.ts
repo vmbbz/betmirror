@@ -101,7 +101,11 @@ export class TradeExecutorService {
       }
   }
 
-  async copyTrade(signal: TradeSignal): Promise<void> {
+  /**
+   * Executes the copy trade.
+   * Returns the ACTUAL size executed in USD.
+   */
+  async copyTrade(signal: TradeSignal): Promise<number> {
     const { logger, env, client } = this.deps;
     try {
       const yourUsdBalance = await getUsdBalanceApprox(client.wallet, env.usdcContractAddress);
@@ -130,7 +134,7 @@ export class TradeExecutorService {
           logger.error(
             `Insufficient USDC balance. Required: ${requiredUsdc.toFixed(2)} USDC, Available: ${yourUsdBalance.toFixed(2)} USDC`,
           );
-          return;
+          return 0;
         }
       }
 
@@ -138,7 +142,7 @@ export class TradeExecutorService {
         logger.error(
           `Insufficient POL balance for gas. Required: ${minPolForGas} POL, Available: ${polBalance.toFixed(4)} POL`,
         );
-        return;
+        return 0;
       }
 
       await postOrder({
@@ -150,6 +154,9 @@ export class TradeExecutorService {
         sizeUsd: sizing.targetUsdSize,
       });
       logger.info(`Successfully executed ${signal.side} order for ${sizing.targetUsdSize.toFixed(2)} USD`);
+      
+      return sizing.targetUsdSize;
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (errorMessage.includes('closed') || errorMessage.includes('resolved') || errorMessage.includes('No orderbook')) {
@@ -157,6 +164,7 @@ export class TradeExecutorService {
       } else {
         logger.error(`Failed to copy trade: ${errorMessage}`, err as Error);
       }
+      return 0;
     }
   }
 

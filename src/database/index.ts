@@ -26,7 +26,8 @@ export interface ITrade extends Document {
   marketId: string;
   outcome: string;
   side: 'BUY' | 'SELL';
-  size: number;
+  size: number;         // Signal Size (Whale)
+  executedSize: number; // Bot Size (Real)
   price: number;
   pnl?: number;
   status: string;
@@ -112,6 +113,7 @@ const TradeSchema = new Schema<ITrade>({
   outcome: String,
   side: String,
   size: Number,
+  executedSize: { type: Number, default: 0 }, // NEW: Track actual bot volume
   price: Number,
   pnl: Number,
   status: String,

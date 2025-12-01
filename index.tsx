@@ -53,7 +53,8 @@ interface WalletBalances {
 interface GlobalStatsResponse {
     internal: {
         totalUsers: number;
-        totalVolume: number;
+        signalVolume: number;
+        executedVolume: number;
         totalTrades: number;
         totalRevenue: number;
         totalLiquidity: number;
@@ -63,6 +64,7 @@ interface GlobalStatsResponse {
         current: BuilderVolumeData | null;
         history: BuilderVolumeData[];
         builderId: string;
+        ecosystemVolume: number;
     };
 }
 
@@ -1504,28 +1506,35 @@ const App = () => {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     
-                    {/* Left: Internal Metrics (Restored to Grid) */}
+                    {/* Left: Internal Metrics (Grid) */}
                     <div className="glass-panel p-6 rounded-xl border border-gray-200 dark:border-terminal-border space-y-6">
                         <h3 className="text-sm font-bold text-gray-500 uppercase tracking-widest border-b border-gray-200 dark:border-gray-800 pb-2 flex items-center gap-2">
                             <Server size={14}/> Internal Platform Metrics
                         </h3>
                         <div className="grid grid-cols-2 gap-6">
+                             {/* Card 1: Signal Volume */}
                              <div>
                                 <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                                    Signal Volume Processed <Tooltip text="Total volume of copy-trade signals processed by the engine (Source Volume)." />
+                                    Signal Volume <Tooltip text="Total volume of whale/signal trades detected by the monitoring engine. (Source Volume)" />
                                 </div>
                                 <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
-                                    ${systemStats.internal.totalVolume.toLocaleString()}
+                                    ${systemStats.internal.signalVolume.toLocaleString()}
                                 </div>
                                 <div className="text-[10px] text-gray-400">{systemStats.internal.totalTrades} signals tracked</div>
                              </div>
+
+                             {/* Card 2: Platform Execution Volume (NEW) */}
                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Total Liquidity (Deposits)</div>
-                                <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
-                                    ${systemStats.internal.totalLiquidity.toLocaleString()}
+                                <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                                    Bot Execution Vol <Tooltip text="Real USDC volume executed by user bots on the platform." />
                                 </div>
-                                <div className="text-[10px] text-gray-400">Bridge + Direct</div>
+                                <div className="text-2xl font-black text-blue-600 dark:text-blue-400 font-mono">
+                                    ${systemStats.internal.executedVolume.toLocaleString()}
+                                </div>
+                                <div className="text-[10px] text-gray-400">On-Chain Volume</div>
                              </div>
+
+                             {/* Card 3: Revenue */}
                              <div>
                                 <div className="text-xs text-gray-500 mb-1">Protocol Revenue</div>
                                 <div className="text-2xl font-black text-green-600 dark:text-green-500 font-mono">
@@ -1533,9 +1542,11 @@ const App = () => {
                                 </div>
                                 <div className="text-[10px] text-gray-400">1% Fee Share</div>
                              </div>
+
+                             {/* Card 4: Active Bots */}
                              <div>
                                 <div className="text-xs text-gray-500 mb-1">Active Runners</div>
-                                <div className="text-2xl font-black text-blue-600 dark:text-blue-400 font-mono">
+                                <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
                                     {systemStats.internal.activeBots} <span className="text-sm text-gray-400 font-normal">/ {systemStats.internal.totalUsers}</span>
                                 </div>
                                 <div className="text-[10px] text-gray-400">Online now</div>
@@ -1544,68 +1555,85 @@ const App = () => {
                     </div>
 
                     {/* Right: Verified On-Chain Data (Builder API) */}
-                    <div className="glass-panel p-6 rounded-xl border border-blue-200 dark:border-blue-500/30 bg-blue-50/50 dark:bg-blue-900/10 space-y-6 flex flex-col justify-between">
-                        <div className="flex justify-between items-center border-b border-blue-200 dark:border-blue-800 pb-2">
-                            <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center gap-2">
-                                <BadgeCheck size={16}/> Verified On-Chain Data
-                            </h3>
-                            <span className="text-[10px] bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded font-mono">
-                                Source: Polymarket API
-                            </span>
-                        </div>
+                    <div className="space-y-6">
                         
-                        {systemStats.builder.current ? (
-                            <div className="space-y-6 flex-1 flex flex-col justify-between">
-                                <div className="grid grid-cols-2 gap-6">
-                                    <div>
-                                        <div className="text-xs text-blue-500/80 mb-1 flex items-center gap-1">
-                                            Attributed Volume (24h) <Tooltip text={`Actual on-chain volume executed by bots carrying the '${systemStats.builder.builderId}' Builder Header.`} />
-                                        </div>
-                                        <div className="text-3xl font-black text-gray-900 dark:text-white font-mono">
-                                            ${systemStats.builder.current.volume.toLocaleString()}
-                                        </div>
-                                        <div className="text-[10px] text-blue-400 mt-1">Builder: {systemStats.builder.builderId}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-blue-500/80 mb-1">Active Users (24h)</div>
-                                        <div className="text-3xl font-black text-gray-900 dark:text-white font-mono">
-                                            {systemStats.builder.current.activeUsers}
-                                        </div>
-                                    </div>
+                        {/* Section 1: Ecosystem Context */}
+                        <div className="glass-panel p-6 rounded-xl border border-gray-200 dark:border-terminal-border bg-gray-50 dark:bg-white/5">
+                             <h3 className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                <Globe size={14}/> Polymarket Ecosystem
+                            </h3>
+                            <div>
+                                <div className="text-xs text-gray-500 mb-1">Total Builder Volume (Top 50)</div>
+                                <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
+                                    ${systemStats.builder.ecosystemVolume > 0 ? systemStats.builder.ecosystemVolume.toLocaleString() : 'Loading...'}
                                 </div>
+                                <div className="text-[10px] text-gray-400 mt-1">Aggregated verified volume</div>
+                            </div>
+                        </div>
 
-                                {/* Mini Chart Visualization - Fixed CSS */}
-                                <div className="h-40 flex items-end justify-between gap-1 pt-4 border-t border-blue-200 dark:border-blue-800/50">
-                                    {systemStats.builder.history.slice().reverse().map((day, i) => {
-                                        const maxVol = Math.max(...systemStats.builder.history.map(h => h.volume));
-                                        const height = (day.volume / maxVol) * 100;
-                                        return (
-                                            <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end">
-                                                <div 
-                                                    className="w-full rounded-t-sm hover:opacity-80 transition-all bg-gradient-to-t from-blue-500 to-cyan-400 dark:from-blue-600 dark:to-cyan-500 min-h-[4px]"
-                                                    style={{ height: `${Math.max(height, 5)}%` }}
-                                                ></div>
-                                                {/* Tooltip for Chart */}
-                                                <div className="opacity-0 group-hover:opacity-100 absolute bottom-full mb-2 bg-black text-white text-[10px] p-2 rounded shadow-lg z-20 pointer-events-none whitespace-nowrap text-center">
-                                                    <span className="font-bold block">${day.volume.toLocaleString()}</span> 
-                                                    <span className="text-gray-400">{new Date(day.dt).toLocaleDateString(undefined, {month:'short', day:'numeric'})}</span>
-                                                </div>
+                        {/* Section 2: Our Attribution */}
+                        <div className="glass-panel p-6 rounded-xl border border-blue-200 dark:border-blue-500/30 bg-blue-50/50 dark:bg-blue-900/10 space-y-6 flex flex-col justify-between flex-1">
+                            <div className="flex justify-between items-center border-b border-blue-200 dark:border-blue-800 pb-2">
+                                <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                                    <BadgeCheck size={16}/> Verified Attribution
+                                </h3>
+                                <span className="text-[10px] bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded font-mono">
+                                    ID: {systemStats.builder.builderId}
+                                </span>
+                            </div>
+                            
+                            {systemStats.builder.current ? (
+                                <div className="space-y-6 flex-1 flex flex-col justify-between">
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div>
+                                            <div className="text-xs text-blue-500/80 mb-1 flex items-center gap-1">
+                                                Attributed Volume (24h) <Tooltip text={`Actual on-chain volume executed by bots carrying the '${systemStats.builder.builderId}' Builder Header.`} />
                                             </div>
-                                        )
-                                    })}
+                                            <div className="text-3xl font-black text-gray-900 dark:text-white font-mono">
+                                                ${systemStats.builder.current.volume.toLocaleString()}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-xs text-blue-500/80 mb-1">Active Users (24h)</div>
+                                            <div className="text-3xl font-black text-gray-900 dark:text-white font-mono">
+                                                {systemStats.builder.current.activeUsers}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Mini Chart Visualization */}
+                                    <div className="h-40 flex items-end justify-between gap-1 pt-4 border-t border-blue-200 dark:border-blue-800/50">
+                                        {systemStats.builder.history.slice().reverse().map((day, i) => {
+                                            const maxVol = Math.max(...systemStats.builder.history.map(h => h.volume));
+                                            const height = (day.volume / maxVol) * 100;
+                                            return (
+                                                <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end">
+                                                    <div 
+                                                        className="w-full rounded-t-sm hover:opacity-80 transition-all bg-gradient-to-t from-blue-500 to-cyan-400 dark:from-blue-600 dark:to-cyan-500 min-h-[4px]"
+                                                        style={{ height: `${Math.max(height, 5)}%` }}
+                                                    ></div>
+                                                    {/* Tooltip for Chart */}
+                                                    <div className="opacity-0 group-hover:opacity-100 absolute bottom-full mb-2 bg-black text-white text-[10px] p-2 rounded shadow-lg z-20 pointer-events-none whitespace-nowrap text-center">
+                                                        <span className="font-bold block">${day.volume.toLocaleString()}</span> 
+                                                        <span className="text-gray-400">{new Date(day.dt).toLocaleDateString(undefined, {month:'short', day:'numeric'})}</span>
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                    <div className="text-center text-[10px] text-blue-400">14 Day Volume Trend</div>
                                 </div>
-                                <div className="text-center text-[10px] text-blue-400">14 Day Volume Trend</div>
-                            </div>
-                        ) : (
-                            <div className="flex-1 flex flex-col items-center justify-center text-blue-400/50 py-8 border border-dashed border-blue-200 dark:border-blue-800 rounded-lg bg-white/50 dark:bg-black/20">
-                                <Activity size={48} className="mb-4 opacity-50"/>
-                                <p className="text-sm font-bold mb-1 text-gray-500 dark:text-gray-400">Data Pending or Not Ranked</p>
-                                <p className="text-xs text-center max-w-xs text-gray-400">
-                                    Builder ID "{systemStats.builder.builderId}" has no verified on-chain volume yet. 
-                                    Start trading to generate attribution stats.
-                                </p>
-                            </div>
-                        )}
+                            ) : (
+                                <div className="flex-1 flex flex-col items-center justify-center text-blue-400/50 py-8 border border-dashed border-blue-200 dark:border-blue-800 rounded-lg bg-white/50 dark:bg-black/20">
+                                    <Activity size={48} className="mb-4 opacity-50"/>
+                                    <p className="text-sm font-bold mb-1 text-gray-500 dark:text-gray-400">Data Pending or Not Ranked</p>
+                                    <p className="text-xs text-center max-w-xs text-gray-400">
+                                        Builder ID "{systemStats.builder.builderId}" has no verified on-chain volume yet. 
+                                        Start trading to generate attribution stats.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>

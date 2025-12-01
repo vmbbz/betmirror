@@ -683,6 +683,7 @@ const App = () => {
   const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
   const [bridgeHistory, setBridgeHistory] = useState<BridgeTransactionRecord[]>([]);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [systemView, setSystemView] = useState<'attribution' | 'global'>('attribution'); // System Page Toggle
   
   // --- STATE: Forms & Actions ---
   const [isDepositing, setIsDepositing] = useState(false);
@@ -1554,36 +1555,32 @@ const App = () => {
                         </div>
                     </div>
 
-                    {/* Right: Verified On-Chain Data (Builder API) */}
-                    <div className="space-y-6">
+                    {/* Right: Verified On-Chain Data (Switchable) */}
+                    <div className="glass-panel p-6 rounded-xl border border-blue-200 dark:border-blue-500/30 bg-blue-50/50 dark:bg-blue-900/10 space-y-6 flex flex-col justify-between flex-1">
                         
-                        {/* Section 1: Ecosystem Context */}
-                        <div className="glass-panel p-6 rounded-xl border border-gray-200 dark:border-terminal-border bg-gray-50 dark:bg-white/5">
-                             <h3 className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                <Globe size={14}/> Polymarket Ecosystem
-                            </h3>
-                            <div>
-                                <div className="text-xs text-gray-500 mb-1">Total Builder Volume (Top 50)</div>
-                                <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
-                                    ${systemStats.builder.ecosystemVolume > 0 ? systemStats.builder.ecosystemVolume.toLocaleString() : 'Loading...'}
-                                </div>
-                                <div className="text-[10px] text-gray-400 mt-1">Aggregated verified volume</div>
+                        <div className="flex justify-between items-center border-b border-blue-200 dark:border-blue-800 pb-2">
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={() => setSystemView('attribution')}
+                                    className={`text-xs font-bold uppercase tracking-widest pb-1 -mb-3 border-b-2 transition-all ${systemView === 'attribution' ? 'border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                                >
+                                    My Attribution
+                                </button>
+                                <button 
+                                    onClick={() => setSystemView('global')}
+                                    className={`text-xs font-bold uppercase tracking-widest pb-1 -mb-3 border-b-2 transition-all ${systemView === 'global' ? 'border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+                                >
+                                    Global Ecosystem
+                                </button>
                             </div>
+                            <span className="text-[10px] bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded font-mono">
+                                {systemView === 'attribution' ? `ID: ${systemStats.builder.builderId}` : 'Polymarket API'}
+                            </span>
                         </div>
-
-                        {/* Section 2: Our Attribution */}
-                        <div className="glass-panel p-6 rounded-xl border border-blue-200 dark:border-blue-500/30 bg-blue-50/50 dark:bg-blue-900/10 space-y-6 flex flex-col justify-between flex-1">
-                            <div className="flex justify-between items-center border-b border-blue-200 dark:border-blue-800 pb-2">
-                                <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest flex items-center gap-2">
-                                    <BadgeCheck size={16}/> Verified Attribution
-                                </h3>
-                                <span className="text-[10px] bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded font-mono">
-                                    ID: {systemStats.builder.builderId}
-                                </span>
-                            </div>
-                            
-                            {systemStats.builder.current ? (
-                                <div className="space-y-6 flex-1 flex flex-col justify-between">
+                        
+                        {systemView === 'attribution' ? (
+                             systemStats.builder.current ? (
+                                <div className="space-y-6 flex-1 flex flex-col justify-between animate-in fade-in">
                                     <div className="grid grid-cols-2 gap-6">
                                         <div>
                                             <div className="text-xs text-blue-500/80 mb-1 flex items-center gap-1">
@@ -1601,11 +1598,13 @@ const App = () => {
                                         </div>
                                     </div>
 
-                                    {/* Mini Chart Visualization */}
+                                    {/* Chart Visualization */}
                                     <div className="h-40 flex items-end justify-between gap-1 pt-4 border-t border-blue-200 dark:border-blue-800/50">
-                                        {systemStats.builder.history.slice().reverse().map((day, i) => {
+                                        {systemStats.builder.history.map((day, i) => {
                                             const maxVol = Math.max(...systemStats.builder.history.map(h => h.volume));
-                                            const height = (day.volume / maxVol) * 100;
+                                            const height = maxVol > 0 ? (day.volume / maxVol) * 100 : 0;
+                                            // Safe Date Parsing
+                                            const dateLabel = day.dt ? new Date(day.dt).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : '-';
                                             return (
                                                 <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end">
                                                     <div 
@@ -1615,7 +1614,7 @@ const App = () => {
                                                     {/* Tooltip for Chart */}
                                                     <div className="opacity-0 group-hover:opacity-100 absolute bottom-full mb-2 bg-black text-white text-[10px] p-2 rounded shadow-lg z-20 pointer-events-none whitespace-nowrap text-center">
                                                         <span className="font-bold block">${day.volume.toLocaleString()}</span> 
-                                                        <span className="text-gray-400">{new Date(day.dt).toLocaleDateString(undefined, {month:'short', day:'numeric'})}</span>
+                                                        <span className="text-gray-400">{dateLabel}</span>
                                                     </div>
                                                 </div>
                                             )
@@ -1632,8 +1631,23 @@ const App = () => {
                                         Start trading to generate attribution stats.
                                     </p>
                                 </div>
-                            )}
-                        </div>
+                            )
+                        ) : (
+                            <div className="space-y-6 flex-1 flex flex-col justify-center animate-in fade-in">
+                                <div className="text-center space-y-2">
+                                     <div className="inline-block p-4 bg-blue-100 dark:bg-blue-900/30 rounded-full mb-2">
+                                         <Globe size={48} className="text-blue-600 dark:text-blue-400"/>
+                                     </div>
+                                     <div className="text-xs text-gray-500 uppercase tracking-widest">Polymarket Total Builder Volume</div>
+                                     <div className="text-4xl font-black text-gray-900 dark:text-white font-mono">
+                                         ${systemStats.builder.ecosystemVolume > 0 ? systemStats.builder.ecosystemVolume.toLocaleString() : 'Loading...'}
+                                     </div>
+                                     <p className="text-xs text-gray-400 max-w-xs mx-auto pt-4">
+                                         This metric tracks the aggregated volume of the top 50 builders in the Polymarket ecosystem.
+                                     </p>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

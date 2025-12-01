@@ -231,38 +231,46 @@ app.get('/api/stats/global', async (req: any, res: any) => {
         const totalLiquidity = totalBridged + totalDirect;
 
         // External Builder API Stats (Polymarket)
-        // A. Our Profile
         let builderStats: BuilderVolumeData | null = null;
         let builderHistory: BuilderVolumeData[] = [];
-        let builderId = ENV.builderId || 'BetMirror'; // Default
-        
-        // B. Ecosystem Total (Leaderboard Sum)
-        let ecosystemVolume = 112005785; // Placeholder for total network volume
+        let ecosystemVolume = 112005785; // Fallback ecosystem volume
 
         try {
-            if (builderId) {
-                // 1. Fetch Our Stats (Attribution)
-                // Filter is: ?builder=BetMirror
-                const url = `https://data-api.polymarket.com/v1/builders/volume?builder=${builderId}&timePeriod=ALL`;
-                const response = await axios.get<BuilderVolumeData[]>(url, { timeout: 3000 });
+            // 1. Get Specific Builder Stats (Time-Series /volume)
+            const builderId = ENV.builderId || 'BetMirror'; 
+            const url = `https://data-api.polymarket.com/v1/builders/volume?builder=${builderId}&timePeriod=ALL`;
+            const response = await axios.get<BuilderVolumeData[]>(url, { timeout: 4000 });
+            
+            if (Array.isArray(response.data) && response.data.length > 0) {
+                // Robust Sort: Newest First (Descending by Date)
+                const sortedByDate = [...response.data].sort((a, b) => {
+                    // Fallback to 0 if dt is missing, though volume endpoint should have it
+                    return new Date(b.dt || 0).getTime() - new Date(a.dt || 0).getTime();
+                });
+
+                // "Current" = The latest entry (Today/Yesterday)
+                builderStats = sortedByDate[0]; 
                 
-                if (Array.isArray(response.data) && response.data.length > 0) {
-                    // Get the most recent data point for current stats
-                    builderStats = response.data[0];  // First item is already the most recent
-                    
-                    // For history, take the last 14 entries (already in chronological order)
-                    builderHistory = response.data.slice(0, 14);  // Get most recent 14 entries
-                }
+                // "History" = Latest 14 days, reversed to be Chronological (Oldest -> Newest) for Chart
+                builderHistory = sortedByDate.slice(0, 14).reverse();
             }
+
+            // 2. Get Ecosystem Leaderboard (Aggregated /leaderboard)
+            const lbUrl = `https://data-api.polymarket.com/v1/builders/leaderboard?timePeriod=ALL`;
+            const lbResponse = await axios.get<BuilderVolumeData[]>(lbUrl, { timeout: 4000 });
+             if (Array.isArray(lbResponse.data)) {
+                 ecosystemVolume = lbResponse.data.reduce((acc, curr) => acc + curr.volume, 0);
+             }
         } catch (e) {
-            // Graceful fail
+            // Graceful fail - frontend will show "Data Pending"
+            console.warn("Failed to fetch external builder stats:", e instanceof Error ? e.message : 'Unknown');
         }
 
         res.json({
             internal: {
                 totalUsers: userCount,
-                signalVolume: signalVolume, // Whale Volume (Opportunity)
-                executedVolume: executedVolume, // Bot Volume (Real)
+                signalVolume: signalVolume, // Whale Volume
+                executedVolume: executedVolume, // Bot Volume
                 totalTrades: internalTrades,
                 totalRevenue,
                 totalLiquidity,
@@ -271,8 +279,8 @@ app.get('/api/stats/global', async (req: any, res: any) => {
             builder: {
                 current: builderStats,
                 history: builderHistory,
-                builderId: builderId,
-                ecosystemVolume: ecosystemVolume
+                builderId: ENV.builderId || 'BetMirror',
+                ecosystemVolume // Total volume of all builders
             }
         });
     } catch (e) {

@@ -1,5 +1,6 @@
 import { Wallet, JsonRpcProvider } from 'ethers';
 import { ClobClient, Chain } from '@polymarket/clob-client';
+import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 export async function createPolymarketClient(input) {
     const provider = new JsonRpcProvider(input.rpcUrl);
     const wallet = new Wallet(input.privateKey, provider);
@@ -11,7 +12,22 @@ export async function createPolymarketClient(input) {
             passphrase: input.apiPassphrase,
         };
     }
+    // Configure Builder SDK if credentials are present
+    let builderConfig;
+    if (input.builderApiKey && input.builderApiSecret && input.builderApiPassphrase) {
+        const builderCreds = {
+            key: input.builderApiKey,
+            secret: input.builderApiSecret,
+            passphrase: input.builderApiPassphrase
+        };
+        builderConfig = new BuilderConfig({ localBuilderCreds: builderCreds });
+    }
     // Casting wallet as any to bypass type mismatch between ethers v6 Wallet and ClobClient (v5) expectation
-    const client = new ClobClient('https://clob.polymarket.com', Chain.POLYGON, wallet, creds);
+    const client = new ClobClient('https://clob.polymarket.com', Chain.POLYGON, wallet, creds, undefined, // SignatureType
+    undefined, // funderAddress
+    undefined, // ...
+    undefined, // ...
+    builderConfig // Pass builder config for order attribution
+    );
     return Object.assign(client, { wallet });
 }

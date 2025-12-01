@@ -40,6 +40,7 @@ const TradeSchema = new Schema({
     outcome: String,
     side: String,
     size: Number,
+    executedSize: { type: Number, default: 0 }, // NEW: Track actual bot volume
     price: Number,
     pnl: Number,
     status: String,
@@ -56,6 +57,8 @@ const RegistrySchema = new Schema({
     tradesLast30d: { type: Number, default: 0 },
     followers: { type: Number, default: 0 },
     isVerified: { type: Boolean, default: false },
+    isSystem: { type: Boolean, default: false },
+    tags: [String],
     listedBy: String,
     listedAt: String,
     copyCount: { type: Number, default: 0 },
@@ -80,6 +83,12 @@ const BridgeTransactionSchema = new Schema({
     tool: String,
     fees: String
 });
+const DepositLogSchema = new Schema({
+    userId: { type: String, required: true, index: true },
+    amount: { type: Number, required: true },
+    txHash: { type: String, required: true, unique: true },
+    timestamp: { type: Date, default: Date.now }
+});
 const BotLogSchema = new Schema({
     userId: { type: String, required: true, index: true },
     type: String,
@@ -92,6 +101,7 @@ export const Trade = mongoose.model('Trade', TradeSchema);
 export const Registry = mongoose.model('Registry', RegistrySchema);
 export const Feedback = mongoose.model('Feedback', FeedbackSchema);
 export const BridgeTransaction = mongoose.model('BridgeTransaction', BridgeTransactionSchema);
+export const DepositLog = mongoose.model('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model('BotLog', BotLogSchema);
 // --- Connection ---
 export const connectDB = async (uri) => {
@@ -101,6 +111,26 @@ export const connectDB = async (uri) => {
         const maskedUri = uri.replace(/:\/\/.*@/, '://***:***@');
         console.log(`🔌 Attempting to connect to MongoDB...`);
         await mongoose.connect(uri);
+        // --- FIX: Drop Legacy Index ---
+        // The error 'E11000 ... index: handle_1 dup key: { handle: null }' happens because
+        // an old index exists on 'handle' but our schema doesn't use it, causing all new users
+        // to default to null, which violates uniqueness. We drop it here.
+        try {
+            if (mongoose.connection.db) {
+                const indexName = 'handle_1';
+                const indexExists = await mongoose.connection.db.collection('users').indexExists(indexName);
+                if (indexExists) {
+                    await mongoose.connection.db.collection('users').dropIndex(indexName);
+                    console.log('🧹 Cleaned up legacy index: handle_1 (Fixed Activation Error)');
+                }
+            }
+        }
+        catch (e) {
+            // Ignore if index doesn't exist or other non-critical error
+            if (e.code !== 27) {
+                console.warn('⚠️ Index cleanup check:', e.message);
+            }
+        }
         console.log(`📦 Connected to MongoDB successfully (${uri.includes('mongodb.net') ? 'Atlas Cloud' : 'Local'})`);
     }
     catch (error) {

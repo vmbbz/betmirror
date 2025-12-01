@@ -1603,8 +1603,22 @@ const App = () => {
                                         {systemStats.builder.history.map((day, i) => {
                                             const maxVol = Math.max(...systemStats.builder.history.map(h => h.volume));
                                             const height = maxVol > 0 ? (day.volume / maxVol) * 100 : 0;
+                                            
                                             // Safe Date Parsing
-                                            const dateLabel = day.dt ? new Date(day.dt).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : '-';
+                                            let dateLabel = '-';
+                                            if (day.dt) {
+                                                 const d = new Date(day.dt);
+                                                 if (!isNaN(d.getTime())) {
+                                                     dateLabel = d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+                                                 }
+                                            }
+                                            // Fallback if API date is missing/invalid/null - Use loop index to guess date relative to today
+                                            if (dateLabel === '-' || dateLabel === 'Invalid Date') {
+                                                 const fallback = new Date();
+                                                 fallback.setDate(fallback.getDate() - (systemStats.builder.history.length - 1 - i)); 
+                                                 dateLabel = fallback.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+                                            }
+
                                             return (
                                                 <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end">
                                                     <div 

@@ -4,9 +4,11 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import 'dotenv/config';
 import { BotEngine } from './bot-engine.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog } from '../database/index.js';
 import { loadEnv } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
+import { registryAnalytics } from '../services/registry-analytics.service.js';
+import axios from 'axios';
 // ESM compatibility
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,36 +20,37 @@ const dbRegistryService = new DbRegistryService();
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map();
 app.use(cors());
-app.use(express.json());
+// INCREASED LIMIT: Session keys are large strings
+app.use(express.json({ limit: '10mb' }));
 // --- STATIC FILES (For Production) ---
 // This allows the Node server to serve the React app
 const distPath = path.join(__dirname, '../../dist');
 app.use(express.static(distPath));
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId, config) {
-    if (ACTIVE_BOTS.has(userId)) {
-        ACTIVE_BOTS.get(userId)?.stop();
+    // Ensure lowercase ID
+    const normId = userId.toLowerCase();
+    if (ACTIVE_BOTS.has(normId)) {
+        ACTIVE_BOTS.get(normId)?.stop();
     }
-    // Determine start cursor to prevent gaps or replays. 
-    // If config has explicit startCursor (from manual start), use it.
-    // Otherwise, it defaults to NOW in the engine, but we want it to handle restarts gracefully.
     const startCursor = config.startCursor || Math.floor(Date.now() / 1000);
-    const engineConfig = { ...config, startCursor };
+    const engineConfig = { ...config, userId: normId, startCursor };
     const engine = new BotEngine(engineConfig, dbRegistryService, {
         onPositionsUpdate: async (positions) => {
-            await User.updateOne({ address: userId }, { activePositions: positions });
+            await User.updateOne({ address: normId }, { activePositions: positions });
         },
         onCashout: async (record) => {
-            await User.updateOne({ address: userId }, { $push: { cashoutHistory: record } });
+            await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
         },
         onTradeComplete: async (trade) => {
             // Save Trade to separate collection
             await Trade.create({
-                userId: userId,
+                userId: normId,
                 marketId: trade.marketId,
                 outcome: trade.outcome,
                 side: trade.side,
                 size: trade.size,
+                executedSize: trade.executedSize || 0, // Save actual size
                 price: trade.price,
                 pnl: trade.pnl,
                 status: trade.status,
@@ -58,7 +61,7 @@ async function startUserBot(userId, config) {
             });
         },
         onStatsUpdate: async (stats) => {
-            await User.updateOne({ address: userId }, { stats });
+            await User.updateOne({ address: normId }, { stats });
         },
         onFeePaid: async (event) => {
             // Find the lister and increment their stats
@@ -70,8 +73,39 @@ async function startUserBot(userId, config) {
             }
         }
     });
-    ACTIVE_BOTS.set(userId, engine);
+    ACTIVE_BOTS.set(normId, engine);
     await engine.start();
+}
+// --- SYSTEM: Registry Seeder ---
+// Ensures wallets in .env are listed as "Official" in the Marketplace
+async function seedOfficialWallets() {
+    console.log('🌱 Seeding Official Wallets from Env...');
+    const officials = ENV.userAddresses; // From .env
+    for (const address of officials) {
+        if (!address || address.length < 10)
+            continue;
+        try {
+            // Upsert (Insert or Update)
+            await Registry.findOneAndUpdate({ address: { $regex: new RegExp(`^${address}$`, "i") } }, {
+                address: address,
+                isVerified: true,
+                isSystem: true,
+                listedBy: 'SYSTEM',
+                tags: ['OFFICIAL', 'WHALE'],
+                $setOnInsert: {
+                    listedAt: new Date().toISOString(),
+                    winRate: 0,
+                    totalPnl: 0
+                }
+            }, { upsert: true });
+        }
+        catch (e) {
+            console.error(`Failed to seed ${address}`, e);
+        }
+    }
+    console.log(`✅ Seeded ${officials.length} official wallets.`);
+    // Trigger initial analytics run
+    registryAnalytics.updateAllRegistryStats();
 }
 // --- API ROUTES ---
 // 0. Health Check (For Sliplane/AWS/Docker)
@@ -90,8 +124,9 @@ app.post('/api/wallet/status', async (req, res) => {
         res.status(400).json({ error: 'User Address required' });
         return;
     }
+    const normId = userId.toLowerCase();
     try {
-        const user = await User.findOne({ address: userId });
+        const user = await User.findOne({ address: normId });
         if (!user || !user.proxyWallet) {
             res.json({ status: 'NEEDS_ACTIVATION' });
         }
@@ -110,57 +145,105 @@ app.post('/api/wallet/status', async (req, res) => {
 });
 // 2. Activate Smart Account
 app.post('/api/wallet/activate', async (req, res) => {
+    console.log(`[ACTIVATION REQUEST] Received payload for user: ${req.body?.userId}`);
     const { userId, serializedSessionKey, smartAccountAddress } = req.body;
     if (!userId || !serializedSessionKey || !smartAccountAddress) {
+        console.error('[ACTIVATION ERROR] Missing fields:', { userId, hasKey: !!serializedSessionKey, hasAddress: !!smartAccountAddress });
         res.status(400).json({ error: 'Missing activation parameters' });
         return;
     }
+    const normId = userId.toLowerCase();
     const walletConfig = {
         type: 'SMART_ACCOUNT',
         address: smartAccountAddress,
         serializedSessionKey: serializedSessionKey,
-        ownerAddress: userId,
+        ownerAddress: normId,
         createdAt: new Date().toISOString()
     };
     try {
-        await User.findOneAndUpdate({ address: userId }, { proxyWallet: walletConfig }, { upsert: true, new: true });
-        console.log(`[ACTIVATION] Smart Account Activated: ${smartAccountAddress} (Owner: ${userId})`);
+        await User.findOneAndUpdate({ address: normId }, { proxyWallet: walletConfig }, { upsert: true, new: true });
+        console.log(`[ACTIVATION SUCCESS] Smart Account Activated: ${smartAccountAddress} (Owner: ${normId})`);
         res.json({ success: true, address: smartAccountAddress });
     }
     catch (e) {
-        res.status(500).json({ error: 'Failed to activate' });
+        console.error("[ACTIVATION DB ERROR]", e);
+        res.status(500).json({ error: e.message || 'Failed to activate' });
     }
 });
-// 3. Global Stats
+// 3. Global Stats & Builder Data
 app.get('/api/stats/global', async (req, res) => {
     try {
+        // Internal Stats (DB)
         const userCount = await User.countDocuments();
-        // Aggregate stats
-        const agg = await User.aggregate([
-            { $group: {
-                    _id: null,
-                    totalVolume: { $sum: "$stats.totalVolume" },
-                    totalRevenue: { $sum: "$stats.totalFeesPaid" } // Platform revenue approximation
-                } }
+        const tradeAgg = await Trade.aggregate([
+            { $group: { _id: null, signalVolume: { $sum: "$size" }, executedVolume: { $sum: "$executedSize" }, count: { $sum: 1 } } }
         ]);
-        const totalVolume = agg[0]?.totalVolume || 0;
-        const totalRevenue = agg[0]?.totalRevenue || 0;
-        // Add Registry generated stats
-        const registryAgg = await Registry.aggregate([
-            { $group: { _id: null, totalGenerated: { $sum: "$copyProfitGenerated" } } }
+        const signalVolume = tradeAgg[0]?.signalVolume || 0;
+        const executedVolume = tradeAgg[0]?.executedVolume || 0;
+        const internalTrades = tradeAgg[0]?.count || 0;
+        // Platform Revenue (1% Fees)
+        const revenueAgg = await User.aggregate([
+            { $group: { _id: null, total: { $sum: "$stats.totalFeesPaid" } } }
         ]);
-        const registryRevenue = (registryAgg[0]?.totalGenerated || 0) * 0.01;
-        // Get actual bridged volume from DB
+        const totalRevenue = revenueAgg[0]?.total || 0;
+        // Total Liquidity (Bridged + Direct Deposits)
         const bridgeAgg = await BridgeTransaction.aggregate([
-            { $group: { _id: null, totalBridged: { $sum: { $toDouble: "$amountIn" } } } }
+            { $match: { status: 'COMPLETED' } },
+            { $group: { _id: null, total: { $sum: { $toDouble: "$amountIn" } } } }
         ]);
-        const totalBridged = bridgeAgg[0]?.totalBridged || 0;
+        const directAgg = await DepositLog.aggregate([
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]);
+        const totalBridged = bridgeAgg[0]?.total || 0;
+        const totalDirect = directAgg[0]?.total || 0;
+        const totalLiquidity = totalBridged + totalDirect;
+        // External Builder API Stats (Polymarket)
+        let builderStats = null;
+        let builderHistory = [];
+        let ecosystemVolume = 112005785; // Fallback ecosystem volume
+        try {
+            // 1. Get Specific Builder Stats (Time-Series /volume)
+            const builderId = ENV.builderId || 'BetMirror';
+            const url = `https://data-api.polymarket.com/v1/builders/volume?builder=${builderId}&timePeriod=ALL`;
+            const response = await axios.get(url, { timeout: 4000 });
+            if (Array.isArray(response.data) && response.data.length > 0) {
+                // Robust Sort: Newest First (Descending by Date)
+                const sortedByDate = [...response.data].sort((a, b) => {
+                    // Fallback to 0 if dt is missing, though volume endpoint should have it
+                    return new Date(b.dt || 0).getTime() - new Date(a.dt || 0).getTime();
+                });
+                // "Current" = The latest entry (Today/Yesterday)
+                builderStats = sortedByDate[0];
+                // "History" = Latest 14 days, reversed to be Chronological (Oldest -> Newest) for Chart
+                builderHistory = sortedByDate.slice(0, 14).reverse();
+            }
+            // 2. Get Ecosystem Leaderboard (Aggregated /leaderboard)
+            const lbUrl = `https://data-api.polymarket.com/v1/builders/leaderboard?timePeriod=ALL`;
+            const lbResponse = await axios.get(lbUrl, { timeout: 4000 });
+            if (Array.isArray(lbResponse.data)) {
+                ecosystemVolume = lbResponse.data.reduce((acc, curr) => acc + curr.volume, 0);
+            }
+        }
+        catch (e) {
+            // Graceful fail - frontend will show "Data Pending"
+            console.warn("Failed to fetch external builder stats:", e instanceof Error ? e.message : 'Unknown');
+        }
         res.json({
-            totalUsers: userCount,
-            totalVolume,
-            totalRevenue: totalRevenue + registryRevenue,
-            totalBridged: totalBridged,
-            activeBots: ACTIVE_BOTS.size
+            internal: {
+                totalUsers: userCount,
+                signalVolume: signalVolume, // Whale Volume
+                executedVolume: executedVolume, // Bot Volume
+                totalTrades: internalTrades,
+                totalRevenue,
+                totalLiquidity,
+                activeBots: ACTIVE_BOTS.size
+            },
+            builder: {
+                current: builderStats,
+                history: builderHistory,
+                builderId: ENV.builderId || 'BetMirror',
+                ecosystemVolume // Total volume of all builders
+            }
         });
     }
     catch (e) {
@@ -172,7 +255,7 @@ app.get('/api/stats/global', async (req, res) => {
 app.post('/api/feedback', async (req, res) => {
     const { userId, rating, comment } = req.body;
     try {
-        await Feedback.create({ userId, rating, comment });
+        await Feedback.create({ userId: userId.toLowerCase(), rating, comment });
         res.json({ success: true });
     }
     catch (e) {
@@ -182,14 +265,19 @@ app.post('/api/feedback', async (req, res) => {
 // 5. Start Bot
 app.post('/api/bot/start', async (req, res) => {
     const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, autoTp, notifications, autoCashout } = req.body;
+    if (!userId) {
+        res.status(400).json({ error: 'Missing userId' });
+        return;
+    }
+    const normId = userId.toLowerCase();
     try {
-        const user = await User.findOne({ address: userId });
+        const user = await User.findOne({ address: normId });
         if (!user || !user.proxyWallet) {
             res.status(400).json({ error: 'Bot Wallet not activated.' });
             return;
         }
         const config = {
-            userId,
+            userId: normId,
             walletConfig: user.proxyWallet,
             userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s) => s.trim()),
             rpcUrl,
@@ -203,10 +291,9 @@ app.post('/api/bot/start', async (req, res) => {
             activePositions: user.activePositions || [],
             stats: user.stats,
             zeroDevRpc: process.env.ZERODEV_RPC,
-            startCursor: Math.floor(Date.now() / 1000) // Explicit manual start resets cursor
+            startCursor: Math.floor(Date.now() / 1000)
         };
-        await startUserBot(userId, config);
-        // Update DB state
+        await startUserBot(normId, config);
         user.activeBotConfig = config;
         user.isBotRunning = true;
         await user.save();
@@ -220,29 +307,29 @@ app.post('/api/bot/start', async (req, res) => {
 // 6. Stop Bot
 app.post('/api/bot/stop', async (req, res) => {
     const { userId } = req.body;
-    const engine = ACTIVE_BOTS.get(userId);
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
     if (engine)
         engine.stop();
-    await User.updateOne({ address: userId }, { isBotRunning: false });
+    await User.updateOne({ address: normId }, { isBotRunning: false });
     res.json({ success: true, status: 'STOPPED' });
 });
 // 7. Bot Status & Logs
 app.get('/api/bot/status/:userId', async (req, res) => {
     const { userId } = req.params;
-    const engine = ACTIVE_BOTS.get(userId);
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
     try {
-        // Fetch latest history from DB
-        const tradeHistory = await Trade.find({ userId }).sort({ timestamp: -1 }).limit(50).lean();
-        const user = await User.findOne({ address: userId }).lean();
+        const tradeHistory = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
+        const user = await User.findOne({ address: normId }).lean();
         // Fetch Logs from DB instead of memory to ensure persistence across restarts
-        const dbLogs = await BotLog.find({ userId }).sort({ timestamp: -1 }).limit(100).lean();
+        const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
         const formattedLogs = dbLogs.map(l => ({
             id: l._id.toString(),
             time: l.timestamp.toLocaleTimeString(),
             type: l.type,
             message: l.message
         }));
-        // Convert DB trades to UI format
         const historyUI = tradeHistory.map((t) => ({
             ...t,
             timestamp: t.timestamp.toISOString(),
@@ -252,7 +339,8 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
             logs: formattedLogs,
             history: historyUI,
-            stats: user?.stats || null
+            stats: user?.stats || null,
+            config: user?.activeBotConfig || null
         });
     }
     catch (e) {
@@ -262,7 +350,8 @@ app.get('/api/bot/status/:userId', async (req, res) => {
 // 8. Registry Routes
 app.get('/api/registry', async (req, res) => {
     try {
-        const list = await Registry.find().sort({ winRate: -1 }).lean();
+        // Sort System wallets first, then high winrate
+        const list = await Registry.find().sort({ isSystem: -1, winRate: -1 }).lean();
         res.json(list);
     }
     catch (e) {
@@ -295,21 +384,35 @@ app.post('/api/registry', async (req, res) => {
         }
         const profile = await Registry.create({
             address,
-            listedBy,
+            listedBy: listedBy.toLowerCase(),
             listedAt: new Date().toISOString(),
             winRate: 0, totalPnl: 0, tradesLast30d: 0, followers: 0, copyCount: 0, copyProfitGenerated: 0
         });
+        // Trigger background update for new listing
+        registryAnalytics.analyzeWallet(address);
         res.json({ success: true, profile });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
-// 9. Bridge History Routes
+// PROXY: Get raw trades for modal (frontend calls this)
+app.get('/api/proxy/trades/:address', async (req, res) => {
+    const { address } = req.params;
+    try {
+        const url = `https://data-api.polymarket.com/trades?user=${address}&limit=50`;
+        const response = await axios.get(url);
+        res.json(response.data);
+    }
+    catch (e) {
+        res.status(500).json({ error: "Failed to fetch trades from Polymarket" });
+    }
+});
+// 9. Bridge Routes
 app.get('/api/bridge/history/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
-        const history = await BridgeTransaction.find({ userId }).sort({ timestamp: -1 }).lean();
+        const history = await BridgeTransaction.find({ userId: userId.toLowerCase() }).sort({ timestamp: -1 }).lean();
         res.json(history.map((h) => ({ ...h, id: h.bridgeId })));
     }
     catch (e) {
@@ -322,10 +425,10 @@ app.post('/api/bridge/record', async (req, res) => {
         res.status(400).json({ error: 'Missing Data' });
         return;
     }
+    const normId = userId.toLowerCase();
     try {
-        // Upsert based on bridgeId to handle status updates
-        await BridgeTransaction.findOneAndUpdate({ userId, bridgeId: transaction.id }, {
-            userId,
+        await BridgeTransaction.findOneAndUpdate({ userId: normId, bridgeId: transaction.id }, {
+            userId: normId,
             bridgeId: transaction.id,
             ...transaction
         }, { upsert: true });
@@ -335,8 +438,27 @@ app.post('/api/bridge/record', async (req, res) => {
         res.status(500).json({ error: 'DB Error' });
     }
 });
-// --- SPA Fallback (Frontend) ---
-// If API route not matched, serve the React App
+// 10. Direct Deposit Record (for stats)
+app.post('/api/deposit/record', async (req, res) => {
+    const { userId, amount, txHash } = req.body;
+    if (!userId || !amount || !txHash) {
+        res.status(400).json({ error: 'Missing Data' });
+        return;
+    }
+    try {
+        await DepositLog.create({
+            userId: userId.toLowerCase(),
+            amount: Number(amount),
+            txHash
+        });
+        res.json({ success: true });
+    }
+    catch (e) {
+        // Duplicate key error means already recorded
+        res.json({ success: true, exists: true });
+    }
+});
+// --- SPA Fallback ---
 app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
 });
@@ -348,10 +470,7 @@ async function restoreBots() {
         console.log(`Found ${activeUsers.length} bots to restore.`);
         for (const user of activeUsers) {
             if (user.activeBotConfig && user.proxyWallet) {
-                // Smart Restore: Check last trade time to ensure no gap in data monitoring
                 const lastTrade = await Trade.findOne({ userId: user.address }).sort({ timestamp: -1 });
-                // If we have history, resume from 1 second after last trade.
-                // If no history, assume fresh start (or cap lookup to 1 hour ago)
                 const lastTime = lastTrade ? Math.floor(lastTrade.timestamp.getTime() / 1000) + 1 : Math.floor(Date.now() / 1000) - 3600;
                 const config = {
                     ...user.activeBotConfig,
@@ -361,7 +480,7 @@ async function restoreBots() {
                     startCursor: lastTime
                 };
                 await startUserBot(user.address, config);
-                console.log(`✅ Restored Bot: ${user.address} (Resuming from ${new Date(lastTime * 1000).toISOString()})`);
+                console.log(`✅ Restored Bot: ${user.address}`);
             }
         }
     }
@@ -369,11 +488,13 @@ async function restoreBots() {
         console.error("Restore failed:", e);
     }
 }
-// --- INIT ---
-connectDB(ENV.mongoUri).then(() => {
+connectDB(ENV.mongoUri).then(async () => {
+    // Seed system wallets first
+    await seedOfficialWallets();
+    // Start Registry Analytics Loop (Every 15 mins)
+    setInterval(() => registryAnalytics.updateAllRegistryStats(), 15 * 60 * 1000);
     app.listen(PORT, () => {
         console.log(`🌍 Bet Mirror Cloud Server running on port ${PORT}`);
-        console.log(`📂 Serving Frontend from ${distPath}`);
         restoreBots();
     });
 });

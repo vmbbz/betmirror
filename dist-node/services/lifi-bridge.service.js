@@ -143,8 +143,35 @@ export class LiFiBridgeService {
             default: return `Chain ${chainId}`;
         }
     }
+    /**
+     * Returns the correct token address for LiFi based on Chain and Type.
+     * FIX: Solana Native must use specific mint address, not 0x00.
+     */
+    getTokenAddress(chainId, type) {
+        // Solana Special Case
+        if (chainId === 1151111081099710) {
+            if (type === 'NATIVE')
+                return '11111111111111111111111111111111'; // SOL Mint
+            if (type === 'USDC')
+                return 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC (Solana)
+        }
+        // EVM Native (ETH/MATIC/BNB)
+        if (type === 'NATIVE') {
+            return '0x0000000000000000000000000000000000000000';
+        }
+        // EVM USDC Addresses
+        switch (chainId) {
+            case 1: return '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'; // Ethereum
+            case 137: return '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // Polygon (Bridged)
+            case 8453: return '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'; // Base
+            case 42161: return '0xaf88d065e77c8cc2239327c5edb3a432268e5831'; // Arbitrum
+            case 56: return '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'; // BNB
+            default: return '0x0000000000000000000000000000000000000000'; // Fallback
+        }
+    }
+    // Deprecated: Use getTokenAddress instead
     getNativeToken(chainId) {
-        return '0x0000000000000000000000000000000000000000';
+        return this.getTokenAddress(chainId, 'NATIVE');
     }
 }
 export const lifiService = new LiFiBridgeService();

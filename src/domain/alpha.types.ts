@@ -49,7 +49,7 @@ export interface IRegistryService {
 }
 
 export interface BuilderVolumeData {
-    dt: string;
+    dt?: string; // Optional: Only present in /volume time-series endpoint
     builder: string;
     builderLogo: string;
     verified: boolean;

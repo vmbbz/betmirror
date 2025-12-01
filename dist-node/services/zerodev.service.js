@@ -25,6 +25,32 @@ export class ZeroDevService {
         });
     }
     /**
+     * Predicts the deterministic address of the Smart Account for this user.
+     * Used to check if they already have an account before deploying.
+     */
+    async computeMasterAccountAddress(ownerWalletClient) {
+        try {
+            if (!ownerWalletClient)
+                throw new Error("Missing owner wallet client");
+            const ecdsaValidator = await signerToEcdsaValidator(this.publicClient, {
+                entryPoint: ENTRY_POINT,
+                signer: ownerWalletClient,
+                kernelVersion: KERNEL_VERSION,
+            });
+            const account = await createKernelAccount(this.publicClient, {
+                entryPoint: ENTRY_POINT,
+                plugins: { sudo: ecdsaValidator },
+                kernelVersion: KERNEL_VERSION,
+            });
+            return account.address;
+        }
+        catch (e) {
+            console.error("Failed to compute deterministic address (ZeroDev):", e.message);
+            // Don't swallow error completely, return null but log detailed error
+            return null;
+        }
+    }
+    /**
      * CLIENT SIDE: User calls this to authorize the bot.
      * Creates a Smart Account (if needed) and generates a Session Key for the server.
      * @param ownerSigner - The User's Wallet Client (from Viem/Wagmi/Ethers adapter)

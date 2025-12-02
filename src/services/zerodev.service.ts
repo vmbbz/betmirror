@@ -1,3 +1,4 @@
+
 import {
   createKernelAccount,
   createZeroDevPaymasterClient,
@@ -106,11 +107,11 @@ export class ZeroDevService {
   /**
    * CLIENT SIDE: User calls this to authorize the bot.
    * Creates a Smart Account (if needed) and generates a Session Key for the server.
-   * Includes FORCE DEPLOYMENT logic (0 USDC Self-Tx) to prevent 401 errors.
+   * Includes FORCE ACTIVATION logic (0 ETH Self-Tx) to ensure key is on-chain.
    * @param ownerSigner - The User's Wallet Client (from Viem/Wagmi/Ethers adapter)
    */
   async createSessionKeyForServer(ownerWalletClient: WalletClient, ownerAddress: string) {
-    console.log("🔐 Generating Session Key & Checking Deployment...");
+    console.log("🔐 Generating Session Key & Ensuring On-Chain Activation...");
 
     // 1. Generate a temporary private key for the session (The "Server Key")
     const sessionPrivateKey = generatePrivateKey();
@@ -122,72 +123,11 @@ export class ZeroDevService {
     });
 
     // 3. Create/Resolve the Master Smart Account (Kernel)
-    // We use the User's main wallet as the sudo validator
     const ecdsaValidator = await signerToEcdsaValidator(this.publicClient as any, {
       entryPoint: ENTRY_POINT,
       signer: ownerWalletClient as any, // Viem wallet client
       kernelVersion: KERNEL_VERSION,
     });
-
-    const masterAccount = await createKernelAccount(this.publicClient as any, {
-      entryPoint: ENTRY_POINT,
-      plugins: {
-        sudo: ecdsaValidator,
-      },
-      kernelVersion: KERNEL_VERSION,
-    });
-
-    console.log("   Account Address:", masterAccount.address);
-
-    // --- DEPLOYMENT CHECK ---
-    // We must ensure code exists on-chain before creating the session key plugin, 
-    // otherwise the first server-side signature will fail validation.
-    const code = await this.publicClient.getBytecode({ address: masterAccount.address });
-    if (!code) {
-         console.log("⚠️ Account not deployed. Initiating Zero-Cost Deployment...");
-         
-         try {
-             // Create Paymaster Client
-             const paymasterClient = createZeroDevPaymasterClient({
-                chain: CHAIN,
-                transport: http(this.rpcUrl),
-             });
-
-             // Create Client for the Master Account (User Signed)
-             const kernelClient = createKernelAccountClient({
-                account: masterAccount,
-                chain: CHAIN,
-                bundlerTransport: http(this.rpcUrl),
-                client: this.publicClient as any,
-                paymaster: {
-                  getPaymasterData(userOperation) {
-                    return paymasterClient.sponsorUserOperation({ userOperation });
-                  },
-                },
-             });
-
-             // Send 0 ETH/POL to self to trigger deployment
-             // cast as any to bypass strict kzg types in some viem versions
-             const deployHash = await kernelClient.sendTransaction({
-                 to: masterAccount.address,
-                 value: BigInt(0),
-                 data: "0x",
-             } as any);
-             
-             console.log(`🚀 Deployment UserOp Sent: ${deployHash}`);
-             console.log("   Waiting for block inclusion...");
-             
-             // Use public client to wait for receipt
-             await this.publicClient.waitForTransactionReceipt({ hash: deployHash });
-             console.log("✅ Account Successfully Deployed!");
-             
-         } catch (deployError: any) {
-             console.error("Deployment Failed:", deployError);
-             throw new Error("Failed to deploy smart account. Please check if you have enough gas or try again.");
-         }
-    } else {
-        console.log("✅ Account already deployed.");
-    }
 
     // 4. Create the Permission Plugin (The "Session Slip")
     const permissionPlugin = await toPermissionValidator(this.publicClient as any, {
@@ -209,11 +149,59 @@ export class ZeroDevService {
       kernelVersion: KERNEL_VERSION,
     });
 
+    const accountAddress = sessionKeyAccountObj.address;
+    console.log("   Account Address:", accountAddress);
+
+    // --- ACTIVATION TRANSACTION ---
+    // We MUST send a transaction using this new session key configuration to "install"
+    // the permission validator on-chain. Without this, Polymarket EIP-1271 checks will fail (401).
+    try {
+        console.log("🚀 Sending Activation Transaction (0 ETH Self-Transfer)...");
+        
+        // Create Paymaster Client to sponsor this setup
+        const paymasterClient = createZeroDevPaymasterClient({
+           chain: CHAIN,
+           transport: http(this.rpcUrl),
+        });
+
+        // Create Client for the Session Key Account
+        const activationClient = createKernelAccountClient({
+           account: sessionKeyAccountObj,
+           chain: CHAIN,
+           bundlerTransport: http(this.rpcUrl),
+           client: this.publicClient as any,
+           paymaster: {
+             getPaymasterData(userOperation) {
+               return paymasterClient.sponsorUserOperation({ userOperation });
+             },
+           },
+        });
+
+        // Send 0 ETH/POL to self. This forces deployment (if needed) AND installs the plugin.
+        const deployHash = await activationClient.sendTransaction({
+            to: accountAddress,
+            value: BigInt(0),
+            data: "0x",
+        } as any);
+        
+        console.log(`   Activation Tx Sent: ${deployHash}`);
+        console.log("   Waiting for confirmation...");
+        
+        // Wait for receipt using public client
+        await this.publicClient.waitForTransactionReceipt({ hash: deployHash });
+        console.log("✅ Session Key Activated On-Chain!");
+        
+    } catch (deployError: any) {
+        console.error("Activation Failed:", deployError);
+        // We throw here because if activation fails, the bot WILL fail to start.
+        throw new Error("Failed to activate Smart Account on-chain. Please check console/gas and try again.");
+    }
+
     // 6. Serialize it to send to the server
     const serializedSessionKey = await serializePermissionAccount(sessionKeyAccountObj, sessionPrivateKey);
 
     return {
-      smartAccountAddress: masterAccount.address,
+      smartAccountAddress: accountAddress,
       serializedSessionKey: serializedSessionKey,
       sessionPrivateKey: sessionPrivateKey 
     };
@@ -233,7 +221,6 @@ export class ZeroDevService {
     );
 
     // 2. Create Paymaster (Optional - for gas sponsorship)
-    // IMPORTANT: Must use the same v3 RPC for paymaster
     const paymasterClient = createZeroDevPaymasterClient({
       chain: CHAIN,
       transport: http(this.rpcUrl),
@@ -311,7 +298,6 @@ export class ZeroDevService {
 
       console.log("UserOp Hash:", userOpHash);
       
-      // Use public client to wait for receipt
       const receipt = await this.publicClient.waitForTransactionReceipt({
         hash: userOpHash,
       });

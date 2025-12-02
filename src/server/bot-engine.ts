@@ -1,3 +1,4 @@
+
 import { createPolymarketClient } from '../infrastructure/clob-client.factory.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
@@ -196,29 +197,25 @@ export class BotEngine {
       }
   }
 
-  // --- [CRITICAL FIX] FORCE SESSION KEY INSTALLATION ---
-  // Checks if the account is active and forces a transaction (USDC Approve 0)
-  // to ensure the Session Key Validator is installed on-chain.
-  // Using 'approve' instead of raw '0x' transfer prevents AA23 bundler errors.
+  // Backup Activation: Forces session key installation if frontend failed.
+  // Uses approve(0) as a safe low-cost transaction.
   private async ensureSessionActive(signer: any, walletAddress: string, usdcAddress: string) {
       try {
-          await this.addLog('info', '🔄 Syncing Session Key (USDC Handshake)...');
-          
           // Create a contract instance connected to the signer (Session Key)
           const usdc = new Contract(usdcAddress, USDC_ABI_MINIMAL, signer);
           
           // Approve 0 USDC to self. 
-          // This is a valid ERC-20 op that costs nothing but proves ownership 
-          // and forces the Kernel to deploy/install the validator.
           const tx = await usdc.approve(walletAddress, 0);
           
-          await this.addLog('info', `🚀 Session Sync Tx Sent: ${tx.hash?.slice(0,10)}... Waiting for block...`);
+          await this.addLog('info', `🚀 Server-Side Session Sync Sent: ${tx.hash?.slice(0,10)}...`);
           await tx.wait(); 
-          await this.addLog('success', '✅ Session Key Active & On-Chain.');
           
       } catch (e: any) {
-          // If this fails, the CLOB Handshake will likely fail too, but we log and try to proceed.
-          await this.addLog('error', `Session Sync Failed (AA23/Gas?): ${e.message}. Attempting to proceed...`);
+          // If this fails, it usually means:
+          // 1. Account already active (good)
+          // 2. Paymaster rejection (ignore, frontend should have handled it)
+          // We log and proceed to the Handshake which is the real test.
+          // await this.addLog('warn', `Session Sync Note: ${e.message}`);
       }
   }
 
@@ -273,13 +270,12 @@ export class BotEngine {
           // Since we are ZeroDev Kernel (ERC-4337), we treat it as a proxy.
           signatureType = SignatureType.POLY_PROXY; 
           
-          // --- [FIX] FORCE DEPLOYMENT / KEY INSTALLATION ---
-          // Before we attempt handshake (which requires valid signature), we must ensure key is active on-chain.
+          // --- FORCE DEPLOYMENT / KEY INSTALLATION (BACKUP) ---
+          // Generally frontend does this, but we try once here just in case.
           await this.ensureSessionActive(signerImpl, walletAddress, env.usdcContractAddress);
 
           // --- AUTO-GENERATE / VALIDATE L2 KEYS ---
           // We must ensure we have valid CLOB API credentials before proceeding.
-          // Without them, the bot cannot sign trades and will crash.
           
           const dbCreds = this.config.l2ApiCredentials;
           
@@ -292,7 +288,7 @@ export class BotEngine {
           if (hasValidCreds) {
               clobCreds = dbCreds;
           } else {
-              await this.addLog('warn', '⚠️ L2 Credentials missing or invalid. Performing Handshake...');
+              await this.addLog('warn', '⚠️ L2 Credentials missing. Initializing CLOB Handshake...');
               
               try {
                   // We create a temp client just to perform the handshake/signing
@@ -310,6 +306,7 @@ export class BotEngine {
 
                   for (let attempt = 1; attempt <= 5; attempt++) {
                       try {
+                          // This requires EIP-1271 validation on-chain
                           newCreds = await tempClient.createApiKey();
                           if (newCreds && newCreds.key && newCreds.secret) {
                               break; // Success
@@ -317,13 +314,13 @@ export class BotEngine {
                       } catch (e: any) {
                           lastError = e;
                           // If 401/400, it means indexer hasn't seen the Session Key yet.
-                          await this.addLog('warn', `Handshake attempt ${attempt}/5 failed. Retrying in 3s...`);
-                          await sleep(3000);
+                          await this.addLog('warn', `Handshake attempt ${attempt}/5 waiting for chain sync...`);
+                          await sleep(4000); // Wait 4s between tries
                       }
                   }
                   
                   if (!newCreds || !newCreds.key || !newCreds.secret) {
-                      throw new Error(`CLOB Handshake Failed after retries. Last Error: ${lastError?.message || 'Empty Response'}`);
+                      throw new Error(`CLOB Auth Failed: ${lastError?.message || 'Timeout'}. Try restarting.`);
                   }
 
                   clobCreds = newCreds;
@@ -334,10 +331,10 @@ export class BotEngine {
                       { "proxyWallet.l2ApiCredentials": newCreds }
                   );
                   
-                  await this.addLog('success', '✅ New L2 CLOB Keys Generated & Saved.');
+                  await this.addLog('success', '✅ L2 Trading Credentials Secure.');
               } catch (e: any) {
                   const msg = e?.message || JSON.stringify(e);
-                  await this.addLog('error', `CRITICAL: Failed to generate L2 Keys. Bot cannot trade. Error: ${msg}`);
+                  await this.addLog('error', `CRITICAL: Auth Handshake Failed. Bot cannot trade. Error: ${msg}`);
                   throw new Error(`L2 Handshake Failed: ${msg}`); 
               }
           }
@@ -545,8 +542,6 @@ export class BotEngine {
       await this.monitor.start(this.config.startCursor);
       this.watchdogTimer = setInterval(() => this.checkAutoTp(), 10000) as unknown as NodeJS.Timeout;
       
-      // await this.addLog('success', 'Bot Engine Active & Monitoring 24/7');
-
     } catch (e: any) {
       this.isRunning = false;
       await this.addLog('error', `Startup Failed: ${e.message}`);

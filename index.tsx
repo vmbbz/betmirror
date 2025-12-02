@@ -2457,78 +2457,81 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
 
         {/* Floating Header */}
         <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-50 max-w-7xl mx-auto left-0 right-0">
-             <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/30">
-                    <Activity className="text-white" size={24} />
-                </div>
-                <div className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
-                    BET<span className="text-blue-600">MIRROR</span>
-                </div>
-            </div>
-             <div className="flex items-center gap-4">
-                 <button 
-                    onClick={toggleTheme} 
-                    className="p-3 bg-white/80 dark:bg-white/5 rounded-full hover:scale-110 transition-all shadow-sm backdrop-blur-md text-gray-600 dark:text-white border border-gray-200 dark:border-white/10"
-                 >
-                    {theme === 'light' ? <Moon size={18}/> : <Sun size={18}/>}
-                 </button>
-                 <button 
-                        onClick={onConnect}
-                        className="px-6 py-2.5 bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-gray-900 rounded-lg font-bold text-sm transition-all shadow-lg"
-                    >
-                        Connect Wallet
-                </button>
-             </div>
-        </div>
+             <div className="opacity-0"></div> {/* Spacer */}
+             <button 
+                onClick={toggleTheme} 
+                className="p-3 bg-white/80 dark:bg-white/5 rounded-full hover:scale-110 transition-all shadow-sm backdrop-blur-md text-gray-600 dark:text-white border border-gray-200 dark:border-white/10"
+             >
+                {theme === 'light' ? <Moon size={18}/> : <Sun size={18}/>}
+             </button>
+         </div>
 
         {/* Main Hero Section - Centered Vertically */}
-        <div className="flex-1 flex flex-col items-center justify-center px-6 z-10 w-full max-w-7xl mx-auto relative min-h-[100vh] text-center">
+        <div className="flex-1 flex flex-col items-center justify-center px-6 z-10 w-full max-w-7xl mx-auto relative min-h-[100vh]">
             
-            {/* Background Decoration */}
-             <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-[20%] -left-[10%] w-[70%] h-[70%] rounded-full bg-blue-500/10 blur-[100px]"></div>
-                <div className="absolute top-[20%] -right-[10%] w-[50%] h-[50%] rounded-full bg-purple-500/10 blur-[100px]"></div>
-             </div>
-
-             <div className="relative z-10 flex flex-col items-center justify-center px-4 text-center pb-20">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-500/30 text-blue-600 dark:text-blue-400 text-xs font-bold mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                    <Sparkles size={12}/> INSTITUTIONAL COPY TRADING TERMINAL
+            <div className="text-center flex flex-col items-center">
+                
+                {/* Logo Icon with Shadow Glow */}
+                <div className="mb-8 relative mt-7">
+                    <div className="absolute inset-0 bg-blue-500 blur-2xl opacity-20 rounded-full"></div>
+                    <div className="relative w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-xl shadow-blue-500/20">
+                        <Activity size={40} className="text-white" />
+                    </div>
                 </div>
-                
-                <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-6 max-w-4xl leading-[1.1] animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100 text-gray-900 dark:text-white">
-                    Trade like a <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">Whale.</span><br/>
-                    Without the work.
+
+                {/* V2 Pill */}
+                <div className="mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
+                    <span className="px-4 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase tracking-widest">
+                        Account Abstraction V2 Live
+                    </span>
+                </div>
+
+                {/* Main Title */}
+                <h1 className="text-5xl md:text-7xl font-black tracking-tight text-gray-900 dark:text-white mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-200">
+                    BET <span className="text-blue-600">MIRROR</span>
                 </h1>
-                
-                <p className="text-lg md:text-xl text-gray-600 dark:text-gray-400 max-w-2xl mb-10 leading-relaxed animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-                    The first non-custodial copy-trading terminal for <strong className="text-gray-900 dark:text-white">Polymarket</strong>. 
-                    Auto-mirror top performers with zero latency, gas abstraction, and AI risk analysis.
+
+                {/* Motto */}
+                <p className="text-lg text-gray-500 dark:text-gray-400 font-medium max-w-lg mx-auto leading-relaxed animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
+                    The institutional-grade prediction market terminal.<br/>
+                    Non-Custodial. AI-Powered. 24/7 Cloud Execution.
                 </p>
-                
-                <div className="flex flex-col sm:flex-row items-center gap-4 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-300">
+
+                {/* CTA Button */}
+                <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-400 w-full max-w-xs">
                     <button 
-                        onClick={onConnect}
-                        className="h-14 px-8 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-lg transition-all shadow-xl shadow-blue-500/25 flex items-center gap-2 group"
+                        onClick={onConnect} 
+                        className="w-full py-4 bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-sm uppercase tracking-wider rounded-lg shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-0.5 transition-all duration-300 flex items-center justify-center gap-3"
                     >
-                        <Wallet size={20}/> Connect Wallet <ArrowRightCircle size={20} className="group-hover:translate-x-1 transition-transform"/>
+                        <Wallet size={18} /> Connect Terminal
                     </button>
                 </div>
 
-                {/* Feature Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-20 max-w-5xl w-full text-left animate-in fade-in slide-in-from-bottom-12 duration-1000 delay-500">
-                    {[
-                        { icon: Shield, title: "Non-Custodial", desc: "Your funds never leave your control. Powered by ERC-4337 Smart Accounts on Polygon." },
-                        { icon: Zap, title: "Zero Latency", desc: "Direct execution on the CLOB (Central Limit Order Book). No pooling, no slippage fees." },
-                        { icon: Brain, title: "AI Risk Agent", desc: "Optional Gemini integration analyzes every signal before you copy it." }
-                    ].map((f, i) => (
-                        <div key={i} className="p-6 rounded-2xl bg-white dark:bg-white/5 border border-gray-100 dark:border-white/5 hover:border-blue-500/30 transition-colors shadow-sm dark:shadow-none">
-                            <div className="w-12 h-12 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex items-center justify-center text-blue-600 dark:text-blue-500 mb-4">
-                                <f.icon size={24}/>
-                            </div>
-                            <h3 className="font-bold text-lg mb-2 text-gray-900 dark:text-white">{f.title}</h3>
-                            <p className="text-sm text-gray-500 leading-relaxed">{f.desc}</p>
-                        </div>
-                    ))}
+                                {/* Trust Badges */}
+                <div className="mt-12 flex gap-8 opacity-40 animate-in fade-in duration-1000 delay-500">
+                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                        <Shield size={12}/> Secure
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                        <ZapIcon size={12}/> Fast
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                        <Globe size={12}/> Global
+                    </div>
+                </div>
+
+                {/* Footer Logos - Subtle */}
+                <div className="mt-32 flex flex-col items-center gap-6 animate-in fade-in duration-1000 delay-700">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em] opacity-50">
+                        SUPPORTED CHAINS
+                    </p>
+                    <div className="flex gap-12 opacity-30 grayscale hover:grayscale-0 hover:opacity-100 transition-all duration-500">
+                        <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polygon" className="h-5 w-auto" />
+                        <img src="https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026" alt="Ethereum" className="h-5 w-auto" />
+                        <img src="https://cdn.brandfetch.io/id6XsSOVVS/theme/dark/logo.svg?c=1bxid64Mup7aczewSAYMX&t=1757929765938" alt="Base" className="h-5 w-auto" />
+                        <img src="https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=026" alt="Arbitrum" className="h-5 w-auto" />
+                        <img src="https://cryptologos.cc/logos/solana-sol-logo.svg?v=026" alt="Solana" className="h-4 w-auto mt-0.5" />
+                    </div>
                 </div>
              </div>
             

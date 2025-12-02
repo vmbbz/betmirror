@@ -6,10 +6,12 @@ import { FundManagerService } from '../services/fund-manager.service.js';
 import { FeeDistributorService } from '../services/fee-distributor.service.js';
 import { ZeroDevService } from '../services/zerodev.service.js';
 import { ClobClient, Chain } from '@polymarket/clob-client';
-import { Wallet, AbstractSigner, JsonRpcProvider } from 'ethers';
+import { Wallet, AbstractSigner, JsonRpcProvider, Contract } from 'ethers';
 import { BotLog, User } from '../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { getMarket } from '../utils/fetch-data.util.js';
+import { getUsdBalanceApprox } from '../utils/get-balance.util.js';
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // --- Local Enum Definition for SignatureType (Missing in export) ---
 var SignatureType;
 (function (SignatureType) {
@@ -51,20 +53,32 @@ class KernelEthersSigner extends AbstractSigner {
         throw new Error("signTransaction is not supported for KernelEthersSigner. Use sendTransaction to dispatch UserOperations.");
     }
     async sendTransaction(tx) {
+        // IMPORTANT: We cast to 'any' to avoid strict Viem type checks on the tx object
+        // The kernel client handles the UserOp construction internally.
         const hash = await this.kernelClient.sendTransaction({
             to: tx.to,
             data: tx.data,
             value: tx.value ? BigInt(tx.value.toString()) : BigInt(0)
         });
+        // Return an object compatible with Ethers TransactionResponse.wait()
         return {
             hash,
-            wait: async () => this.provider?.getTransactionReceipt(hash)
+            wait: async () => {
+                // Use ethers provider to wait for receipt, safer than relying on kernelClient
+                if (this.provider) {
+                    return await this.provider.waitForTransaction(hash);
+                }
+                throw new Error("Provider missing in KernelEthersSigner");
+            }
         };
     }
     connect(provider) {
         return new KernelEthersSigner(this.kernelClient, this.address, provider || this.provider);
     }
 }
+const USDC_ABI_MINIMAL = [
+    'function approve(address spender, uint256 amount) returns (bool)'
+];
 export class BotEngine {
     constructor(config, registryService, callbacks) {
         this.config = config;
@@ -87,8 +101,6 @@ export class BotEngine {
         if (config.stats) {
             this.stats = config.stats;
         }
-        // Log initial wakeup
-        this.addLog('info', 'Bot Engine Initialized');
     }
     getStats() { return this.stats; }
     // Async log writing to DB
@@ -110,6 +122,59 @@ export class BotEngine {
             await this.executor.revokeAllowance();
             this.stats.allowanceApproved = false;
             this.addLog('warn', 'Permissions Revoked by User.');
+        }
+    }
+    // --- DEPOSIT GATED ACTIVATION ---
+    // The bot will effectively "Pause" until it sees funds.
+    // Once funds arrive, it sends a self-transaction to initialize the chain state
+    // and THEN attempts the Handshake.
+    async waitForFunds(wallet, usdcAddress) {
+        const address = await wallet.getAddress();
+        let isFunded = false;
+        // Initial Check
+        try {
+            // We cast wallet to any because getUsdBalanceApprox expects a standard Ethers Wallet, 
+            // but KernelEthersSigner implements the necessary provider interface.
+            const balance = await getUsdBalanceApprox(wallet, usdcAddress);
+            if (balance >= 1.0)
+                isFunded = true;
+        }
+        catch (e) { /* ignore */ }
+        if (isFunded)
+            return;
+        await this.addLog('warn', '💰 Account Empty. Waiting for deposit to initialize...');
+        return new Promise((resolve) => {
+            const checkInterval = setInterval(async () => {
+                if (!this.isRunning) {
+                    clearInterval(checkInterval);
+                    return;
+                }
+                try {
+                    const balance = await getUsdBalanceApprox(wallet, usdcAddress);
+                    if (balance >= 1.0) {
+                        clearInterval(checkInterval);
+                        await this.addLog('success', `funds detected ($${balance.toFixed(2)}). Initializing Bot...`);
+                        resolve();
+                    }
+                }
+                catch (e) { /* ignore */ }
+            }, 30000); // Check every 30s
+        });
+    }
+    // Force On-Chain Key Registration (only once funded)
+    async activateOnChain(signer, walletAddress, usdcAddress) {
+        try {
+            await this.addLog('info', '🔄 Syncing Session Key on-chain...');
+            const usdc = new Contract(usdcAddress, USDC_ABI_MINIMAL, signer);
+            // Approve 0 USDC to self. Valid UserOp that initializes the account.
+            const tx = await usdc.approve(walletAddress, 0);
+            await this.addLog('info', `🚀 Activation Tx Sent: ${tx.hash?.slice(0, 10)}... Waiting for block...`);
+            await tx.wait();
+            await this.addLog('success', '✅ Smart Account Deployed & Key Active.');
+        }
+        catch (e) {
+            // It might already be active, so we proceed cautiously
+            console.error("Activation Tx Note:", e.message);
         }
     }
     async start() {
@@ -148,33 +213,53 @@ export class BotEngine {
                 const aaService = new ZeroDevService(rpcUrl);
                 const { address, client: kernelClient } = await aaService.createBotClient(this.config.walletConfig.serializedSessionKey);
                 walletAddress = address;
-                await this.addLog('success', `Smart Account Active: ${walletAddress.slice(0, 6)}... (Session Key)`);
                 const provider = new JsonRpcProvider(this.config.rpcUrl);
                 signerImpl = new KernelEthersSigner(kernelClient, address, provider);
-                // AA / Smart Accounts typically use POLY_PROXY or POLY_GNOSIS_SAFE. 
-                // Since we are ZeroDev Kernel (ERC-4337), we treat it as a proxy.
                 signatureType = SignatureType.POLY_PROXY;
-                // --- AUTO-GENERATE L2 KEYS IF MISSING ---
-                // Smart Accounts don't come with L2 keys. We must generate them via signature once and save them.
-                if (this.config.l2ApiCredentials) {
-                    clobCreds = this.config.l2ApiCredentials;
-                    await this.addLog('success', '[DIAGNOSTIC] L2 Trading Credentials Loaded successfully from DB.');
+                // --- DEPOSIT GATE: Block here if empty ---
+                await this.waitForFunds(signerImpl, env.usdcContractAddress);
+                if (!this.isRunning)
+                    return; // If stopped while waiting
+                // --- ON-CHAIN ACTIVATION ---
+                // Now that we have funds (or just woke up), ensure we are deployed/active
+                // This prevents the 401 Invalid L1 Headers error
+                await this.activateOnChain(signerImpl, walletAddress, env.usdcContractAddress);
+                // --- L2 AUTHENTICATION ---
+                const dbCreds = this.config.l2ApiCredentials;
+                const hasValidCreds = dbCreds
+                    && typeof dbCreds.key === 'string' && dbCreds.key.length > 5
+                    && typeof dbCreds.secret === 'string' && dbCreds.secret.length > 5;
+                if (hasValidCreds) {
+                    clobCreds = dbCreds;
                 }
                 else {
-                    await this.addLog('info', '⚙️ Generating new L2 Trading Credentials for Smart Account...');
+                    await this.addLog('info', '🤝 Performing Polymarket L2 Handshake...');
                     try {
-                        // We create a temp client just to perform the handshake/signing
-                        const tempClient = new ClobClient('https://clob.polymarket.com', Chain.POLYGON, signerImpl, undefined, signatureType // Cast to any to satisfy TS if ClobClient expects the library enum
-                        );
-                        // Sign a message on-chain (via Session Key) to derive the API Key
-                        const newCreds = await tempClient.createApiKey();
+                        const tempClient = new ClobClient('https://clob.polymarket.com', Chain.POLYGON, signerImpl, undefined, signatureType);
+                        // Retry Logic for Handshake (Deals with Indexer Lag)
+                        let newCreds = null;
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            try {
+                                newCreds = await tempClient.createApiKey();
+                                if (newCreds && newCreds.key)
+                                    break;
+                            }
+                            catch (e) {
+                                await sleep(2000); // Wait for indexer
+                            }
+                        }
+                        if (!newCreds || !newCreds.key) {
+                            throw new Error(`CLOB Handshake Failed. Ensure account is funded and deployed.`);
+                        }
                         clobCreds = newCreds;
-                        // Persist to DB so we don't re-gen every time (which invalidates old ones)
+                        // Persist to DB
                         await User.findOneAndUpdate({ address: this.config.userId }, { "proxyWallet.l2ApiCredentials": newCreds });
-                        await this.addLog('success', '✅ [DIAGNOSTIC] L2 CLOB Security API Key Created & Saved.');
+                        await this.addLog('success', '✅ L2 Login Successful.');
                     }
                     catch (e) {
-                        throw new Error(`Failed to auto-generate L2 Keys: ${e.message}`);
+                        const msg = e?.message || JSON.stringify(e);
+                        await this.addLog('error', `CRITICAL: Auth Failed. Bot cannot trade. Error: ${msg}`);
+                        throw new Error(`L2 Handshake Failed: ${msg}`);
                     }
                 }
             }
@@ -195,6 +280,10 @@ export class BotEngine {
                     };
                 }
             }
+            // --- FINAL CHECK ---
+            if (!clobCreds || !clobCreds.secret) {
+                throw new Error("Bot failed to initialize valid trading credentials. Please try 'Revoke' then 'Start' again.");
+            }
             // --- BUILDER PROGRAM INTEGRATION ---
             let builderConfig;
             if (process.env.POLY_BUILDER_API_KEY && process.env.POLY_BUILDER_SECRET && process.env.POLY_BUILDER_PASSPHRASE) {
@@ -204,18 +293,13 @@ export class BotEngine {
                     passphrase: process.env.POLY_BUILDER_PASSPHRASE
                 };
                 builderConfig = new BuilderConfig({ localBuilderCreds: builderCreds });
-                await this.addLog('info', '👷 Builder Program Attribution Active');
             }
-            // Initialize Polymarket Client with Credentials AND Builder Attribution
+            // Initialize Polymarket Client
             const clobClient = new ClobClient('https://clob.polymarket.com', Chain.POLYGON, signerImpl, clobCreds, signatureType, undefined, // funderAddress
             undefined, // ...
             undefined, // ...
             builderConfig);
             this.client = Object.assign(clobClient, { wallet: signerImpl });
-            // Log successful usage if we have credentials
-            if (clobCreds) {
-                await this.addLog('success', '[DIAGNOSTIC] CLOB Client authenticated with L2 Credentials.');
-            }
             await this.addLog('success', `Bot Online: ${walletAddress.slice(0, 6)}...`);
             const notifier = new NotificationService(env, logger);
             const fundManagerConfig = {
@@ -232,7 +316,7 @@ export class BotEngine {
                 env,
                 logger
             });
-            await this.addLog('info', 'Checking Token Allowances...');
+            // await this.addLog('info', 'Checking Token Allowances...');
             const approved = await this.executor.ensureAllowance();
             this.stats.allowanceApproved = approved;
             try {
@@ -251,10 +335,9 @@ export class BotEngine {
                     let shouldExecute = true;
                     let aiReasoning = "Legacy Mode (No AI Key)";
                     let riskScore = 5;
-                    // Check for User API Key or System API Key
                     const apiKeyToUse = this.config.geminiApiKey || process.env.API_KEY;
                     if (apiKeyToUse) {
-                        await this.addLog('info', '🤖 AI Analyzing signal...');
+                        await this.addLog('info', `[SIGNAL] ${signal.side} ${signal.outcome} @ ${signal.price} ($${signal.sizeUsd.toFixed(0)}) from ${signal.trader.slice(0, 4)}`);
                         const analysis = await aiAgent.analyzeTrade(`Market: ${signal.marketId}`, signal.side, signal.outcome, signal.sizeUsd, signal.price, this.config.riskProfile, apiKeyToUse // Pass dynamic key
                         );
                         shouldExecute = analysis.shouldCopy;
@@ -265,14 +348,12 @@ export class BotEngine {
                         await this.addLog('warn', '⚠️ No Gemini API Key found. Skipping AI Analysis.');
                     }
                     if (shouldExecute) {
-                        await this.addLog('info', `Executing Copy: ${signal.side} ${signal.outcome}`);
                         try {
                             let executedSize = 0;
                             if (this.executor) {
                                 executedSize = await this.executor.copyTrade(signal);
                             }
                             if (executedSize > 0) {
-                                await this.addLog('success', `Trade Executed Successfully!`);
                                 let realPnl = 0;
                                 if (signal.side === 'BUY') {
                                     const newPosition = {
@@ -291,11 +372,10 @@ export class BotEngine {
                                         const entry = this.activePositions[posIndex];
                                         const yieldPercent = (signal.price - entry.entryPrice) / entry.entryPrice;
                                         realPnl = entry.sizeUsd * yieldPercent;
-                                        await this.addLog('info', `Realized PnL: $${realPnl.toFixed(2)} (${(yieldPercent * 100).toFixed(1)}%)`);
+                                        await this.addLog('success', `✅ Realized PnL: $${realPnl.toFixed(2)} (${(yieldPercent * 100).toFixed(1)}%)`);
                                         this.activePositions.splice(posIndex, 1);
                                     }
                                     else {
-                                        await this.addLog('warn', `Closing tracked position (Entry lost or manual). PnL set to 0.`);
                                         realPnl = 0;
                                     }
                                 }
@@ -352,7 +432,6 @@ export class BotEngine {
             });
             await this.monitor.start(this.config.startCursor);
             this.watchdogTimer = setInterval(() => this.checkAutoTp(), 10000);
-            await this.addLog('success', 'Bot Engine Active & Monitoring 24/7');
         }
         catch (e) {
             this.isRunning = false;

@@ -73,12 +73,10 @@ export class ZeroDevService {
     /**
      * CLIENT SIDE: User calls this to authorize the bot.
      * Creates a Smart Account (if needed) and generates a Session Key for the server.
-     * @param ownerSigner - The User's Wallet Client (from Viem/Wagmi/Ethers adapter)
      */
     async createSessionKeyForServer(ownerWalletClient, ownerAddress) {
+        console.log("🔐 Generating Session Key...");
         // 1. Generate a temporary private key for the session (The "Server Key")
-        // In a real flow, the server might generate this and send the public part, 
-        // but for 1-click trading, we generate it here and send the serialized key to server.
         const sessionPrivateKey = generatePrivateKey();
         const sessionKeyAccount = privateKeyToAccount(sessionPrivateKey);
         // 2. Prepare the Session Signer
@@ -86,23 +84,12 @@ export class ZeroDevService {
             signer: sessionKeyAccount,
         });
         // 3. Create/Resolve the Master Smart Account (Kernel)
-        // We use the User's main wallet as the sudo validator
         const ecdsaValidator = await signerToEcdsaValidator(this.publicClient, {
             entryPoint: ENTRY_POINT,
             signer: ownerWalletClient, // Viem wallet client
             kernelVersion: KERNEL_VERSION,
         });
-        const masterAccount = await createKernelAccount(this.publicClient, {
-            entryPoint: ENTRY_POINT,
-            plugins: {
-                sudo: ecdsaValidator,
-            },
-            kernelVersion: KERNEL_VERSION,
-        });
-        console.log("🔐 Smart Account Address:", masterAccount.address);
         // 4. Create the Permission Plugin (The "Session Slip")
-        // We use SudoPolicy for 1-click trading (full trading access), 
-        // but we can restrict this to specific Polymarket contracts later.
         const permissionPlugin = await toPermissionValidator(this.publicClient, {
             entryPoint: ENTRY_POINT,
             signer: sessionKeySigner,
@@ -120,12 +107,17 @@ export class ZeroDevService {
             },
             kernelVersion: KERNEL_VERSION,
         });
+        const accountAddress = sessionKeyAccountObj.address;
+        console.log("   Account Address:", accountAddress);
         // 6. Serialize it to send to the server
         const serializedSessionKey = await serializePermissionAccount(sessionKeyAccountObj, sessionPrivateKey);
+        // NOTE: We intentionally DO NOT send a transaction here. 
+        // The Account and Session Key validator will be lazy-initialized on the server side 
+        // once the user deposits funds and the bot sends its first "Wake Up" transaction.
         return {
-            smartAccountAddress: masterAccount.address,
+            smartAccountAddress: accountAddress,
             serializedSessionKey: serializedSessionKey,
-            sessionPrivateKey: sessionPrivateKey // Keep for local usage if needed, but mainly serialized is key
+            sessionPrivateKey: sessionPrivateKey
         };
     }
     /**
@@ -136,7 +128,6 @@ export class ZeroDevService {
         // 1. Deserialize the account
         const sessionKeyAccount = await deserializePermissionAccount(this.publicClient, ENTRY_POINT, KERNEL_VERSION, serializedSessionKey);
         // 2. Create Paymaster (Optional - for gas sponsorship)
-        // IMPORTANT: Must use the same v3 RPC for paymaster
         const paymasterClient = createZeroDevPaymasterClient({
             chain: CHAIN,
             transport: http(this.rpcUrl),
@@ -204,9 +195,10 @@ export class ZeroDevService {
             ]),
         });
         console.log("UserOp Hash:", userOpHash);
-        const receipt = await kernelClient.waitForUserOperationReceipt({
+        // Safe wait for receipt
+        const receipt = await this.publicClient.waitForTransactionReceipt({
             hash: userOpHash,
         });
-        return receipt.receipt.transactionHash;
+        return receipt.transactionHash;
     }
 }

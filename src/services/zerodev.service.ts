@@ -106,12 +106,13 @@ export class ZeroDevService {
   /**
    * CLIENT SIDE: User calls this to authorize the bot.
    * Creates a Smart Account (if needed) and generates a Session Key for the server.
+   * Includes FORCE DEPLOYMENT logic (0 USDC Self-Tx) to prevent 401 errors.
    * @param ownerSigner - The User's Wallet Client (from Viem/Wagmi/Ethers adapter)
    */
   async createSessionKeyForServer(ownerWalletClient: WalletClient, ownerAddress: string) {
+    console.log("🔐 Generating Session Key & Checking Deployment...");
+
     // 1. Generate a temporary private key for the session (The "Server Key")
-    // In a real flow, the server might generate this and send the public part, 
-    // but for 1-click trading, we generate it here and send the serialized key to server.
     const sessionPrivateKey = generatePrivateKey();
     const sessionKeyAccount = privateKeyToAccount(sessionPrivateKey);
     
@@ -136,11 +137,57 @@ export class ZeroDevService {
       kernelVersion: KERNEL_VERSION,
     });
 
-    console.log("🔐 Smart Account Address:", masterAccount.address);
+    console.log("   Account Address:", masterAccount.address);
+
+    // --- DEPLOYMENT CHECK ---
+    // We must ensure code exists on-chain before creating the session key plugin, 
+    // otherwise the first server-side signature will fail validation.
+    const code = await this.publicClient.getBytecode({ address: masterAccount.address });
+    if (!code) {
+         console.log("⚠️ Account not deployed. Initiating Zero-Cost Deployment...");
+         
+         try {
+             // Create Paymaster Client
+             const paymasterClient = createZeroDevPaymasterClient({
+                chain: CHAIN,
+                transport: http(this.rpcUrl),
+             });
+
+             // Create Client for the Master Account (User Signed)
+             const kernelClient = createKernelAccountClient({
+                account: masterAccount,
+                chain: CHAIN,
+                bundlerTransport: http(this.rpcUrl),
+                client: this.publicClient as any,
+                paymaster: {
+                  getPaymasterData(userOperation) {
+                    return paymasterClient.sponsorUserOperation({ userOperation });
+                  },
+                },
+             });
+
+             // Send 0 ETH/POL to self to trigger deployment
+             const deployHash = await kernelClient.sendTransaction({
+                 to: masterAccount.address,
+                 value: BigInt(0),
+                 data: "0x",
+             });
+             
+             console.log(`🚀 Deployment UserOp Sent: ${deployHash}`);
+             console.log("   Waiting for block inclusion...");
+             
+             await kernelClient.waitForTransactionReceipt({ hash: deployHash });
+             console.log("✅ Account Successfully Deployed!");
+             
+         } catch (deployError: any) {
+             console.error("Deployment Failed:", deployError);
+             throw new Error("Failed to deploy smart account. Please check if you have enough gas or try again.");
+         }
+    } else {
+        console.log("✅ Account already deployed.");
+    }
 
     // 4. Create the Permission Plugin (The "Session Slip")
-    // We use SudoPolicy for 1-click trading (full trading access), 
-    // but we can restrict this to specific Polymarket contracts later.
     const permissionPlugin = await toPermissionValidator(this.publicClient as any, {
       entryPoint: ENTRY_POINT,
       signer: sessionKeySigner,
@@ -166,7 +213,7 @@ export class ZeroDevService {
     return {
       smartAccountAddress: masterAccount.address,
       serializedSessionKey: serializedSessionKey,
-      sessionPrivateKey: sessionPrivateKey // Keep for local usage if needed, but mainly serialized is key
+      sessionPrivateKey: sessionPrivateKey 
     };
   }
 

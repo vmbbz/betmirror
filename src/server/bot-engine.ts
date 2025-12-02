@@ -1,4 +1,3 @@
-
 import { createPolymarketClient } from '../infrastructure/clob-client.factory.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
@@ -193,7 +192,7 @@ export class BotEngine {
           // If code is '0x', the contract is not deployed.
           if (code !== '0x') return; 
 
-          await this.addLog('warn', '⚠️ Smart Account not deployed. Initiating JIT Deployment...');
+          await this.addLog('warn', '⚠️ Smart Account not deployed. Initiating JIT Deployment (0 USDC Self-Transfer)...');
           
           // Send 0 ETH/POL to self. 
           // This triggers the ZeroDev Bundler to deploy the factory code for this address.
@@ -203,7 +202,7 @@ export class BotEngine {
               data: "0x" 
           });
           
-          await this.addLog('info', `🚀 Deployment UserOp Sent. Hash: ${tx.hash}`);
+          await this.addLog('info', `🚀 Deployment UserOp Sent. Waiting for block...`);
           await tx.wait(); // Critical: Must wait for block inclusion
           await this.addLog('success', '✅ Smart Account successfully deployed on-chain.');
           
@@ -273,16 +272,18 @@ export class BotEngine {
           // Without them, the bot cannot sign trades and will crash.
           
           const dbCreds = this.config.l2ApiCredentials;
+          
+          // Strict validation: keys must exist AND be strings (not null/undefined)
           const hasValidCreds = dbCreds 
-              && typeof dbCreds.key === 'string' && dbCreds.key.length > 0
-              && typeof dbCreds.secret === 'string' && dbCreds.secret.length > 0
-              && typeof dbCreds.passphrase === 'string' && dbCreds.passphrase.length > 0;
+              && typeof dbCreds.key === 'string' && dbCreds.key.length > 5
+              && typeof dbCreds.secret === 'string' && dbCreds.secret.length > 5
+              && typeof dbCreds.passphrase === 'string' && dbCreds.passphrase.length > 5;
 
           if (hasValidCreds) {
               clobCreds = dbCreds;
               // await this.addLog('success', 'L2 Trading Credentials Loaded.');
           } else {
-              await this.addLog('warn', '⚠️ No L2 Credentials found. Performing Handshake to generate new ones...');
+              await this.addLog('warn', '⚠️ L2 Credentials missing or invalid. Performing Handshake to generate new ones...');
               try {
                   // We create a temp client just to perform the handshake/signing
                   const tempClient = new ClobClient(

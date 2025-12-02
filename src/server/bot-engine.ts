@@ -1,4 +1,3 @@
-
 import { createPolymarketClient } from '../infrastructure/clob-client.factory.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
@@ -16,6 +15,8 @@ import { Wallet, AbstractSigner, Provider, JsonRpcProvider, TransactionRequest, 
 import { BotLog, User } from '../database/index.js';
 import { BuilderConfig, BuilderApiKeyCreds } from '@polymarket/builder-signing-sdk';
 import { getMarket } from '../utils/fetch-data.util.js';
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- Local Enum Definition for SignatureType (Missing in export) ---
 enum SignatureType {
@@ -290,9 +291,9 @@ export class BotEngine {
 
           if (hasValidCreds) {
               clobCreds = dbCreds;
-              // await this.addLog('success', 'L2 Trading Credentials Loaded.');
           } else {
-              await this.addLog('warn', '⚠️ L2 Credentials missing or invalid. Performing Handshake to generate new ones...');
+              await this.addLog('warn', '⚠️ L2 Credentials missing or invalid. Performing Handshake...');
+              
               try {
                   // We create a temp client just to perform the handshake/signing
                   const tempClient = new ClobClient(
@@ -303,12 +304,26 @@ export class BotEngine {
                       signatureType as any 
                   );
                   
-                  // Sign a message on-chain (via Session Key) to derive the API Key
-                  // Note: createApiKey() is preferred for new sessions
-                  const newCreds = await tempClient.createApiKey();
+                  // Retry Logic for Handshake (Deals with Indexer Lag)
+                  let newCreds: ApiKeyCreds | null = null;
+                  let lastError: any;
+
+                  for (let attempt = 1; attempt <= 5; attempt++) {
+                      try {
+                          newCreds = await tempClient.createApiKey();
+                          if (newCreds && newCreds.key && newCreds.secret) {
+                              break; // Success
+                          }
+                      } catch (e: any) {
+                          lastError = e;
+                          // If 401/400, it means indexer hasn't seen the Session Key yet.
+                          await this.addLog('warn', `Handshake attempt ${attempt}/5 failed. Retrying in 3s...`);
+                          await sleep(3000);
+                      }
+                  }
                   
                   if (!newCreds || !newCreds.key || !newCreds.secret) {
-                      throw new Error("CLOB returned empty credentials during handshake.");
+                      throw new Error(`CLOB Handshake Failed after retries. Last Error: ${lastError?.message || 'Empty Response'}`);
                   }
 
                   clobCreds = newCreds;
@@ -323,7 +338,7 @@ export class BotEngine {
               } catch (e: any) {
                   const msg = e?.message || JSON.stringify(e);
                   await this.addLog('error', `CRITICAL: Failed to generate L2 Keys. Bot cannot trade. Error: ${msg}`);
-                  throw new Error(`L2 Handshake Failed: ${msg}`); // Halt startup
+                  throw new Error(`L2 Handshake Failed: ${msg}`); 
               }
           }
 

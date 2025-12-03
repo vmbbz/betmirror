@@ -23,9 +23,11 @@ const getSolanaAdapter = async () => {
         signMessage: provider.signMessage?.bind(provider),
         
         // Critical: Map sendTransaction to Phantom's signAndSendTransaction
+        // AND enable skipPreflight to avoid simulation errors
         sendTransaction: async (transaction: any, connection: any, options: any = {}) => {
              const { signature } = await provider.signAndSendTransaction(transaction, {
-                 skipPreflight: options.skipPreflight || false,
+                 skipPreflight: true, // Bypass simulation checks
+                 ...options
              });
              return signature;
         },

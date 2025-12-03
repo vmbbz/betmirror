@@ -52,6 +52,7 @@ export class LiFiBridgeService {
         fromChainId: params.fromChainId,
         fromTokenAddress: params.fromTokenAddress,
         fromAmount: params.fromAmount,
+        fromAddress: params.fromAddress,
         toChainId: params.toChainId, // Target: Polygon
         toTokenAddress: params.toTokenAddress, // Target: USDC
         toAddress: params.toAddress,

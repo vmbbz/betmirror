@@ -1,10 +1,45 @@
-import { createConfig, getRoutes, executeRoute } from '@lifi/sdk';
+import { createConfig, getRoutes, executeRoute, Solana } from '@lifi/sdk';
 import axios from 'axios';
 
-// Initialize LiFi Config
+// --- HELPER: Minimal Solana Adapter for LiFi ---
+// LiFi needs an adapter to sign transactions. We wrap window.solana (Phantom).
+const getPhantomAdapter = async () => {
+    const provider = (window as any).solana;
+    if (!provider || !provider.isPhantom) return null;
+    
+    if (!provider.isConnected) {
+        await provider.connect();
+    }
+
+    return {
+        publicKey: provider.publicKey,
+        signTransaction: provider.signTransaction.bind(provider),
+        signAllTransactions: provider.signAllTransactions.bind(provider),
+        sendTransaction: async (transaction: any, connection: any, options: any) => {
+             const { signature } = await provider.signAndSendTransaction(transaction, options);
+             return signature;
+        },
+        // Minimal Interface satisfaction
+        connect: provider.connect.bind(provider),
+        disconnect: provider.disconnect.bind(provider),
+        on: provider.on.bind(provider),
+        off: provider.off.bind(provider),
+    };
+};
+
+// Initialize LiFi Config with Solana Support
 const lifiConfig = createConfig({
-  integrator: 'BetMirror', // Registered DApp Name for Monetization (Must be alphanumeric/dashes only)
-  providers: [], // Auto-detect window.ethereum / window.solana
+  integrator: 'BetMirror', 
+  providers: [
+      // Configure Solana Provider dynamically
+      Solana({
+          async getWalletAdapter() {
+              const adapter = await getPhantomAdapter();
+              if (!adapter) throw new Error("Solana Wallet not found or not connected.");
+              return adapter as any; 
+          }
+      })
+  ], 
   routeOptions: {
     fee: 0.005, // 0.5% Protocol Fee (Global Setting)
   }
@@ -14,7 +49,7 @@ export interface BridgeQuoteParams {
   fromChainId: number;
   fromTokenAddress: string;
   fromAmount: string; // Atomic units
-  fromAddress?: string; // Address sending the funds (optional but recommended for accurate quotes)
+  fromAddress?: string; // Address sending the funds
   toChainId: number;
   toTokenAddress: string;
   toAddress: string; // The Proxy/Smart Account Address

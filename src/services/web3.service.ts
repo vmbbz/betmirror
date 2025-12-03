@@ -1,3 +1,4 @@
+
 import { BrowserProvider, Contract, parseUnits, Eip1193Provider } from 'ethers';
 import { createWalletClient, custom, WalletClient } from 'viem';
 import { polygon } from 'viem/chains';
@@ -138,6 +139,30 @@ export class Web3Service {
           }
           throw e;
       }
+  }
+
+  /**
+   * Special handling for Solana wallets (Phantom/Backpack)
+   * Returns the Base58 address
+   */
+  async getSolanaAddress(): Promise<string | null> {
+    try {
+        // Check for Phantom/Solana injection
+        const solana = (window as any).solana;
+        if (solana) {
+            if (!solana.isConnected) {
+                // Trigger popup if not connected
+                await solana.connect(); 
+            }
+            if (solana.publicKey) {
+                return solana.publicKey.toString();
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error("Solana connection failed:", e);
+        return null;
+    }
   }
 
   private getChainConfig(chainId: number) {

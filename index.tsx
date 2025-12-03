@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import axios from 'axios';
@@ -703,6 +704,8 @@ const App = () => {
   const [bridgeQuote, setBridgeQuote] = useState<any>(null);
   const [isBridging, setIsBridging] = useState(false);
   const [bridgeStatus, setBridgeStatus] = useState<string>('');
+  // Add display state for sender address
+  const [senderAddressDisplay, setSenderAddressDisplay] = useState<string>('');
 
   const [config, setConfig] = useState<AppConfig>({
     targets: [],
@@ -747,6 +750,7 @@ const App = () => {
       if(userAddress) {
           lifiService.setUserId(userAddress);
           lifiService.fetchHistory().then(setBridgeHistory);
+          setSenderAddressDisplay(userAddress); // Default to connected address
       }
   }, [userAddress]);
 
@@ -1020,24 +1024,39 @@ const App = () => {
       if (!bridgeAmount || !proxyAddress) return;
       setBridgeQuote(null);
       try {
-          const fromToken = lifiService.getTokenAddress(bridgeFromChain, bridgeToken);
-          // LiFi expects atomic units. We need to handle decimals based on token.
-          // For simplicity, we assume 18 for native and 6 for USDC (except standard EVM native is 18, SOL is 9)
-          // To be safe, we let LiFi handle parsing if passed as string, OR we multiply standard 1e18/1e6
-          // Better approach: Use LiFi SDK native handling if possible, or simple math
+          let senderAddress = userAddress;
           
+          // SPECIAL HANDLING FOR SOLANA
+          if (bridgeFromChain === 1151111081099710) {
+              try {
+                  const solAddress = await web3Service.getSolanaAddress();
+                  if(!solAddress) throw new Error("Could not retrieve Solana address. Please unlock your Phantom/Backpack wallet.");
+                  senderAddress = solAddress;
+                  setSenderAddressDisplay(solAddress);
+              } catch (solError: any) {
+                  alert("To bridge from Solana, please ensure you have a Solana wallet (Phantom/Backpack) installed and unlocked.");
+                  return;
+              }
+          } else {
+              // For EVM chains, we use the connected address
+              // It is good practice to verify if the user is on the correct chain later, but for quoting, address is enough.
+              setSenderAddressDisplay(userAddress);
+          }
+
+          const fromToken = lifiService.getTokenAddress(bridgeFromChain, bridgeToken);
+          
+          // Simple conversion
           let decimals = 18;
           if (bridgeToken === 'USDC') decimals = 6;
           if (bridgeToken === 'NATIVE' && bridgeFromChain === 1151111081099710) decimals = 9; // Solana
 
-          // Simple conversion
           const rawAmount = (Number(bridgeAmount) * Math.pow(10, decimals)).toString();
 
           const routes = await lifiService.getDepositRoute({
               fromChainId: bridgeFromChain,
               fromTokenAddress: fromToken, 
               fromAmount: rawAmount, 
-              fromAddress: userAddress,
+              fromAddress: senderAddress,
               toChainId: 137, // Polygon
               toTokenAddress: USDC_POLYGON, // USDC
               toAddress: proxyAddress
@@ -1714,6 +1733,14 @@ const App = () => {
                                         USDC
                                     </button>
                                 </div>
+                            </div>
+                            
+                            {/* --- NEW: Address Feedback --- */}
+                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 text-[10px] text-gray-500 flex justify-between items-center">
+                                <span>Using Wallet Address:</span>
+                                <span className="font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-700 dark:text-gray-300 truncate max-w-[180px]" title={senderAddressDisplay}>
+                                    {senderAddressDisplay || 'Not Connected'}
+                                </span>
                             </div>
                         </div>
 

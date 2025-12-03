@@ -1,10 +1,9 @@
-
 import { createConfig, getRoutes, executeRoute } from '@lifi/sdk';
 import axios from 'axios';
 
 // Initialize LiFi Config
 const lifiConfig = createConfig({
-  integrator: 'BetMirror', // Registered DApp Name for Monetization (Must be alphanumeric/dashes only)
+  integrator: 'bet-mirror-pro', // Registered DApp Name for Monetization (Must be alphanumeric/dashes only)
   providers: [], // Auto-detect window.ethereum / window.solana
   routeOptions: {
     fee: 0.005, // 0.5% Protocol Fee (Global Setting)
@@ -15,7 +14,7 @@ export interface BridgeQuoteParams {
   fromChainId: number;
   fromTokenAddress: string;
   fromAmount: string; // Atomic units
-  fromAddress?: string; 
+  fromAddress?: string; // Address sending the funds (optional but recommended for accurate quotes)
   toChainId: number;
   toTokenAddress: string;
   toAddress: string; // The Proxy/Smart Account Address
@@ -99,7 +98,7 @@ export class LiFiBridgeService {
                  const step = updatedRoute.steps[0];
                  const process = step.execution?.process;
                  // Find the active process
-                 const activeProcess = process?.find(p => p.status === 'STARTED' || p.status === 'PENDING') || process?.[process.length - 1];
+                 const activeProcess = process?.find((p: any) => p.status === 'STARTED' || p.status === 'PENDING') || process?.[process.length - 1];
                  
                  let statusMsg = "Processing...";
                  if (activeProcess) {

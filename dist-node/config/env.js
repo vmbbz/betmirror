@@ -51,7 +51,7 @@ export function loadEnv() {
         userAddresses,
         proxyWallet: process.env.PUBLIC_KEY || '',
         privateKey: process.env.PRIVATE_KEY || '',
-        rpcUrl: process.env.RPC_URL || 'https://polygon-rpc.com',
+        rpcUrl: process.env.RPC_URL || 'https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6',
         fetchIntervalSeconds: Number(process.env.FETCH_INTERVAL ?? 1),
         tradeMultiplier: Number(process.env.TRADE_MULTIPLIER ?? 1.0),
         retryLimit: Number(process.env.RETRY_LIMIT ?? 3),
@@ -80,7 +80,7 @@ export function loadEnv() {
         twilioFromNumber: process.env.TWILIO_FROM_NUMBER,
         userPhoneNumber: process.env.USER_PHONE_NUMBER,
         // AA
-        zeroDevRpc: process.env.ZERODEV_RPC || 'https://rpc.zerodev.app/api/v2/bundler/your-project-id',
+        zeroDevRpc: process.env.ZERODEV_RPC || 'https://rpc.zerodev.app/api/v2/bundler/our-project-id',
         zeroDevProjectId: process.env.ZERODEV_PROJECT_ID,
         // Li.Fi
         lifiIntegrator: process.env.LIFI_INTEGRATOR || 'BetMirror',

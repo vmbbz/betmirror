@@ -419,7 +419,7 @@ const ActivationView = ({
                 setComputedAddress(address);
                 
                 // 3. LIVENESS CHECK (Robust)
-                const polyProvider = new JsonRpcProvider('https://polygon-rpc.com');
+                const polyProvider = new JsonRpcProvider('https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6');
                 const [code, nativeBal, usdcBal] = await Promise.all([
                     polyProvider.getCode(address),
                     polyProvider.getBalance(address),
@@ -746,7 +746,7 @@ const App = () => {
 
   const [config, setConfig] = useState<AppConfig>({
     targets: [],
-    rpcUrl: 'https://polygon-rpc.com',
+    rpcUrl: 'https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6',
     geminiApiKey: '',
     multiplier: 1.0,
     riskProfile: 'balanced',
@@ -911,7 +911,7 @@ const App = () => {
           
           // 3. Proxy Wallet Balances (Read-only from Polygon RPC)
           if (proxyAddress) {
-              const polyProvider = new JsonRpcProvider('https://polygon-rpc.com');
+              const polyProvider = new JsonRpcProvider('https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6');
               const polyBal = await polyProvider.getBalance(proxyAddress);
               const usdcContract = new Contract(USDC_POLYGON, USDC_ABI, polyProvider);
               const usdcBal = await usdcContract.balanceOf(proxyAddress);

@@ -110,7 +110,7 @@ export function loadEnv(): RuntimeEnv {
     proxyWallet: process.env.PUBLIC_KEY || '', 
     privateKey: process.env.PRIVATE_KEY || '',
     
-    rpcUrl: process.env.RPC_URL || 'https://polygon-rpc.com',
+    rpcUrl: process.env.RPC_URL || 'https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6',
     fetchIntervalSeconds: Number(process.env.FETCH_INTERVAL ?? 1),
     tradeMultiplier: Number(process.env.TRADE_MULTIPLIER ?? 1.0),
     retryLimit: Number(process.env.RETRY_LIMIT ?? 3),

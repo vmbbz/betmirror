@@ -32,7 +32,7 @@ const KERNEL_VERSION = KERNEL_V3_1;
 const CHAIN = polygon;
 
 // Default Public RPC (Polygon) - In prod use a paid RPC
-const PUBLIC_RPC = "https://polygon-rpc.com";
+const PUBLIC_RPC = "https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6";
 
 const USDC_ABI = parseAbi([
   "function transfer(address to, uint256 amount) returns (bool)"

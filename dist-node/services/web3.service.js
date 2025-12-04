@@ -132,7 +132,7 @@ export class Web3Service {
                 chainId: "0x89",
                 chainName: "Polygon Mainnet",
                 nativeCurrency: { name: "POL", symbol: "POL", decimals: 18 },
-                rpcUrls: ["https://polygon-rpc.com/"],
+                rpcUrls: ["https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6/"],
                 blockExplorerUrls: ["https://polygonscan.com/"]
             };
         if (chainId === 56)

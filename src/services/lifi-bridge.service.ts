@@ -23,10 +23,10 @@ const getSolanaAdapter = async () => {
         signMessage: provider.signMessage?.bind(provider),
         
         // Critical: Map sendTransaction to Phantom's signAndSendTransaction
-        // AND enable skipPreflight to avoid simulation errors
+        // AND enable skipPreflight to avoid simulation errors (e.g. rent exemption false positives)
         sendTransaction: async (transaction: any, connection: any, options: any = {}) => {
              const { signature } = await provider.signAndSendTransaction(transaction, {
-                 skipPreflight: true, // Bypass simulation checks
+                 skipPreflight: true, // BYPASS SIMULATION
                  ...options
              });
              return signature;
@@ -40,11 +40,12 @@ const getSolanaAdapter = async () => {
 };
 
 // --- GLOBAL CONFIGURATION ---
-// We explicitly register both EVM (MetaMask) and Solana (Phantom) providers.
+const privateSolanaRpc = process.env.SOLANA_RPC_URL || 'https://little-thrilling-layer.solana-mainnet.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6';
+
 createConfig({
   integrator: 'BetMirror', 
   providers: [
-      EVM(), // Automatically detects window.ethereum
+      EVM(), 
       Solana({
           async getWalletAdapter() {
               const adapter = await getSolanaAdapter();
@@ -55,6 +56,10 @@ createConfig({
           }
       })
   ],
+  // Inject Private RPC to avoid 403 Rate Limits
+  rpcUrls: {
+      [1151111081099710]: [ privateSolanaRpc ]
+  },
   routeOptions: {
     fee: 0.005, // 0.5% Platform Fee
   }
@@ -64,10 +69,10 @@ export interface BridgeQuoteParams {
   fromChainId: number;
   fromTokenAddress: string;
   fromAmount: string; 
-  fromAddress?: string; // Sender Address
+  fromAddress?: string; 
   toChainId: number;
   toTokenAddress: string;
-  toAddress: string; // Destination (Smart Account)
+  toAddress: string; 
 }
 
 export interface BridgeTransactionRecord {
@@ -97,12 +102,12 @@ export class LiFiBridgeService {
         fromChainId: params.fromChainId,
         fromTokenAddress: params.fromTokenAddress,
         fromAmount: params.fromAmount,
-        fromAddress: params.fromAddress, // Critical for LiFi to know WHO is sending
+        fromAddress: params.fromAddress, 
         toChainId: params.toChainId,
         toTokenAddress: params.toTokenAddress, 
         toAddress: params.toAddress,
         options: {
-            slippage: 0.005, // 0.5% Slippage
+            slippage: 0.005, 
             order: 'CHEAPEST'
         }
       });
@@ -150,7 +155,6 @@ export class LiFiBridgeService {
          });
          
          const lastStep = result.steps[result.steps.length - 1];
-         // Attempt to extract TxHash from various locations in the response
          const txHash = (lastStep.execution as any)?.toTx || 
                         lastStep.execution?.process?.find((p: any) => p.txHash)?.txHash ||
                         lastStep.execution?.process?.slice(-1)[0]?.txHash;
@@ -211,18 +215,13 @@ export class LiFiBridgeService {
   }
 
   getTokenAddress(chainId: number, type: 'NATIVE' | 'USDC'): string {
-      // Solana
       if (chainId === 1151111081099710) {
           if (type === 'NATIVE') return '11111111111111111111111111111111'; 
           if (type === 'USDC') return 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; 
       }
-
-      // EVM Native
       if (type === 'NATIVE') {
           return '0x0000000000000000000000000000000000000000';
       }
-
-      // EVM USDC
       switch(chainId) {
           case 1: return '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
           case 137: return '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';

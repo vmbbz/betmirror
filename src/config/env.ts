@@ -1,4 +1,3 @@
-
 import fs from 'fs';
 import path from 'path';
 
@@ -17,7 +16,7 @@ export type RuntimeEnv = {
   polymarketApiSecret?: string;
   polymarketApiPassphrase?: string;
   
-  // Polymarket Builder Program Credentials
+  // Builder Program Keys (Attribution)
   builderApiKey?: string;
   builderApiSecret?: string;
   builderApiPassphrase?: string;
@@ -47,9 +46,10 @@ export type RuntimeEnv = {
   zeroDevRpc: string;
   zeroDevProjectId?: string;
   
-  // Li.Fi Monetization
+  // Li.Fi Monetization & Config
   lifiIntegrator: string;
   lifiApiKey?: string;
+  solanaRpcUrl?: string; // NEW: Private Solana RPC for Bridging
 
   // Database
   mongoUri: string;
@@ -152,6 +152,7 @@ export function loadEnv(): RuntimeEnv {
     // Li.Fi
     lifiIntegrator: process.env.LIFI_INTEGRATOR || 'BetMirror',
     lifiApiKey: process.env.LIFI_API_KEY,
+    solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://little-thrilling-layer.solana-mainnet.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6',
 
     // Database
     mongoUri: process.env.MONGODB_URI || defaultMongoUri,

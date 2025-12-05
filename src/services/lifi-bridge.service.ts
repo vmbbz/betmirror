@@ -1,30 +1,37 @@
+
 import { createConfig, getRoutes, executeRoute, Solana, EVM } from '@lifi/sdk';
 import axios from 'axios';
+import { web3Service } from './web3.service';
 
 // --- HELPER: Solana Adapter for LiFi ---
-// Wraps window.solana (Phantom/Backpack) to satisfy the WalletAdapter interface
+// Wraps window.solana (Phantom/Backpack/Solflare) to satisfy the WalletAdapter interface
 const getSolanaAdapter = async () => {
-    const provider = (window as any).solana;
+    // 1. Check standard injections
+    const provider = (window as any).solana || (window as any).phantom?.solana || (window as any).solflare;
+    
     if (!provider) return null;
     
+    // 2. Ensure connected
     if (!provider.isConnected) {
         try {
             await provider.connect();
         } catch (e) {
-            return null; // User rejected
+            console.warn("User rejected Solana connection", e);
+            return null;
         }
     }
 
-    // Map Phantom's API to the standard WalletAdapter interface expected by LiFi
+    // 3. Map to WalletAdapter interface required by LiFi
     return {
         publicKey: provider.publicKey,
-        signTransaction: provider.signTransaction.bind(provider),
-        signAllTransactions: provider.signAllTransactions.bind(provider),
+        signTransaction: provider.signTransaction?.bind(provider),
+        signAllTransactions: provider.signAllTransactions?.bind(provider),
         signMessage: provider.signMessage?.bind(provider),
         
-        // Critical: Map sendTransaction to Phantom's signAndSendTransaction
+        // Critical: Map sendTransaction to Phantom/Standard signAndSendTransaction
         // AND enable skipPreflight to avoid simulation errors (e.g. rent exemption false positives)
         sendTransaction: async (transaction: any, connection: any, options: any = {}) => {
+             // Handle differences in wallet APIs if necessary, but most follow this pattern now
              const { signature } = await provider.signAndSendTransaction(transaction, {
                  skipPreflight: true, // BYPASS SIMULATION
                  ...options
@@ -41,24 +48,40 @@ const getSolanaAdapter = async () => {
 
 // --- GLOBAL CONFIGURATION ---
 const privateSolanaRpc = process.env.SOLANA_RPC_URL || 'https://little-thrilling-layer.solana-mainnet.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6';
+const privatePolygonRpc = process.env.RPC_URL || 'https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6';
 
 createConfig({
   integrator: 'BetMirror', 
   providers: [
-      EVM(), 
+      // EVM Provider: Link to existing web3Service for signing
+      EVM({
+        getWalletClient: async () => {
+            try {
+                return (await web3Service.getViemWalletClient()) as any;
+            } catch (e) {
+                return undefined;
+            }
+        },
+        switchChain: async (chainId: number) => {
+            await web3Service.switchToChain(chainId);
+            return (await web3Service.getViemWalletClient(chainId)) as any;
+        }
+      }), 
+      // Solana Provider: Link to custom adapter wrapper
       Solana({
           async getWalletAdapter() {
               const adapter = await getSolanaAdapter();
               if (!adapter) {
-                  throw new Error("Solana wallet not found. Please install Phantom.");
+                  throw new Error("Solana wallet not found or connection rejected.");
               }
               return adapter as any; 
           }
       })
   ],
-  // Inject Private RPC to avoid 403 Rate Limits
+  // Inject Private RPCs to avoid 403 Rate Limits and ensure reliability
   rpcUrls: {
-      [1151111081099710]: [ privateSolanaRpc ]
+      [1151111081099710]: [ privateSolanaRpc ],
+      [137]: [ privatePolygonRpc ]
   },
   routeOptions: {
     fee: 0.005, // 0.5% Platform Fee
@@ -162,6 +185,7 @@ export class LiFiBridgeService {
          await this.saveRecord({ ...record, status: 'COMPLETED', txHash });
          return result;
      } catch (e) {
+         console.error("Bridge Execution Failed:", e);
          await this.saveRecord({ ...record, status: 'FAILED' });
          throw e;
      }

@@ -1,19 +1,29 @@
 import { Contract, formatUnits, formatEther } from 'ethers';
 const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
-export async function getUsdBalanceApprox(wallet, usdcContractAddress) {
-    const provider = wallet.provider;
+/**
+ * Gets USDC balance. Supports both Ethers Wallet and AbstractSigner (like ZeroDev).
+ */
+export async function getUsdBalanceApprox(signer, usdcContractAddress) {
+    const provider = signer.provider;
     if (!provider) {
-        throw new Error('Wallet provider is required');
+        throw new Error('Wallet/Signer provider is required');
     }
+    // Safely resolve address: Check property first, then fallback to async method
+    const address = signer.address || (await signer.getAddress());
     const usdcContract = new Contract(usdcContractAddress, USDC_ABI, provider);
-    const balance = await usdcContract.balanceOf(wallet.address);
+    const balance = await usdcContract.balanceOf(address);
     return parseFloat(formatUnits(balance, 6));
 }
-export async function getPolBalance(wallet) {
-    const provider = wallet.provider;
+/**
+ * Gets Native Token (POL/ETH) balance. Supports both Ethers Wallet and AbstractSigner.
+ */
+export async function getPolBalance(signer) {
+    const provider = signer.provider;
     if (!provider) {
-        throw new Error('Wallet provider is required');
+        throw new Error('Wallet/Signer provider is required');
     }
-    const balance = await provider.getBalance(wallet.address);
+    // Safely resolve address
+    const address = signer.address || (await signer.getAddress());
+    const balance = await provider.getBalance(address);
     return parseFloat(formatEther(balance));
 }

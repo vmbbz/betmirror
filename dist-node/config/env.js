@@ -57,7 +57,9 @@ export function loadEnv() {
         retryLimit: Number(process.env.RETRY_LIMIT ?? 3),
         aggregationEnabled: String(process.env.TRADE_AGGREGATION_ENABLED ?? 'false') === 'true',
         aggregationWindowSeconds: Number(process.env.TRADE_AGGREGATION_WINDOW_SECONDS ?? 300),
-        usdcContractAddress: process.env.USDC_CONTRACT_ADDRESS || '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+        // FIX: Updated to Polygon Bridged USDC (USDC.e) for Polymarket compatibility
+        // This is the critical "Legacy" USDC used by the CLOB
+        usdcContractAddress: process.env.USDC_CONTRACT_ADDRESS || '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174',
         // Trade API Keys
         polymarketApiKey: process.env.POLYMARKET_API_KEY,
         polymarketApiSecret: process.env.POLYMARKET_API_SECRET,

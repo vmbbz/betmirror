@@ -11,7 +11,7 @@ import {
   Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLeft, LifeBuoy,
   Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
   Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle, AreaChart,
-  Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2
+  Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_BRIDGED_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -19,7 +19,7 @@ import { ZeroDevService } from './src/services/zerodev.service';
 import { TradeHistoryEntry } from './src/domain/trade.types';
 import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/alpha.types';
 import { UserStats } from './src/domain/user.types';
-import { parseUnits, formatUnits, Contract, BrowserProvider, JsonRpcProvider } from 'ethers';
+import { parseUnits, formatUnits, Contract, BrowserProvider, JsonRpcProvider, Provider } from 'ethers';
 
 // Constants & Assets
 const CHAIN_ICONS: Record<number, string> = {
@@ -123,7 +123,170 @@ const Tooltip = ({ text }: { text: string }) => (
     </div>
 );
 
-// --- New Component: Withdrawal Modal ---
+// --- New Component: Deposit Modal ---
+const DepositModal = ({
+    isOpen,
+    onClose,
+    balances,
+    onDeposit,
+    isDepositing,
+    onBridgeRedirect
+}: {
+    isOpen: boolean;
+    onClose: () => void;
+    balances: WalletBalances;
+    onDeposit: (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL') => void;
+    isDepositing: boolean;
+    onBridgeRedirect: () => void;
+}) => {
+    const [amount, setAmount] = useState('');
+    const [assetTab, setAssetTab] = useState<'USDC' | 'POL'>('USDC');
+    const [selectedUsdcType, setSelectedUsdcType] = useState<'USDC.e' | 'USDC'>('USDC.e');
+
+    // Auto-select the USDC type that has balance
+    useEffect(() => {
+        if (isOpen) {
+            const bridgedBal = parseFloat(balances.usdcBridged || '0');
+            const nativeBal = parseFloat(balances.usdcNative || '0');
+            if (nativeBal > bridgedBal && nativeBal > 0) {
+                setSelectedUsdcType('USDC'); // Prefer Native if user has more of it
+            } else {
+                setSelectedUsdcType('USDC.e'); // Default or if Bridged is higher
+            }
+        }
+    }, [isOpen, balances]);
+
+    if (!isOpen) return null;
+
+    const getActiveBalance = () => {
+        if (assetTab === 'POL') return balances.native;
+        return selectedUsdcType === 'USDC.e' ? (balances.usdcBridged || '0') : (balances.usdcNative || '0');
+    };
+
+    const handleConfirm = () => {
+        if (!amount || parseFloat(amount) <= 0) return;
+        onDeposit(amount, assetTab === 'POL' ? 'POL' : selectedUsdcType);
+    };
+
+    const activeBalanceNum = parseFloat(getActiveBalance());
+    const isLowBalance = activeBalanceNum < 0.5;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+                <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-gray-900 dark:hover:text-white"><X/></button>
+
+                <div className="text-center mb-6">
+                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/20 rounded-full flex items-center justify-center mx-auto mb-3 text-blue-600 dark:text-blue-500">
+                        <ArrowDown size={24}/>
+                    </div>
+                    <h3 className="text-xl font-bold text-gray-900 dark:text-white">Deposit Funds</h3>
+                    <p className="text-xs text-gray-500 mt-1">Main Wallet (You) <span className="mx-1">→</span> Smart Vault (Bot's proxy wallet)</p>
+                </div>
+
+                {/* Asset Tabs */}
+                <div className="flex p-1 bg-gray-100 dark:bg-black/40 rounded-lg mb-6">
+                    <button 
+                        onClick={() => setAssetTab('USDC')}
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${assetTab === 'USDC' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500'}`}
+                    >
+                        USDC (Trading)
+                    </button>
+                    <button 
+                        onClick={() => setAssetTab('POL')}
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${assetTab === 'POL' ? 'bg-white dark:bg-gray-700 shadow-sm text-purple-600 dark:text-purple-400' : 'text-gray-500'}`}
+                    >
+                        POL (Gas)
+                    </button>
+                </div>
+
+                {/* USDC Sub-Selector (Only if USDC Tab) */}
+                {assetTab === 'USDC' && (
+                    <div className="mb-4 grid grid-cols-2 gap-3">
+                        <div 
+                            onClick={() => setSelectedUsdcType('USDC.e')}
+                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC.e' ? 'bg-green-50 dark:bg-green-900/20 border-green-500 dark:border-green-500 ring-1 ring-green-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
+                        >
+                            <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Bridged (PoS)</div>
+                            <div className="text-sm font-mono font-bold text-gray-900 dark:text-white flex justify-between items-center">
+                                USDC.e 
+                                <span className="text-green-600 dark:text-green-400 text-xs">${balances.usdcBridged || '0.00'}</span>
+                            </div>
+                        </div>
+                        <div 
+                            onClick={() => setSelectedUsdcType('USDC')}
+                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-blue-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
+                        >
+                            <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Native (Circle)</div>
+                            <div className="text-sm font-mono font-bold text-gray-900 dark:text-white flex justify-between items-center">
+                                USDC 
+                                <span className="text-blue-600 dark:text-blue-400 text-xs">${balances.usdcNative || '0.00'}</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Input Area */}
+                <div className="relative mb-6">
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1.5 block flex justify-between">
+                        Amount to Deposit
+                        <span className="text-gray-400">Available: {getActiveBalance()}</span>
+                    </label>
+                    <div className="relative">
+                        <input 
+                            type="text" 
+                            inputMode="decimal"
+                            className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-gray-700 rounded-xl py-3 px-4 text-lg font-mono font-bold text-gray-900 dark:text-white outline-none focus:border-blue-500 transition-all"
+                            placeholder="0.00"
+                            value={amount}
+                            onChange={e => {
+                                if (/^\d*\.?\d*$/.test(e.target.value)) setAmount(e.target.value);
+                            }}
+                        />
+                        <button 
+                            onClick={() => setAmount(getActiveBalance())}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded"
+                        >
+                            MAX
+                        </button>
+                    </div>
+                </div>
+
+                {/* Actions or Bridge Prompt */}
+                {isLowBalance ? (
+                    <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl border border-yellow-200 dark:border-yellow-800/50">
+                        <div className="flex items-start gap-3">
+                            <AlertTriangle size={18} className="text-yellow-600 dark:text-yellow-500 mt-0.5"/>
+                            <div>
+                                <h4 className="text-sm font-bold text-yellow-800 dark:text-yellow-200">Insufficient Funds</h4>
+                                <p className="text-xs text-yellow-700 dark:text-yellow-400 mt-1 leading-relaxed">
+                                    You don't have enough {assetTab === 'POL' ? 'POL' : 'USDC'} on Polygon. Bridge funds from Solana, Base, or Ethereum.
+                                </p>
+                                <button 
+                                    onClick={onBridgeRedirect}
+                                    className="mt-3 w-full py-2 bg-yellow-200 dark:bg-yellow-800 text-yellow-900 dark:text-yellow-100 text-xs font-bold rounded-lg hover:bg-yellow-300 dark:hover:bg-yellow-700 transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <Globe size={14}/> Go to Bridge
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <button 
+                        onClick={handleConfirm}
+                        disabled={isDepositing || parseFloat(amount) <= 0}
+                        className="w-full py-4 bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isDepositing ? <Loader2 className="animate-spin" size={20}/> : <ArrowDownCircle size={20}/>}
+                        {isDepositing ? 'Confirming...' : 'Confirm Deposit'}
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+};
+
+
 const WithdrawalModal = ({ 
     isOpen, 
     onClose, 
@@ -1025,7 +1188,7 @@ const App = () => {
   
   // --- STATE: Forms & Actions ---
   const [isDepositing, setIsDepositing] = useState(false);
-  const [depositAmount, setDepositAmount] = useState('50');
+  const [isDepositModalOpen, setIsDepositModalOpen] = useState(false); // New Modal State
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
   const [withdrawalTxHash, setWithdrawalTxHash] = useState<string | null>(null); // New State for Success UI
@@ -1238,6 +1401,7 @@ const App = () => {
           setChainId(currentChain);
 
           // 1. Main Wallet (Native)
+          // Always use injected provider for main wallet
           const balMain = await provider.getBalance(userAddress);
           let mainUsdcNative = '0.00';
           let mainUsdcBridged = '0.00';
@@ -1255,15 +1419,13 @@ const App = () => {
                 mainUsdcBridged = formatUnits(await usdcBridgedContract.balanceOf(userAddress), 6);
               } catch(e) {}
           } else {
-              // Other EVM Chains: Try to fetch Native USDC if address known
-              // Simple mapping for major chains
-              const USDC_ADDRS: Record<number, string> = {
-                  8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // Base
-                  42161: '0xaf88d065e77c8cc2239327c5edb3a432268e5831', // Arbitrum
-                  1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // Ethereum
-                  56: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d' // BSC
+              // ... (Other chains logic) ...
+               const USDC_ADDRS: Record<number, string> = {
+                  8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+                  42161: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+                  1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+                  56: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d'
               };
-              
               if (USDC_ADDRS[currentChain]) {
                   try {
                       const c = new Contract(USDC_ADDRS[currentChain], USDC_ABI, provider);
@@ -1279,33 +1441,37 @@ const App = () => {
               usdcBridged: mainUsdcBridged
           });
           
-          // 3. Proxy Wallet Balances (Read-only from Polygon RPC)
+          // 3. Proxy Wallet Balances
           if (proxyAddress) {
-              const polyProvider = new JsonRpcProvider(config.rpcUrl || 'https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6');
+              // SMART PROVIDER SWITCHING:
+              // If user is on Polygon (137), use their injected provider (fast/reliable).
+              // If not, use the fallback public RPC.
+              let readProvider: Provider;
+              // Prefer custom RPC if set, otherwise use BrowserProvider if on Polygon, otherwise Fallback Public
+              if (config.rpcUrl && config.rpcUrl.startsWith('http')) {
+                  readProvider = new JsonRpcProvider(config.rpcUrl);
+              } else if (currentChain === 137) {
+                   readProvider = new BrowserProvider((window as any).ethereum);
+              } else {
+                   readProvider = new JsonRpcProvider('https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6');
+              }
               
-              // Native POL
-              const polyBalPromise = polyProvider.getBalance(proxyAddress);
-
-              // BRIDGED USDC (0x2791...) - The only one that matters for Polymarket Trading
-              // This goes into the main 'usdc' slot for the UI since it's the primary currency.
-              const usdcBridgedContract = new Contract(USDC_BRIDGED_POLYGON, USDC_ABI, polyProvider);
-              const usdcBridgedBalPromise = usdcBridgedContract.balanceOf(proxyAddress);
-
-              // NATIVE USDC (0x3c49...) - Kept as secondary check for deposits
-              const usdcNativeContract = new Contract(USDC_POLYGON, USDC_ABI, polyProvider);
-              const usdcNativeBalPromise = usdcNativeContract.balanceOf(proxyAddress);
+              // Helper to safely fetch balance without crashing all
+              const safeBalance = async (call: () => Promise<bigint>): Promise<bigint> => {
+                  try { return await call(); } catch(e) { return BigInt(0); }
+              };
 
               const [polyBal, usdcBridgedBal, usdcNativeBal] = await Promise.all([
-                  polyBalPromise,
-                  usdcBridgedBalPromise,
-                  usdcNativeBalPromise
+                  safeBalance(() => readProvider.getBalance(proxyAddress)),
+                  safeBalance(() => new Contract(USDC_BRIDGED_POLYGON, USDC_ABI, readProvider).balanceOf(proxyAddress)),
+                  safeBalance(() => new Contract(USDC_POLYGON, USDC_ABI, readProvider).balanceOf(proxyAddress))
               ]);
               
               setProxyWalletBal({
                   native: formatUnits(polyBal, 18).slice(0,6),
-                  usdc: parseFloat(formatUnits(usdcBridgedBal, 6)).toFixed(2), // Main Display = Bridged
-                  usdcNative: parseFloat(formatUnits(usdcNativeBal, 6)).toFixed(2), // Secondary Display = Native
-                  usdcBridged: parseFloat(formatUnits(usdcBridgedBal, 6)).toFixed(2) // Explicit bridged field
+                  usdc: parseFloat(formatUnits(usdcBridgedBal, 6)).toFixed(2),
+                  usdcNative: parseFloat(formatUnits(usdcNativeBal, 6)).toFixed(2),
+                  usdcBridged: parseFloat(formatUnits(usdcBridgedBal, 6)).toFixed(2)
               });
           }
       } catch (e) {
@@ -1397,71 +1563,51 @@ const App = () => {
   };
 
   // --- HANDLERS: Money & Bridge ---
-  const handleDepositClick = async () => {
-      // Refresh current chain ID
-      const provider = new BrowserProvider((window as any).ethereum);
-      const network = await provider.getNetwork();
-      const currentChain = Number(network.chainId);
+  // DEPRECATED: Inline input handler
+  // const handleDepositClick = async () => { ... };
 
-      if (currentChain !== 137) {
-          // If not on Polygon, suggest Bridging
-          const confirmBridge = confirm(`You are connected to Chain ID ${currentChain} (Not Polygon).\n\nDo you want to BRIDGE funds to your bot?`);
-          if (confirmBridge) {
-              setBridgeMode('IN');
-              setSelectedSourceChain(currentChain); // Auto set source
-              setSelectedDestChain(137); // Auto set dest
-              setRecipientAddress(proxyAddress); // Auto set recipient to proxy
-              setActiveTab('bridge');
-              return;
-          }
-      } 
-      setIsDepositing(!isDepositing);
+  // NEW: Open Deposit Modal
+  const openDepositModal = () => {
+      // Ensure we are on Polygon to see accurate balances for deposit
+      // (Non-blocking check)
+      if (chainId !== 137) {
+         web3Service.switchToChain(137).catch(console.error);
+      }
+      fetchBalances(); // Refresh balances
+      setIsDepositModalOpen(true);
   };
-
-  const handleDeposit = async () => {
+  
+  const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL') => {
       if (!proxyAddress) return;
       
-      // 1. Pre-Check USDC Balance
-      const availableUsdc = parseFloat(mainWalletBal.usdc);
-      const requestedAmount = parseFloat(depositAmount);
-      
-      if (availableUsdc < requestedAmount) {
-          const goToBridge = confirm(`Insufficient USDC on Polygon.\nAvailable: $${availableUsdc}\nRequested: $${requestedAmount}\n\nDo you want to BRIDGE funds from another chain (Solana, Base, Eth)?`);
-          if (goToBridge) {
-              setBridgeMode('IN');
-              setActiveTab('bridge');
-              setIsDepositing(false);
-          }
-          return;
-      }
-
-      // 2. Pre-Check Gas Balance (POL/MATIC)
-      // Transactions will fail with "missing revert data" if user has no gas
-      const gasBalance = parseFloat(mainWalletBal.native);
-      if (gasBalance < 0.01) {
-          alert("⚠️ Insufficient Gas\n\nYou need at least 0.01 POL (Matic) to pay for network fees.\nPlease bridge or transfer POL to your wallet.");
-          setIsDepositing(false);
-          return;
-      }
-
       setIsDepositing(true);
       try {
-          const txHash = await web3Service.deposit(proxyAddress, depositAmount);
-          alert("Deposit Transaction Sent! Funds will arrive shortly.");
+          let txHash = '';
           
-          // Record Deposit for Stats
+          if (tokenType === 'POL') {
+             txHash = await web3Service.depositNative(proxyAddress, amount);
+          } else {
+             // Determine Token Address based on selection
+             const tokenAddr = tokenType === 'USDC.e' ? USDC_BRIDGED_POLYGON : USDC_POLYGON;
+             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
+          }
+
+          alert("✅ Deposit Sent! Funds will arrive in your Smart Vault shortly.");
+          setIsDepositModalOpen(false);
+          
+          // Record for Stats
           try {
-             await axios.post('/api/deposit/record', { userId: userAddress, amount: requestedAmount, txHash });
+             await axios.post('/api/deposit/record', { userId: userAddress, amount: parseFloat(amount), txHash });
           } catch(ignore){}
           
-          setIsDepositing(false);
       } catch (e: any) {
-          // Handle explicit errors
-          if (e.message.includes("funds") || e.message.includes("insufficient")) {
-              alert("Transaction Failed: Insufficient funds for gas or value.");
+          console.error(e);
+          if (e.message.includes('insufficient') || e.message.includes('balance')) {
+              alert("Deposit Failed: Insufficient funds.");
           } else {
               alert(`Deposit Failed: ${e.message}`);
           }
+      } finally {
           setIsDepositing(false);
       }
   };
@@ -1513,6 +1659,7 @@ const App = () => {
           // If sending USDC.e out, they likely want USDC in.
           setDestToken(bridgeToken === 'NATIVE' ? 'NATIVE' : 'USDC');
           
+          // Default to Proxy Address for deposit, fallback to main wallet if not set
           setRecipientAddress(proxyAddress || userAddress);
       }
   };
@@ -1788,7 +1935,7 @@ const App = () => {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-terminal-bg text-gray-900 dark:text-gray-300 font-sans selection:bg-blue-500/30 selection:text-white flex flex-col transition-colors duration-200">
       
-      {/* --- HEADER --- */}
+      {/* ... (Header) ... */}
       <header className="h-16 border-b border-gray-200 dark:border-terminal-border bg-white/80 dark:bg-terminal-card/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
             {/* Logo & Branding */}
@@ -1841,7 +1988,7 @@ const App = () => {
 
             {/* Right Actions */}
             <div className="flex items-center gap-2 sm:gap-4">
-                 {/* Chain Indicator - Updated with Icon */}
+                 {/* Chain Indicator */}
                  <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-white/5 rounded-lg border border-gray-200 dark:border-white/10 text-xs font-medium">
                     {chainId === 137 ? (
                         <>
@@ -1890,7 +2037,7 @@ const App = () => {
                 </div>
             </div>
         </div>
-
+        
         {/* Mobile Navigation Dropdown */}
         {isMobileMenuOpen && (
             <div className="absolute top-16 left-0 w-full bg-white dark:bg-terminal-card border-b border-gray-200 dark:border-terminal-border z-40 md:hidden animate-in slide-in-from-top-5 shadow-xl">
@@ -1999,26 +2146,20 @@ const App = () => {
                         {/* Action Bar */}
                         <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-800 flex flex-col sm:flex-row gap-3">
                             <button 
-                                onClick={handleDepositClick}
-                                className="flex-1 py-3 bg-blue-50 dark:bg-terminal-accent/10 hover:bg-blue-100 dark:hover:bg-terminal-accent/20 border border-blue-200 dark:border-terminal-accent/30 text-blue-600 dark:text-terminal-accent rounded text-xs font-bold transition-all flex items-center justify-center gap-2"
+                                onClick={openDepositModal}
+                                className="flex-1 py-3 bg-blue-600 dark:bg-terminal-accent hover:bg-blue-700 dark:hover:bg-blue-600 text-white font-bold rounded-lg transition-all shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2"
                             >
-                                <ArrowDownCircle size={16}/> {chainId === 137 ? 'DEPOSIT USDC' : 'BRIDGE FUNDS'}
+                                <ArrowDownCircle size={18}/> DEPOSIT FUNDS
+                                <span className="text-[10px] opacity-80 font-normal">To Smart Vault</span>
                             </button>
                             <button 
-                                onClick={openWithdrawModal} // Updated Handler
-                                className="flex-1 py-3 bg-red-50 dark:bg-terminal-danger/10 hover:bg-red-100 dark:hover:bg-terminal-danger/20 border border-red-200 dark:border-terminal-danger/30 text-red-600 dark:text-terminal-danger rounded text-xs font-bold transition-all flex items-center justify-center gap-2"
+                                onClick={openWithdrawModal} 
+                                className="flex-1 py-3 bg-white dark:bg-white/5 hover:bg-gray-50 dark:hover:bg-white/10 border border-red-200 dark:border-terminal-danger/30 text-red-600 dark:text-terminal-danger font-bold rounded-lg transition-all flex items-center justify-center gap-2"
                             >
-                                <ArrowUpCircle size={16}/> WITHDRAW
+                                <ArrowUpCircle size={18}/> WITHDRAW
+                                <span className="text-[10px] opacity-80 font-normal">To Main Wallet</span>
                             </button>
                         </div>
-                        
-                        {/* Inline Deposit Modal */}
-                        {isDepositing && chainId === 137 && (
-                            <div className="mt-4 p-3 bg-white dark:bg-black rounded border border-gray-200 dark:border-gray-800 animate-in zoom-in-95 duration-200 flex gap-2 shadow-lg">
-                                <input type="number" value={depositAmount} onChange={e => setDepositAmount(e.target.value)} className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-3 text-sm text-gray-900 dark:text-white"/>
-                                <button onClick={handleDeposit} className="bg-black dark:bg-white text-white dark:text-black text-xs font-bold px-4 rounded hover:opacity-80">CONFIRM</button>
-                            </div>
-                        )}
                     </div>
 
                     {/* Console */}
@@ -2186,7 +2327,7 @@ const App = () => {
                         </div>
                     </div>
                     
-                    <div className="space-y-4 max-w-lg mx-auto relative">
+                    <div className="relative flex flex-col gap-2">
                         
                         {/* FROM CARD */}
                         <div className="p-4 bg-white dark:bg-black/40 rounded-xl border border-gray-200 dark:border-terminal-border shadow-sm dark:shadow-none transition-all hover:border-blue-300 dark:hover:border-blue-700">
@@ -2232,25 +2373,34 @@ const App = () => {
                                 {/* Amount Input */}
                                 <div className="flex-1 relative">
                                     <input 
-                                        type="number" 
+                                        type="text" 
+                                        inputMode="decimal"
+                                        autoComplete="off"
+                                        pattern="^[0-9]*[.,]?[0-9]*$"
                                         className="w-full bg-transparent text-2xl font-mono font-bold text-gray-900 dark:text-white outline-none text-right placeholder:text-gray-300 dark:placeholder:text-gray-700"
                                         placeholder="0.00"
                                         value={bridgeAmount}
-                                        onChange={(e) => setBridgeAmount(e.target.value)}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            // Regex: Allow positive integers or decimals only (no negatives, no extra dots)
+                                            if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                                                setBridgeAmount(val);
+                                            }
+                                        }}
                                     />
                                     <div className="absolute -bottom-5 right-0 flex gap-2">
-                                         <button 
+                                            <button 
                                             onClick={() => {
                                                 const bal = getSourceBalance();
-                                                // Only set if numeric to avoid setting 'Switch Chain' as amount
+                                                // Only set if numeric and safe
                                                 if (bal && !isNaN(parseFloat(bal))) {
                                                     setBridgeAmount(bal);
                                                 }
                                             }}
                                             className="text-[10px] text-blue-600 dark:text-blue-400 font-bold hover:underline"
-                                         >
+                                            >
                                             MAX
-                                         </button>
+                                            </button>
                                     </div>
                                 </div>
                             </div>
@@ -2277,7 +2427,7 @@ const App = () => {
                         </div>
 
                         {/* Swap Direction Button */}
-                        <div className="absolute left-1/2 top-[46%] -translate-x-1/2 -translate-y-1/2 z-10">
+                        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
                             <button 
                                 onClick={handleSwapDirection}
                                 className="p-2 bg-gray-100 dark:bg-gray-800 border-4 border-white dark:border-[#0a0a0a] rounded-full text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 hover:rotate-180 transition-all shadow-sm"
@@ -2320,30 +2470,50 @@ const App = () => {
                                     )}
                                 </div>
 
-                                {/* Recipient Input */}
+                                {/* Recipient Input / Selector */}
                                 <div className="flex-1">
-                                    <div className="relative">
-                                        <input 
-                                            type="text" 
-                                            className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-2 text-sm font-mono text-gray-900 dark:text-white outline-none focus:border-blue-500 transition-colors pr-8"
-                                            placeholder="Recipient Address"
-                                            value={recipientAddress}
-                                            onChange={(e) => setRecipientAddress(e.target.value)}
-                                        />
-                                        {bridgeMode === 'OUT' && (
-                                            <button 
-                                                onClick={async () => { const text = await navigator.clipboard.readText(); setRecipientAddress(text); }}
-                                                className="absolute right-0 top-2 text-gray-400 hover:text-blue-500"
-                                                title="Paste"
-                                            >
-                                                <Clipboard size={14}/>
-                                            </button>
-                                        )}
-                                    </div>
-                                    <div className="text-[10px] text-gray-500 mt-1 flex justify-between">
-                                        <span>Receive Address</span>
-                                        {bridgeMode === 'IN' && <span className="text-green-600 dark:text-green-400 font-bold">Smart Vault</span>}
-                                    </div>
+                                    {bridgeMode === 'IN' ? (
+                                        <div className="relative">
+                                            {/* Dropdown for Deposit Target: Smart Wallet vs Main Wallet */}
+                                            <div className="relative">
+                                                <select
+                                                    value={recipientAddress}
+                                                    onChange={(e) => setRecipientAddress(e.target.value)}
+                                                    className="w-full appearance-none bg-transparent border-b border-gray-300 dark:border-gray-700 py-2 text-sm font-mono text-gray-900 dark:text-white outline-none focus:border-blue-500 transition-colors pr-8 cursor-pointer"
+                                                >
+                                                    <option value={proxyAddress}>Smart Vault (Bot) - {proxyAddress ? `${proxyAddress.slice(0,6)}...` : 'Activate First'}</option>
+                                                    <option value={userAddress}>Main Wallet (You) - {userAddress.slice(0,6)}...</option>
+                                                </select>
+                                                <ChevronDown size={14} className="absolute right-0 top-3 text-gray-400 pointer-events-none"/>
+                                            </div>
+                                            <div className="text-[10px] text-gray-500 mt-1">
+                                                Destination Wallet
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        /* Existing Input for Withdraw */
+                                        <div className="relative">
+                                            <div className="relative">
+                                                <input 
+                                                    type="text" 
+                                                    className="w-full bg-transparent border-b border-gray-300 dark:border-gray-700 py-2 text-sm font-mono text-gray-900 dark:text-white outline-none focus:border-blue-500 transition-colors pr-8"
+                                                    placeholder="Recipient Address"
+                                                    value={recipientAddress}
+                                                    onChange={(e) => setRecipientAddress(e.target.value)}
+                                                />
+                                                <button 
+                                                    onClick={async () => { const text = await navigator.clipboard.readText(); setRecipientAddress(text); }}
+                                                    className="absolute right-0 top-2 text-gray-400 hover:text-blue-500"
+                                                    title="Paste"
+                                                >
+                                                    <Clipboard size={14}/>
+                                                </button>
+                                            </div>
+                                            <div className="text-[10px] text-gray-500 mt-1">
+                                                Receive Address
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -2370,7 +2540,9 @@ const App = () => {
                                 </div>
                             )}
                         </div>
-
+                    </div>
+                    
+                    <div className="mt-8">
                         {!bridgeQuote ? (
                             <button onClick={handleGetBridgeQuote} className="w-full py-4 bg-blue-600 dark:bg-terminal-accent hover:bg-blue-700 dark:hover:bg-blue-600 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-blue-500/25 hover:-translate-y-0.5">
                                 Review Quote
@@ -3261,7 +3433,17 @@ const App = () => {
       {/* Landing View Helper */}
       {!isConnected && <Landing onConnect={handleConnect} theme={theme} toggleTheme={toggleTheme} />}
       
-      {/* Withdrawal Modal Instance */}
+      {/* Deposit Modal */}
+      <DepositModal
+        isOpen={isDepositModalOpen}
+        onClose={() => setIsDepositModalOpen(false)}
+        balances={mainWalletBal}
+        onDeposit={handleDeposit}
+        isDepositing={isDepositing}
+        onBridgeRedirect={() => { setIsDepositModalOpen(false); setActiveTab('bridge'); }}
+      />
+
+      {/* Withdrawal Modal */}
       <WithdrawalModal 
         isOpen={isWithdrawModalOpen}
         onClose={() => { setIsWithdrawModalOpen(false); setWithdrawalTxHash(null); }}

@@ -16,6 +16,7 @@ import { BotLog, User } from '../database/index.js';
 import { BuilderConfig, BuilderApiKeyCreds } from '@polymarket/builder-signing-sdk';
 import { getMarket } from '../utils/fetch-data.util.js';
 import { getUsdBalanceApprox, getPolBalance } from '../utils/get-balance.util.js';
+import { encodeFunctionData } from 'viem'; // Added for manual UserOp encoding
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -28,7 +29,7 @@ enum SignatureType {
 
 // --- ADAPTER: ZeroDev (Viem) -> Ethers.js Signer ---
 class KernelEthersSigner extends AbstractSigner {
-    private kernelClient: any;
+    public kernelClient: any; // Made public to access from BotEngine
     private address: string;
     
     constructor(kernelClient: any, address: string, provider: Provider) {
@@ -267,18 +268,65 @@ export class BotEngine {
   private async activateOnChain(signer: any, walletAddress: string, usdcAddress: string) {
       try {
           await this.addLog('info', '🔄 Syncing Session Key on-chain...');
-          const usdc = new Contract(usdcAddress, USDC_ABI_MINIMAL, signer);
-          // Approve 0 USDC to self. Valid UserOp that initializes the account.
-          const tx = await usdc.approve(walletAddress, 0);
-          await this.addLog('info', `🚀 Activation Tx Sent: ${tx.hash?.slice(0,10)}... Waiting for block...`);
-          await tx.wait(); 
+          
+          if ((signer as any).kernelClient && (signer as any).kernelClient.account) {
+              const client = (signer as any).kernelClient;
+              const account = client.account;
+
+              // Re-instantiate service locally to access the helper
+              const rpcUrl = this.config.zeroDevRpc || process.env.ZERODEV_RPC;
+              const aaService = new ZeroDevService(rpcUrl!, this.config.zeroDevPaymasterRpc);
+              
+              // 1. Construct Approval for Paymaster (Critical for Gas Token Mode)
+              const approveCallData = await aaService.getPaymasterApprovalCallData();
+              
+              // 2. Construct Self-Approval (Legacy activation signal, harmless to keep)
+              const selfApproveData = encodeFunctionData({
+                  abi: [{
+                      type: 'function',
+                      name: 'approve',
+                      inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],
+                      outputs: [{ name: '', type: 'bool' }]
+                  }],
+                  functionName: "approve",
+                  args: [walletAddress, BigInt(0)]
+              });
+              
+              // BATCH THEM: Approve Paymaster FIRST, then do the dummy tx
+              const encodedCalls = await account.encodeCalls([
+                  {
+                      to: usdcAddress, // USDC Contract
+                      value: BigInt(0),
+                      data: approveCallData // Approve Paymaster
+                  },
+                  {
+                      to: usdcAddress,
+                      value: BigInt(0),
+                      data: selfApproveData // Approve Self (0)
+                  }
+              ]);
+
+              // USE ROBUST SENDER (Paymaster -> Fallback)
+              const hash = await aaService.sendUserOperation(client, encodedCalls, account);
+              await this.addLog('info', `🚀 Activation Batch Sent: ${hash}`);
+              
+              // Wait for it
+              const provider = new JsonRpcProvider(this.config.rpcUrl);
+              await provider.waitForTransaction(hash);
+              
+          } else {
+               // Fallback for EOA (Non-AA)
+              const usdc = new Contract(usdcAddress, USDC_ABI_MINIMAL, signer);
+              const tx = await usdc.approve(walletAddress, 0);
+              await this.addLog('info', `🚀 Activation Tx Sent: ${tx.hash?.slice(0,10)}...`);
+              await tx.wait(); 
+          }
+
           await this.addLog('success', '✅ Smart Account Deployed & Key Active.');
       } catch (e: any) {
-          // Enhanced Error Logging for Gas/Paymaster Issues
-          console.log("Activation Tx Note:", e.message);
-          if (e.message.includes("AA31") || e.message.includes("paymaster") || e.message.includes("gas")) {
-              await this.addLog('warn', '⚠️ Paymaster Warning: Gas sponsorship failed. Please deposit ~1 POL to your Smart Account to ensure smooth operation.');
-          }
+          console.log("Activation Error:", e);
+          await this.addLog('error', `Activation Failed: ${e.message}`);
+          throw e; 
       }
   }
 

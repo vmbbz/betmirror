@@ -1,3 +1,4 @@
+
 import {
   createKernelAccount,
   createZeroDevPaymasterClient,
@@ -124,7 +125,9 @@ export class ZeroDevService {
            client: this.publicClient as any,
        });
 
-       const userOpHash = await fallbackClient.sendUserOperation({ callData });
+       // Cast to 'any' to avoid strict type checks on SendUserOperationParameters which can fail
+       // when using a generic account/client setup in this manner.
+       const userOpHash = await fallbackClient.sendUserOperation({ callData } as any);
        console.log("✅ Native Gas Success. UserOp:", userOpHash);
        return userOpHash;
   }

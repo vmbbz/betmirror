@@ -380,12 +380,14 @@ export class BotEngine {
                           { "proxyWallet.l2ApiCredentials": newCreds }
                       );
                       await this.addLog('success', '✅ L2 Login Successful. Credentials Saved.');
-                      // Re-init client with new creds
+                      
+                      // CRITICAL FIX: Re-initialize client with the NEW credentials immediately.
+                      // Without this, the next trade attempt will fail with HMAC signature errors (missing secret).
                       this.client = new ClobClient(
                           'https://clob.polymarket.com',
                           Chain.POLYGON,
                           wallet,
-                          newCreds,
+                          newCreds, // Pass the fresh creds
                           signatureType as any,
                           funderAddress
                       ) as any;
@@ -511,7 +513,7 @@ export class BotEngine {
                           }
                       } else {
                           status = 'FAILED';
-                          await this.addLog('error', `❌ Trade Execution Failed (Zero size).`);
+                          // Detailed log already inside executor
                       }
                   }
 

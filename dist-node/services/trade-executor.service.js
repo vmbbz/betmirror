@@ -1,7 +1,7 @@
 import { Contract, MaxUint256 } from 'ethers';
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { postOrder } from '../utils/post-order.util.js';
-import { getUsdBalanceApprox, getPolBalance } from '../utils/get-balance.util.js';
+import { getUsdBalanceApprox } from '../utils/get-balance.util.js';
 import { httpGet } from '../utils/http.js';
 // Polymarket CTF Exchange Address (Polygon)
 const POLYMARKET_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
@@ -17,27 +17,25 @@ export class TradeExecutorService {
     async ensureAllowance() {
         const { logger, client } = this.deps;
         try {
-            const allowance = await this.usdcContract.allowance(client.wallet.address, POLYMARKET_EXCHANGE);
-            // If allowance is less than 1 million USDC, assume it needs approval (infinity)
+            const allowance = await this.usdcContract.allowance(this.deps.proxyWallet, POLYMARKET_EXCHANGE);
             if (allowance < BigInt(1000000 * 1000000)) {
                 logger.info('🔓 Token Allowance Low. Auto-Approving Polymarket Exchange...');
-                const tx = await this.usdcContract.approve(POLYMARKET_EXCHANGE, MaxUint256);
-                logger.info(`⏳ Approval Tx Sent: ${tx.hash}`);
-                await tx.wait();
-                logger.info('✅ USDC Auto-Approved for Trading!');
+                try {
+                    const tx = await this.usdcContract.approve(POLYMARKET_EXCHANGE, MaxUint256);
+                    logger.info(`⏳ Approval Tx Sent: ${tx.hash}`);
+                    await tx.wait();
+                    logger.info('✅ USDC Auto-Approved for Trading!');
+                }
+                catch (err) {
+                    logger.warn(`Allowance update skipped (Session Key might typically delegate this): ${err.message}`);
+                }
                 return true;
             }
             logger.info('✅ USDC Allowance Active');
             return true;
         }
         catch (e) {
-            // Enhanced Error Handling for ZeroDev
-            if (e.message?.includes('ProjectId not found') || e.details?.includes('ProjectId not found') || e.status === 404) {
-                logger.error('❌ ZeroDev RPC Error: Project ID invalid or not found. Please check ZERODEV_RPC in your .env file.');
-            }
-            else {
-                logger.error('Failed to check/set allowance', e);
-            }
+            logger.error('Failed to check/set allowance', e);
             return false;
         }
     }
@@ -56,10 +54,6 @@ export class TradeExecutorService {
             return false;
         }
     }
-    /**
-     * Manually exit a position (e.g. for Auto TP or Stop Loss)
-     * Independent of the copy target's actions.
-     */
     async executeManualExit(position, currentPrice) {
         const { logger, client } = this.deps;
         try {
@@ -70,7 +64,7 @@ export class TradeExecutorService {
                 tokenId: position.tokenId,
                 outcome: position.outcome,
                 side: 'SELL',
-                sizeUsd: position.sizeUsd // Sell full size
+                sizeUsd: position.sizeUsd
             });
             return true;
         }
@@ -79,37 +73,35 @@ export class TradeExecutorService {
             return false;
         }
     }
-    /**
-     * Executes the copy trade.
-     * Returns the ACTUAL size executed in USD.
-     */
     async copyTrade(signal) {
         const { logger, env, client } = this.deps;
         try {
             const yourUsdBalance = await getUsdBalanceApprox(client.wallet, env.usdcContractAddress);
-            const polBalance = await getPolBalance(client.wallet);
+            // We assume a default whale size of $10,000 if the API fails, to prevent massive bets.
             const traderBalance = await this.getTraderBalance(signal.trader);
-            logger.info(`Balance check - POL: ${polBalance.toFixed(4)} POL, USDC: ${yourUsdBalance.toFixed(2)} USDC`);
             const sizing = computeProportionalSizing({
                 yourUsdBalance,
                 traderUsdBalance: traderBalance,
                 traderTradeUsd: signal.sizeUsd,
                 multiplier: env.tradeMultiplier,
             });
-            logger.info(`${signal.side} ${sizing.targetUsdSize.toFixed(2)} USD`);
-            // Balance validation before executing trade
-            const requiredUsdc = sizing.targetUsdSize;
-            const minPolForGas = 0.01; // Minimum POL needed for gas
+            // --- DETAILED SIZING LOG (Crucial for Debugging) ---
+            // This helps debug "Zero Size" errors and shows the floor logic in action
+            logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} | You: $${yourUsdBalance.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)}`);
+            if (sizing.targetUsdSize === 0) {
+                if (yourUsdBalance < 0.50) {
+                    logger.warn(`❌ Skipped: Insufficient balance ($${yourUsdBalance.toFixed(2)}) for min trade ($0.50).`);
+                }
+                else {
+                    logger.warn(`❌ Skipped: Calculated size $0.00 (Whale trade too small relative to portfolio ratio).`);
+                }
+                return 0;
+            }
             if (signal.side === 'BUY') {
-                if (yourUsdBalance < requiredUsdc) {
-                    logger.error(`Insufficient USDC balance. Required: ${requiredUsdc.toFixed(2)} USDC, Available: ${yourUsdBalance.toFixed(2)} USDC`);
+                if (yourUsdBalance < sizing.targetUsdSize) {
+                    logger.error(`Insufficient USDC. Need: $${sizing.targetUsdSize.toFixed(2)}, Have: $${yourUsdBalance.toFixed(2)}`);
                     return 0;
                 }
-            }
-            // Strict Gas Check skipped for Smart Accounts (Paymaster handles it), 
-            // but good to keep for legacy EOA fallback
-            if (polBalance < minPolForGas && !this.deps.proxyWallet.startsWith('0x')) {
-                // Basic check only if not AA
             }
             await postOrder({
                 client,
@@ -119,13 +111,12 @@ export class TradeExecutorService {
                 side: signal.side,
                 sizeUsd: sizing.targetUsdSize,
             });
-            logger.info(`Successfully executed ${signal.side} order for ${sizing.targetUsdSize.toFixed(2)} USD`);
             return sizing.targetUsdSize;
         }
         catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             if (errorMessage.includes('closed') || errorMessage.includes('resolved') || errorMessage.includes('No orderbook')) {
-                logger.warn(`Skipping trade - Market ${signal.marketId} is closed or resolved: ${errorMessage}`);
+                logger.warn(`Skipping - Market closed/resolved.`);
             }
             else {
                 logger.error(`Failed to copy trade: ${errorMessage}`, err);
@@ -137,10 +128,11 @@ export class TradeExecutorService {
         try {
             const positions = await httpGet(`https://data-api.polymarket.com/positions?user=${trader}`);
             const totalValue = positions.reduce((sum, pos) => sum + (pos.currentValue || pos.initialValue || 0), 0);
-            return Math.max(100, totalValue);
+            // Assume a whale has at least $1k if API fails or returns 0, to prevent division by zero
+            return Math.max(1000, totalValue);
         }
         catch {
-            return 1000;
+            return 10000; // Fallback whale size
         }
     }
 }

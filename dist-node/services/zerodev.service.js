@@ -11,43 +11,101 @@ import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants";
 const ENTRY_POINT = getEntryPoint("0.7");
 const KERNEL_VERSION = KERNEL_V3_1;
 const CHAIN = polygon;
-// Default Public RPC (Polygon) - In prod use a paid RPC
-const PUBLIC_RPC = "https://little-thrilling-layer.matic.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6";
+// Default Public RPC (Polygon)
+const PUBLIC_RPC = "https://polygon-rpc.com";
+// POLYGON BRIDGED USDC (USDC.e) - The gas token
+const GAS_TOKEN_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+// ERC20 Paymaster Address (Pimlico/ZeroDev Standard for Polygon)
+const ERC20_PAYMASTER_ADDRESS = '0x0000000000325602a77414A841499c5613416D2d';
 const USDC_ABI = parseAbi([
-    "function transfer(address to, uint256 amount) returns (bool)"
+    "function transfer(address to, uint256 amount) returns (bool)",
+    "function approve(address spender, uint256 amount) returns (bool)"
 ]);
 export class ZeroDevService {
-    constructor(zeroDevRpcUrlOrId) {
-        // --- AUTO-CORRECT RPC URL ---
-        // SDK v5 requires v3 endpoints: https://rpc.zerodev.app/api/v3/<PROJECT_ID>/chain/<CHAIN_ID>
-        // We detect if the user passed a v2 URL or just an ID, and upgrade it to v3 for Polygon (137).
-        this.rpcUrl = this.normalizeRpcUrl(zeroDevRpcUrlOrId);
-        console.log(`[ZeroDev] Using RPC: ${this.rpcUrl}`);
+    constructor(zeroDevRpcUrlOrId, paymasterRpcUrl) {
+        // 1. Bundler RPC (Standard)
+        this.bundlerRpc = this.normalizeRpcUrl(zeroDevRpcUrlOrId);
+        // 2. Paymaster RPC (Self-Funded or Default)
+        // If no specific paymaster URL provided, fallback to bundler URL (Shared Paymaster)
+        this.paymasterRpc = paymasterRpcUrl || this.bundlerRpc;
+        console.log(`[ZeroDev] Bundler: ${this.bundlerRpc}`);
+        if (paymasterRpcUrl) {
+            console.log(`[ZeroDev] Paymaster: ${this.paymasterRpc}`);
+        }
         this.publicClient = createPublicClient({
             chain: CHAIN,
             transport: http(PUBLIC_RPC),
         });
     }
     normalizeRpcUrl(input) {
-        // 1. Extract UUID (Project ID)
+        // Extract UUID (Project ID)
         const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
         const match = input.match(uuidRegex);
-        if (!match) {
-            console.error("[ZeroDev] Invalid Project ID or URL format provided.");
-            return input; // Fallback to whatever was passed
-        }
-        const projectId = match[0];
-        // 2. Check if it's already a v3 URL for Polygon
-        if (input.includes("/api/v3") && input.includes("/chain/137")) {
+        // If it looks like a full URL already, keep it
+        if (input.includes("http"))
             return input;
+        // If it's just an ID, construct the URL
+        if (match) {
+            return `https://rpc.zerodev.app/api/v3/${match[0]}/chain/137`;
         }
-        // 3. Construct v3 URL
-        return `https://rpc.zerodev.app/api/v3/${projectId}/chain/137`;
+        return input;
     }
     /**
-     * Predicts the deterministic address of the Smart Account for this user.
-     * Used to check if they already have an account before deploying.
+     * Universal UserOp Sender with Fallback Logic.
+     * Attempts to pay gas with USDC (via Paymaster).
+     * If that fails (e.g. not whitelisted), falls back to Native POL.
      */
+    async sendUserOperation(kernelClient, callData, account) {
+        // 1. Create dedicated Paymaster Client
+        const paymasterClient = createZeroDevPaymasterClient({
+            chain: CHAIN,
+            transport: http(this.paymasterRpc),
+        });
+        // 2. Try with Paymaster (USDC Gas)
+        try {
+            console.log("Attempting UserOp via ERC20 Paymaster...");
+            const userOpHash = await kernelClient.sendUserOperation({
+                callData,
+                paymaster: {
+                    getPaymasterData(userOperation) {
+                        return paymasterClient.sponsorUserOperation({
+                            userOperation,
+                            gasToken: GAS_TOKEN_ADDRESS
+                        });
+                    }
+                }
+            });
+            console.log("✅ Paymaster Success. UserOp:", userOpHash);
+            return userOpHash;
+        }
+        catch (e) {
+            console.warn(`⚠️ Paymaster Failed (${e.message}). Retrying with Native Gas (POL)...`);
+        }
+        // 3. Fallback: Native Gas (POL)
+        // Create a new client without the paymaster middleware forced
+        const fallbackClient = createKernelAccountClient({
+            account: account,
+            chain: CHAIN,
+            bundlerTransport: http(this.bundlerRpc),
+            client: this.publicClient,
+        });
+        // Cast to 'any' to avoid strict type checks on SendUserOperationParameters which can fail
+        // when using a generic account/client setup in this manner.
+        const userOpHash = await fallbackClient.sendUserOperation({ callData });
+        console.log("✅ Native Gas Success. UserOp:", userOpHash);
+        return userOpHash;
+    }
+    /**
+     * Generate the Approval Calldata for the Paymaster
+     */
+    async getPaymasterApprovalCallData() {
+        // Approve Max Int to the Paymaster Contract
+        return encodeFunctionData({
+            abi: USDC_ABI,
+            functionName: "approve",
+            args: [ERC20_PAYMASTER_ADDRESS, BigInt("115792089237316195423570985008687907853269984665640564039457584007913129639935")] // MaxUint256
+        });
+    }
     async computeMasterAccountAddress(ownerWalletClient) {
         try {
             if (!ownerWalletClient)
@@ -66,39 +124,25 @@ export class ZeroDevService {
         }
         catch (e) {
             console.error("Failed to compute deterministic address (ZeroDev):", e.message);
-            // Don't swallow error completely, return null but log detailed error
             return null;
         }
     }
-    /**
-     * CLIENT SIDE: User calls this to authorize the bot.
-     * Creates a Smart Account (if needed) and generates a Session Key for the server.
-     */
     async createSessionKeyForServer(ownerWalletClient, ownerAddress) {
         console.log("🔐 Generating Session Key...");
-        // 1. Generate a temporary private key for the session (The "Server Key")
         const sessionPrivateKey = generatePrivateKey();
         const sessionKeyAccount = privateKeyToAccount(sessionPrivateKey);
-        // 2. Prepare the Session Signer
-        const sessionKeySigner = await toECDSASigner({
-            signer: sessionKeyAccount,
-        });
-        // 3. Create/Resolve the Master Smart Account (Kernel)
+        const sessionKeySigner = await toECDSASigner({ signer: sessionKeyAccount });
         const ecdsaValidator = await signerToEcdsaValidator(this.publicClient, {
             entryPoint: ENTRY_POINT,
-            signer: ownerWalletClient, // Viem wallet client
+            signer: ownerWalletClient,
             kernelVersion: KERNEL_VERSION,
         });
-        // 4. Create the Permission Plugin (The "Session Slip")
         const permissionPlugin = await toPermissionValidator(this.publicClient, {
             entryPoint: ENTRY_POINT,
             signer: sessionKeySigner,
-            policies: [
-                toSudoPolicy({}), // Allow everything for this session key
-            ],
+            policies: [toSudoPolicy({})],
             kernelVersion: KERNEL_VERSION,
         });
-        // 5. Create the Session Key Account Object
         const sessionKeyAccountObj = await createKernelAccount(this.publicClient, {
             entryPoint: ENTRY_POINT,
             plugins: {
@@ -107,40 +151,30 @@ export class ZeroDevService {
             },
             kernelVersion: KERNEL_VERSION,
         });
-        const accountAddress = sessionKeyAccountObj.address;
-        console.log("   Account Address:", accountAddress);
-        // 6. Serialize it to send to the server
         const serializedSessionKey = await serializePermissionAccount(sessionKeyAccountObj, sessionPrivateKey);
-        // NOTE: We intentionally DO NOT send a transaction here. 
-        // The Account and Session Key validator will be lazy-initialized on the server side 
-        // once the user deposits funds and the bot sends its first "Wake Up" transaction.
         return {
-            smartAccountAddress: accountAddress,
+            smartAccountAddress: sessionKeyAccountObj.address,
             serializedSessionKey: serializedSessionKey,
             sessionPrivateKey: sessionPrivateKey
         };
     }
-    /**
-     * SERVER SIDE: The Bot uses this to execute trades.
-     * Reconstructs the account from the string provided by the user.
-     */
     async createBotClient(serializedSessionKey) {
-        // 1. Deserialize the account
         const sessionKeyAccount = await deserializePermissionAccount(this.publicClient, ENTRY_POINT, KERNEL_VERSION, serializedSessionKey);
-        // 2. Create Paymaster (Optional - for gas sponsorship)
         const paymasterClient = createZeroDevPaymasterClient({
             chain: CHAIN,
-            transport: http(this.rpcUrl),
+            transport: http(this.paymasterRpc),
         });
-        // 3. Create the Kernel Client (The "Bot Wallet")
         const kernelClient = createKernelAccountClient({
             account: sessionKeyAccount,
             chain: CHAIN,
-            bundlerTransport: http(this.rpcUrl),
+            bundlerTransport: http(this.bundlerRpc),
             client: this.publicClient,
             paymaster: {
                 getPaymasterData(userOperation) {
-                    return paymasterClient.sponsorUserOperation({ userOperation });
+                    return paymasterClient.sponsorUserOperation({
+                        userOperation,
+                        gasToken: GAS_TOKEN_ADDRESS
+                    });
                 },
             },
         });
@@ -149,56 +183,56 @@ export class ZeroDevService {
             client: kernelClient
         };
     }
-    /**
-     * CLIENT SIDE: Trustless Withdrawal.
-     * The Owner (User) signs a UserOp to drain funds. The server cannot stop this.
-     */
-    async withdrawFunds(ownerWalletClient, smartAccountAddress, toAddress, amount, usdcAddress) {
+    async withdrawFunds(ownerWalletClient, smartAccountAddress, toAddress, amount, tokenAddress) {
         console.log("Initiating Trustless Withdrawal...");
-        // 1. Create the Validator using the Owner's Wallet
         const ecdsaValidator = await signerToEcdsaValidator(this.publicClient, {
             entryPoint: ENTRY_POINT,
             signer: ownerWalletClient,
             kernelVersion: KERNEL_VERSION,
         });
-        // 2. Reconstruct the Account (we know the address and the validator)
         const account = await createKernelAccount(this.publicClient, {
             entryPoint: ENTRY_POINT,
-            plugins: {
-                sudo: ecdsaValidator,
-            },
+            plugins: { sudo: ecdsaValidator },
             kernelVersion: KERNEL_VERSION,
             address: smartAccountAddress,
         });
-        // 3. Create Client
+        const isNative = tokenAddress === '0x0000000000000000000000000000000000000000';
+        let callData;
+        let value = BigInt(0);
+        let target;
+        if (isNative) {
+            callData = "0x";
+            value = amount;
+            target = toAddress;
+        }
+        else {
+            callData = encodeFunctionData({
+                abi: USDC_ABI,
+                functionName: "transfer",
+                args: [toAddress, amount]
+            });
+            target = tokenAddress;
+        }
+        // Batch Paymaster Approval if withdrawing USDC, to allow paying gas in USDC
+        const calls = [{ to: target, value, data: callData }];
+        if (!isNative && tokenAddress.toLowerCase() === GAS_TOKEN_ADDRESS.toLowerCase()) {
+            const approveData = await this.getPaymasterApprovalCallData();
+            calls.unshift({
+                to: GAS_TOKEN_ADDRESS,
+                value: BigInt(0),
+                data: approveData
+            });
+        }
+        const encodedCallData = await account.encodeCalls(calls);
         const kernelClient = createKernelAccountClient({
             account,
             chain: CHAIN,
-            bundlerTransport: http(this.rpcUrl),
+            bundlerTransport: http(this.bundlerRpc),
             client: this.publicClient,
-            // Optional: User pays gas in MATIC or we sponsor it
         });
-        // 4. Encode the USDC transfer call
-        const callData = encodeFunctionData({
-            abi: USDC_ABI,
-            functionName: "transfer",
-            args: [toAddress, amount]
-        });
-        // 5. Send UserOp
-        const userOpHash = await kernelClient.sendUserOperation({
-            callData: await account.encodeCalls([
-                {
-                    to: usdcAddress,
-                    value: BigInt(0),
-                    data: callData,
-                },
-            ]),
-        });
-        console.log("UserOp Hash:", userOpHash);
-        // Safe wait for receipt
-        const receipt = await this.publicClient.waitForTransactionReceipt({
-            hash: userOpHash,
-        });
+        // Use the fallback sender to try Paymaster -> Native
+        const userOpHash = await this.sendUserOperation(kernelClient, encodedCallData, account);
+        const receipt = await this.publicClient.waitForTransactionReceipt({ hash: userOpHash });
         return receipt.transactionHash;
     }
 }

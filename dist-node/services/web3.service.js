@@ -1,4 +1,4 @@
-import { BrowserProvider, Contract, parseUnits } from 'ethers';
+import { BrowserProvider, Contract, parseUnits, parseEther } from 'ethers';
 import { createWalletClient, custom } from 'viem';
 import { polygon } from 'viem/chains';
 // NATIVE USDC (Circle Standard) - Used for Main Wallet, Deposits from Exchanges
@@ -104,29 +104,54 @@ export class Web3Service {
             }
         }
     }
-    async deposit(toAddress, amount) {
-        if (!this.signer)
-            await this.connect();
-        // Ensure we are on Polygon for direct deposit
+    /**
+     * Deposits any ERC20 token (USDC Native or Bridged)
+     */
+    async depositErc20(toAddress, amount, tokenAddress) {
+        if (!this.provider) {
+            this.provider = new BrowserProvider(window.ethereum);
+        }
         await this.switchToChain(137);
-        // Refresh signer after switch to avoid "underlying network changed" errors
-        this.signer = await this.provider?.getSigner();
-        const usdc = new Contract(USDC_POLYGON, USDC_ABI, this.signer);
-        const decimals = await usdc.decimals();
+        this.signer = await this.provider.getSigner();
+        const tokenContract = new Contract(tokenAddress, USDC_ABI, this.signer);
+        const decimals = await tokenContract.decimals();
         const amountUnits = parseUnits(amount, decimals);
         try {
-            const tx = await usdc.transfer(toAddress, amountUnits);
+            const tx = await tokenContract.transfer(toAddress, amountUnits);
             await tx.wait();
             return tx.hash;
         }
         catch (e) {
-            console.error(e);
-            // Catch common RPC errors
-            if (e.code === 'CALL_EXCEPTION' || e.message?.includes('estimateGas') || e.message?.includes('missing revert data')) {
-                throw new Error("Transaction failed during gas estimation. You likely have insufficient MATIC/POL for gas or insufficient USDC funds on Polygon.");
-            }
-            throw e;
+            console.error("Deposit ERC20 Failed:", e);
+            throw this.parseError(e);
         }
+    }
+    /**
+     * Deposits Native Token (POL/MATIC)
+     */
+    async depositNative(toAddress, amount) {
+        if (!this.provider) {
+            this.provider = new BrowserProvider(window.ethereum);
+        }
+        await this.switchToChain(137);
+        this.signer = await this.provider.getSigner();
+        const amountUnits = parseEther(amount);
+        try {
+            const tx = await this.signer.sendTransaction({
+                to: toAddress,
+                value: amountUnits
+            });
+            await tx.wait();
+            return tx.hash;
+        }
+        catch (e) {
+            console.error("Deposit Native Failed:", e);
+            throw this.parseError(e);
+        }
+    }
+    // Legacy wrapper for backward compatibility (defaults to Native USDC)
+    async deposit(toAddress, amount) {
+        return this.depositErc20(toAddress, amount, USDC_POLYGON);
     }
     /**
      * Special handling for Solana wallets (Phantom/Backpack)
@@ -187,6 +212,12 @@ export class Web3Service {
                 blockExplorerUrls: ["https://arbiscan.io"]
             };
         return null;
+    }
+    parseError(e) {
+        if (e.code === 'CALL_EXCEPTION' || e.message?.includes('estimateGas') || e.message?.includes('missing revert data')) {
+            return new Error("Transaction failed during gas estimation. You likely have insufficient funds (POL or USDC) on Polygon to cover the transfer.");
+        }
+        return e;
     }
 }
 export const web3Service = new Web3Service();

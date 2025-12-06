@@ -5,13 +5,18 @@ export class TradeMonitorService {
         this.processedHashes = new Set();
         this.lastFetchTime = new Map();
         this.isPolling = false;
-        this.startTimestamp = 0;
         this.deps = deps;
     }
-    async start(startTime = 0) {
+    async start(startCursor) {
         const { logger, env } = this.deps;
-        this.startTimestamp = startTime || Math.floor(Date.now() / 1000);
-        logger.info(`Initializing Monitor for ${this.deps.userAddresses.length} target wallets (Start Time: ${new Date(this.startTimestamp * 1000).toLocaleTimeString()})...`);
+        logger.info(`Initializing Monitor for ${this.deps.userAddresses.length} target wallets...`);
+        // If a startCursor is provided, initialize lastFetchTime for all traders
+        // This allows resuming from a previous state (server restart)
+        if (startCursor) {
+            this.deps.userAddresses.forEach(trader => {
+                this.lastFetchTime.set(trader, startCursor);
+            });
+        }
         // Initial sync
         await this.tick();
         // Setup robust polling
@@ -56,14 +61,14 @@ export class TradeMonitorService {
             if (!activities || !Array.isArray(activities))
                 return;
             const now = Math.floor(Date.now() / 1000);
-            // Use the greater of: Aggregation Window OR Start Time (Prevent fetching trades before bot start)
-            const effectiveCutoff = Math.max(now - Math.max(env.aggregationWindowSeconds, 600), this.startTimestamp);
+            // Increased lookback window for reliability
+            const cutoffTime = now - Math.max(env.aggregationWindowSeconds, 600);
             for (const activity of activities) {
                 if (activity.type !== 'TRADE' && activity.type !== 'ORDER_FILLED')
                     continue;
                 const activityTime = typeof activity.timestamp === 'number' ? activity.timestamp : Math.floor(new Date(activity.timestamp).getTime() / 1000);
                 // Skip old trades
-                if (activityTime < effectiveCutoff)
+                if (activityTime < cutoffTime)
                     continue;
                 // Dedup logic
                 if (this.processedHashes.has(activity.transactionHash))

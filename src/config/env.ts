@@ -45,6 +45,7 @@ export type RuntimeEnv = {
   // AA
   zeroDevRpc: string;
   zeroDevProjectId?: string;
+  zeroDevPaymasterRpc?: string; // NEW: Specific RPC for Self-Funded Paymaster
   
   // Li.Fi Monetization & Config
   lifiIntegrator: string;
@@ -151,6 +152,7 @@ export function loadEnv(): RuntimeEnv {
     // AA
     zeroDevRpc: process.env.ZERODEV_RPC || 'https://rpc.zerodev.app/api/v2/bundler/b9f9b537-8525-4b18-9cfe-9a7a6992b6df',
     zeroDevProjectId: process.env.ZERODEV_PROJECT_ID,
+    zeroDevPaymasterRpc: process.env.ZERODEV_PAYMASTER_RPC,
     
     // Li.Fi
     lifiIntegrator: process.env.LIFI_INTEGRATOR || 'BetMirror',

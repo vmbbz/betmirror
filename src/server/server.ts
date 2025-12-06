@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -338,6 +337,7 @@ app.post('/api/bot/start', async (req: any, res: any) => {
         activePositions: user.activePositions || [],
         stats: user.stats,
         zeroDevRpc: process.env.ZERODEV_RPC,
+        zeroDevPaymasterRpc: process.env.ZERODEV_PAYMASTER_RPC, // Pass Paymaster RPC from Server Env
         l2ApiCredentials: l2Creds, // Pass Credentials to Engine
         startCursor: Math.floor(Date.now() / 1000) 
       };
@@ -536,7 +536,9 @@ async function restoreBots() {
                      stats: user.stats,
                      activePositions: user.activePositions,
                      startCursor: lastTime,
-                     l2ApiCredentials: l2Creds
+                     l2ApiCredentials: l2Creds,
+                     // RESTORE PAYMASTER RPC
+                     zeroDevPaymasterRpc: process.env.ZERODEV_PAYMASTER_RPC
                  };
                  await startUserBot(user.address, config);
                  console.log(`✅ Restored Bot: ${user.address}`);

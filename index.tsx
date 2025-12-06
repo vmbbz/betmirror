@@ -1802,9 +1802,8 @@ const App = () => {
          const walletClient = await web3Service.getViemWalletClient(137);
          
          // Create Dynamic ZeroDev Service (using config/env if available)
-         const zeroDev = new ZeroDevService(process.env.ZERODEV_RPC || 'https://rpc.zerodev.app/api/v2/bundler/PROJECT_ID');
+         const zeroDev = new ZeroDevService(process.env.ZERODEV_PAYMASTER_RPC || 'https://rpc.zerodev.app/api/v3/b9f9b537-8525-4b18-9cfe-9a7a6992b6df/chain/137?selfFunded=true');
          
-         // --- CRITICAL FIX: Fetch LIVE BALANCE to ensure 100% accuracy ---
          const provider = new BrowserProvider((window as any).ethereum);
          let withdrawAmount = BigInt(0);
          let tokenAddress = USDC_POLYGON; // Default to something valid

@@ -42,12 +42,19 @@ const USDC_ABI = parseAbi([
 
 export class ZeroDevService {
   private publicClient: PublicClient;
-  private rpcUrl: string;
+  private bundlerRpc: string;
+  private paymasterRpc: string;
 
-  constructor(zeroDevRpcUrlOrId: string) {
+  constructor(zeroDevRpcUrlOrId: string, paymasterRpcUrl?: string) {
     // --- AUTO-CORRECT RPC URL ---
-    this.rpcUrl = this.normalizeRpcUrl(zeroDevRpcUrlOrId);
-    console.log(`[ZeroDev] Using RPC: ${this.rpcUrl}`);
+    this.bundlerRpc = this.normalizeRpcUrl(zeroDevRpcUrlOrId);
+    // Use explicit paymaster URL if provided, otherwise default to bundler URL
+    this.paymasterRpc = paymasterRpcUrl || this.bundlerRpc;
+    
+    console.log(`[ZeroDev] Bundler RPC: ${this.bundlerRpc}`);
+    if (paymasterRpcUrl) {
+        console.log(`[ZeroDev] Paymaster RPC: ${this.paymasterRpc}`);
+    }
 
     this.publicClient = createPublicClient({
       chain: CHAIN,
@@ -61,7 +68,7 @@ export class ZeroDevService {
       const match = input.match(uuidRegex);
       
       if (!match) {
-          console.warn("[ZeroDev] Invalid Project ID format detected. Using input as-is.");
+          // If no UUID, assume it's a full URL or fallback
           return input; 
       }
 
@@ -167,17 +174,17 @@ export class ZeroDevService {
       serializedSessionKey
     );
 
-    // 2. Create Paymaster
+    // 2. Create Paymaster with DEDICATED RPC
     const paymasterClient = createZeroDevPaymasterClient({
       chain: CHAIN,
-      transport: http(this.rpcUrl),
+      transport: http(this.paymasterRpc), // Use self-funded RPC if configured
     });
 
     // 3. Create the Kernel Client
     const kernelClient = createKernelAccountClient({
       account: sessionKeyAccount,
       chain: CHAIN,
-      bundlerTransport: http(this.rpcUrl),
+      bundlerTransport: http(this.bundlerRpc),
       client: this.publicClient as any,
       paymaster: {
         getPaymasterData(userOperation) {
@@ -196,9 +203,7 @@ export class ZeroDevService {
   }
 
   /**
-   * CLIENT SIDE: Trustless Withdrawal
-   * Handles both ERC20 (USDC) and Native (POL) withdrawals.
-   * Attempts to use Paymaster first, falls back to native gas if paymaster fails.
+   * CLIENT SIDE: Trustless Withdrawal (with Paymaster Support)
    */
   async withdrawFunds(ownerWalletClient: WalletClient, smartAccountAddress: string, toAddress: string, amount: bigint, tokenAddress: string) {
       console.log("Initiating Trustless Withdrawal...");
@@ -220,10 +225,10 @@ export class ZeroDevService {
         address: smartAccountAddress as Hex,
       });
       
-      // 3. Create Paymaster Client
+      // 3. Create Paymaster Client with DEDICATED RPC
       const paymasterClient = createZeroDevPaymasterClient({
         chain: CHAIN,
-        transport: http(this.rpcUrl),
+        transport: http(this.paymasterRpc), // Use self-funded RPC if configured
       });
 
       // 4. Detect Token Type (Native vs ERC20)
@@ -235,7 +240,7 @@ export class ZeroDevService {
 
       if (isNative) {
           // Native Transfer (POL)
-          callData = "0x"; // No data for native transfer
+          callData = "0x"; 
           value = amount;
           target = toAddress as Hex;
       } else {
@@ -255,7 +260,7 @@ export class ZeroDevService {
           const kernelClient = createKernelAccountClient({
             account,
             chain: CHAIN,
-            bundlerTransport: http(this.rpcUrl),
+            bundlerTransport: http(this.bundlerRpc),
             client: this.publicClient as any,
             paymaster: {
                 getPaymasterData(userOperation) {
@@ -285,13 +290,11 @@ export class ZeroDevService {
           console.warn("Paymaster failed (likely not whitelisted or insufficient USDC). Retrying with Native Gas...", e.message);
           
           // 6. Fallback: Standard UserOp (User pays Gas in POL)
-          // Note: User must have POL in the Smart Account for this to work.
           const kernelClientFallback = createKernelAccountClient({
             account,
             chain: CHAIN,
-            bundlerTransport: http(this.rpcUrl),
+            bundlerTransport: http(this.bundlerRpc),
             client: this.publicClient as any,
-            // No paymaster middleware = Self Funded
           });
 
           const userOpHash = await kernelClientFallback.sendUserOperation({

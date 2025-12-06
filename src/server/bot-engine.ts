@@ -1,4 +1,3 @@
-
 import { createPolymarketClient } from '../infrastructure/clob-client.factory.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
@@ -116,6 +115,7 @@ export interface BotConfig {
   activePositions?: ActivePosition[];
   stats?: UserStats; // Inject existing stats from DB
   zeroDevRpc?: string;
+  zeroDevPaymasterRpc?: string; // NEW: Optional override for Paymaster
   // Admin Credentials (Optional)
   polymarketApiKey?: string;
   polymarketApiSecret?: string;
@@ -324,7 +324,8 @@ export class BotEngine {
                throw new Error("CRITICAL: ZERODEV_RPC is missing or invalid in .env.");
           }
           
-          const aaService = new ZeroDevService(rpcUrl);
+          // Pass specific Paymaster RPC if available
+          const aaService = new ZeroDevService(rpcUrl, this.config.zeroDevPaymasterRpc);
           const { address, client: kernelClient } = await aaService.createBotClient(this.config.walletConfig.serializedSessionKey);
           
           walletAddress = address;

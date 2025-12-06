@@ -27,9 +27,10 @@ export type TradeHistoryEntry = {
   outcome: string;
   side: 'BUY' | 'SELL';
   size: number;
+  executedSize?: number;
   price: number;
   pnl?: number;
-  status: 'OPEN' | 'CLOSED' | 'SKIPPED';
+  status: 'OPEN' | 'CLOSED' | 'SKIPPED' | 'FAILED';
   txHash?: string;
   // Metadata for UI
   aiReasoning?: string;

@@ -164,7 +164,7 @@ export function loadEnv(): RuntimeEnv {
 
     // AA
     zeroDevRpc: zdRpc,
-    zeroDevPaymasterRpc: process.env.ZERODEV_PAYMASTER_RPC || zdRpc, 
+    zeroDevPaymasterRpc: process.env.ZERODEV_PAYMASTER_RPC, 
     zeroDevProjectId: process.env.ZERODEV_PROJECT_ID,
     
     // Li.Fi

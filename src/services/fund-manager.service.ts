@@ -18,6 +18,8 @@ export interface FundManagerConfig {
 
 export class FundManagerService {
   private usdcContract: Contract;
+  private lastCheckTime: number = 0;
+  private readonly THROTTLE_MS = 60 * 60 * 1000; // Check max once per hour unless forced
 
   constructor(
     private wallet: Wallet,
@@ -28,10 +30,16 @@ export class FundManagerService {
     this.usdcContract = new Contract(config.usdcContractAddress, USDC_ABI, wallet);
   }
 
-  async checkAndSweepProfits(): Promise<CashoutRecord | null> {
+  async checkAndSweepProfits(force: boolean = false): Promise<CashoutRecord | null> {
     if (!this.config.enabled || !this.config.destinationAddress || !this.config.maxRetentionAmount) {
       return null;
     }
+
+    // THROTTLING: Avoid hitting RPC limits with frequent balance checks
+    if (!force && Date.now() - this.lastCheckTime < this.THROTTLE_MS) {
+        return null;
+    }
+    this.lastCheckTime = Date.now();
 
     try {
       const balanceBigInt = await this.usdcContract.balanceOf(this.wallet.address);

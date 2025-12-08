@@ -32,6 +32,10 @@ const USDC_ABI = [
 export class TradeExecutorService {
   private readonly deps: TradeExecutorDeps;
   private usdcContract: Contract;
+  
+  // CACHE: Store whale balances to avoid API latency on every tick
+  private balanceCache: Map<string, { value: number; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 Minutes
 
   constructor(deps: TradeExecutorDeps) {
     this.deps = deps;
@@ -105,7 +109,7 @@ export class TradeExecutorService {
     try {
       const yourUsdBalance = await getUsdBalanceApprox(client.wallet, env.usdcContractAddress);
       
-      // Use robust HTTP get for whale balance
+      // Use cached trader balance to speed up execution
       const traderBalance = await this.getTraderBalance(signal.trader);
 
       const sizing = computeProportionalSizing({
@@ -156,13 +160,24 @@ export class TradeExecutorService {
   }
 
   private async getTraderBalance(trader: string): Promise<number> {
+    // Check Cache
+    const cached = this.balanceCache.get(trader);
+    if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
+        return cached.value;
+    }
+
     try {
       // Use the robust httpGet with retry
       const positions: Position[] = await httpGet<Position[]>(
         `https://data-api.polymarket.com/positions?user=${trader}`,
       );
       const totalValue = positions.reduce((sum, pos) => sum + (pos.currentValue || pos.initialValue || 0), 0);
-      return Math.max(1000, totalValue);
+      const val = Math.max(1000, totalValue);
+      
+      // Update Cache
+      this.balanceCache.set(trader, { value: val, timestamp: Date.now() });
+      
+      return val;
     } catch {
       return 10000; // Fallback whale size on API fail
     }

@@ -132,7 +132,8 @@ export class BotEngine {
             const funderAddr = this.exchange.getFunderAddress();
             if (!funderAddr) return false;
             const balance = await this.exchange.fetchBalance(funderAddr);
-            return balance >= 0.1; 
+            console.log(`💰 Balance: ${balance}`);
+            return balance >= 0.01; 
         } catch (e) {
             return false;
         }

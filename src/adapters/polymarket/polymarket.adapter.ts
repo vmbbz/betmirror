@@ -77,7 +77,18 @@ export class PolymarketAdapter implements IExchangeAdapter {
             builderApiPassphrase?: string;
         },
         private logger: Logger
-    ) {}
+    ) {
+        // --- STEALTH MODE: Bypass Cloudflare WAF ---
+        // The SDK sets a default User-Agent that gets blocked. We override it globally here.
+        axios.interceptors.request.use(request => {
+            request.headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+            request.headers['Referer'] = 'https://polymarket.com/';
+            request.headers['Origin'] = 'https://polymarket.com';
+            request.headers['Accept'] = 'application/json, text/plain, */*';
+            request.headers['Accept-Language'] = 'en-US,en;q=0.9';
+            return request;
+        });
+    }
 
     async initialize(): Promise<void> {
         this.logger.info(`[${this.exchangeName}] Initializing Adapter...`);

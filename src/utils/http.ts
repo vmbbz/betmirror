@@ -3,13 +3,24 @@ import axios, { AxiosRequestConfig } from 'axios';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Create a clean axios instance for data API calls (no browser headers)
+export const cleanAxios = axios.create({
+    timeout: 10000,
+    headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
+});
+
 /**
  * Robust HTTP GET with Exponential Backoff
  * Handles ECONNRESET (Socket Hang Up), Timeouts, and 5xx errors automatically.
  */
 export async function httpGet<T = unknown>(url: string, config?: AxiosRequestConfig, retries = 3): Promise<T> {
   try {
-    const res = await axios.get<T>(url, {
+    // Use clean axios for data API calls, regular axios for others
+    const axiosInstance = url.includes('data-api.polymarket.com') ? cleanAxios : axios;
+    const res = await axiosInstance.get<T>(url, {
       ...config,
       timeout: 10000 // 10s default timeout
     });
@@ -43,7 +54,9 @@ export async function httpPost<T = unknown>(
   retries = 2
 ): Promise<T> {
   try {
-    const res = await axios.post<T>(url, body, {
+    // Use clean axios for data API calls, regular axios for others
+    const axiosInstance = url.includes('data-api.polymarket.com') ? cleanAxios : axios;
+    const res = await axiosInstance.post<T>(url, body, {
         ...config,
         timeout: 15000
     });

@@ -269,17 +269,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 // Override proxy settings
                 instance.defaults.proxy = axios.defaults.proxy;
                 
-                // Only apply browser headers to CLOB client instances
-                // Check if this instance is likely used for CLOB by checking its base URL or context
-                const isClobInstance = instance.defaults?.baseURL?.includes('clob.polymarket.com') ||
-                                     instance.defaults?.headers?.common?.['POLY_API_KEY'] ||
-                                     instance.defaults?.headers?.common?.['POLY_SIGNATURE'];
-                
-                if (isClobInstance) {
-                    (Object.keys(browserHeaders) as Array<keyof typeof browserHeaders>).forEach(key => {
-                        instance.defaults.headers.common[key] = browserHeaders[key];
-                    });
-                }
+                // Apply browser headers to all instances in the CLOB client
+                // We're being called from patchClient which is only used for CLOB instances
+                (Object.keys(browserHeaders) as Array<keyof typeof browserHeaders>).forEach(key => {
+                    instance.defaults.headers.common[key] = browserHeaders[key];
+                });
                 
                 // Ensure interceptors are applied for cookie handling
                 if (!instance.interceptors) {

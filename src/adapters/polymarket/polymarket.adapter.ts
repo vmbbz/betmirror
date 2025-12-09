@@ -14,12 +14,12 @@ import { Logger } from '../../utils/logger.util.js';
 import axios, { AxiosInstance } from 'axios';
 import { CookieJar } from 'tough-cookie';
 import * as crypto from 'crypto'; 
-import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // --- CONSTANTS ---
 const USDC_BRIDGED_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const POLYMARKET_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
 const HOST_URL = 'https://clob.polymarket.com';
+// WebShare Rotating Proxy
 const FALLBACK_PROXY = 'http://toagonef-rotate:1t19is7izars@p.webshare.io:80';
 
 const USDC_ABI = [
@@ -66,7 +66,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private zdService?: ZeroDevService;
     private usdcContract?: Contract;
     private cookieJar: CookieJar;
-    private httpsAgent: any;
     
     // Stored credentials for manual fallback
     private apiCreds?: { key: string; secret: string; passphrase: string };
@@ -146,13 +145,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
         
         if (proxyUrl && proxyUrl.startsWith('http')) {
             try {
-                // Use HttpsProxyAgent for better compatibility with node-fetch/axios
-                this.httpsAgent = new HttpsProxyAgent(proxyUrl);
-                
-                // Set global axios defaults
-                axios.defaults.httpsAgent = this.httpsAgent;
-                // Also set proxy config for axios (some versions prefer this)
                 const url = new URL(proxyUrl);
+                // Standard Axios Proxy Config
                 axios.defaults.proxy = {
                     protocol: url.protocol.replace(':', ''),
                     host: url.hostname,
@@ -170,6 +164,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
         
         // --- MANUAL COOKIE MANAGEMENT INTERCEPTORS ---
+        // This avoids axios-cookiejar-support conflicts with proxies
         axios.interceptors.request.use(async (config) => {
             if (config.url && config.url.includes('polymarket.com')) {
                 config.headers['User-Agent'] = STEALTH_UA;
@@ -177,7 +172,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 config.headers['Referer'] = 'https://polymarket.com/';
                 
                 try {
-                    // Attach cookies from tough-cookie jar manually
+                    // Manually attach cookies from jar
                     const cookieString = await this.cookieJar.getCookieString(config.url);
                     if (cookieString) {
                         config.headers['Cookie'] = cookieString;
@@ -201,7 +196,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             }
             return response;
         }, async (error) => {
-            // Capture cookies even on 403 errors (Cloudflare challenge cookies)
+            // Capture cookies on 403s (Cloudflare challenges often set cookies here)
             if (error.response && error.response.headers && error.response.headers['set-cookie']) {
                 const cookies = error.response.headers['set-cookie'];
                 const url = error.config?.url;
@@ -242,13 +237,12 @@ export class PolymarketAdapter implements IExchangeAdapter {
     
     private patchClient(client: any) {
         try {
+            // Force SDK internals to use global axios defaults (which have our proxy and interceptors)
             if (client.axiosInstance) {
-                 client.axiosInstance.defaults.httpsAgent = this.httpsAgent;
                  client.axiosInstance.defaults.proxy = axios.defaults.proxy;
                  client.axiosInstance.defaults.headers['User-Agent'] = axios.defaults.headers.common['User-Agent'];
             }
             if (client.httpClient) {
-                 client.httpClient.defaults.httpsAgent = this.httpsAgent;
                  client.httpClient.defaults.proxy = axios.defaults.proxy;
                  client.httpClient.defaults.headers['User-Agent'] = axios.defaults.headers.common['User-Agent'];
             }
@@ -388,7 +382,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
         if (!this.client) throw new Error("Client not authenticated");
         
         // MANUAL AXIOS FALLBACK for Orderbook to avoid UA leak in SDK
-        // The SDK's getOrderBook might be simple enough to replicate
         try {
              // Explicitly use the global axios which has the cookie interceptors attached
              const res = await axios.get(`${HOST_URL}/book`, { 
@@ -399,7 +392,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                  asks: res.data.asks.map((a: any) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
              };
         } catch(e) {
-             // Fallback to SDK if manual fails, though manual is preferred for proxy
+             // Fallback to SDK if manual fails
              const book = await this.client.getOrderBook(tokenId);
              return {
                 bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
@@ -516,7 +509,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 let response: any;
                 
                 try {
-                    // 2. Try Standard SDK Post (Now patched to use cookies/proxy)
+                    // 2. Try Standard SDK Post (Now patched to use cookies/proxy via global axios defaults)
                     response = await this.client.postOrder(signedOrder, OrderType.FOK);
                 } catch(postError: any) {
                     // 3. Fallback: Manual HTTP POST

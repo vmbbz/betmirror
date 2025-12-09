@@ -232,18 +232,80 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
     
     private patchClient(client: any) {
-        try {
-            if (client.axiosInstance) {
-                 client.axiosInstance.defaults.proxy = axios.defaults.proxy;
-                 client.axiosInstance.defaults.headers['User-Agent'] = axios.defaults.headers.common['User-Agent'];
+        const STEALTH_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        const browserHeaders: Record<string, string> = {
+            'User-Agent': STEALTH_UA,
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Origin': 'https://polymarket.com',
+            'Referer': 'https://polymarket.com/',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site'
+        };
+
+        const patchAxiosInstance = (instance: any) => {
+            if (instance && instance.defaults) {
+                // Override proxy settings
+                instance.defaults.proxy = axios.defaults.proxy;
+                
+                // Override all browser headers - type-safe iteration
+                (Object.keys(browserHeaders) as Array<keyof typeof browserHeaders>).forEach(key => {
+                    instance.defaults.headers.common[key] = browserHeaders[key];
+                });
+                
+                // Ensure interceptors are applied for cookie handling
+                if (!instance.interceptors) {
+                    instance.interceptors = {
+                        request: { use: () => {} },
+                        response: { use: () => {} }
+                    };
+                }
             }
-            if (client.httpClient) {
-                 client.httpClient.defaults.proxy = axios.defaults.proxy;
-                 client.httpClient.defaults.headers['User-Agent'] = axios.defaults.headers.common['User-Agent'];
-            }
-        } catch(e) {
-            console.warn("Failed to patch ClobClient internals");
+        };
+
+        // Patch known axios instances
+        if (client.axiosInstance) {
+            patchAxiosInstance(client.axiosInstance);
         }
+        if (client.httpClient) {
+            patchAxiosInstance(client.httpClient);
+        }
+        if (client.request) {
+            patchAxiosInstance(client.request);
+        }
+        if (client.http) {
+            patchAxiosInstance(client.http);
+        }
+
+        // Deep patch - recursively search for axios instances
+        const deepPatch = (obj: any, depth = 0) => {
+            if (depth > 5) return; // Prevent infinite recursion
+            
+            if (obj && typeof obj === 'object') {
+                Object.keys(obj).forEach(key => {
+                    const value = obj[key];
+                    
+                    // Check if this looks like an axios instance
+                    if (value && typeof value === 'object' && 
+                        (value.defaults || value.get || value.post || value.put || value.delete)) {
+                        patchAxiosInstance(value);
+                    }
+                    
+                    // Recursively search
+                    if (typeof value === 'object' && !Array.isArray(value)) {
+                        deepPatch(value, depth + 1);
+                    }
+                });
+            }
+        };
+        
+        deepPatch(client);
     }
 
     async authenticate(): Promise<void> {
@@ -437,13 +499,27 @@ export class PolymarketAdapter implements IExchangeAdapter {
         const hmac = crypto.createHmac('sha256', this.apiCreds.secret);
         const signature = hmac.update(sigString).digest('base64');
         
+        const STEALTH_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        
         return {
             'POLY_API_KEY': this.apiCreds.key,
             'POLY_TIMESTAMP': timestamp.toString(),
             'POLY_SIGNATURE': signature,
             'POLY_PASSPHRASE': this.apiCreds.passphrase,
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'User-Agent': STEALTH_UA,
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Origin': 'https://polymarket.com',
+            'Referer': 'https://polymarket.com/',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site'
         };
     }
 

@@ -4,7 +4,7 @@ import {
 } from '../interfaces.js';
 import { OrderBook } from '../../domain/market.types.js';
 import { TradeSignal } from '../../domain/trade.types.js';
-import { ClobClient, Chain, OrderType, Side, UserMarketOrder } from '@polymarket/clob-client';
+import { ClobClient, Chain, OrderType, Side } from '@polymarket/clob-client';
 import { Wallet, JsonRpcProvider, Contract, MaxUint256, formatUnits, parseUnits } from 'ethers';
 import { ZeroDevService } from '../../services/zerodev.service.js';
 import { ProxyWalletConfig } from '../../domain/wallet.types.js';
@@ -79,7 +79,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
     ) {}
 
     async initialize(): Promise<void> {
-        this.logger.info(`[${this.exchangeName}] Initializing Adapter (Stealth SDK Mode)...`);
+        this.logger.info(`[${this.exchangeName}] Initializing Adapter (Pure SDK Mode)...`);
         const provider = new JsonRpcProvider(this.config.rpcUrl);
         
         if (this.config.walletConfig.type === 'SMART_ACCOUNT') {
@@ -121,29 +121,18 @@ export class PolymarketAdapter implements IExchangeAdapter {
         return true;
     }
 
+    // Helper: Fix Base64URL encoding issues
     private base64UrlToBase64(base64Url: string): string {
         return base64Url.replace(/-/g, '+').replace(/_/g, '/');
     }
 
     async authenticate(): Promise<void> {
-        // --- CUSTOM AXIOS INSTANCE ---
-        // We create a custom axios instance with browser headers to bypass Cloudflare
-        const stealthAxios = axios.create({
-            timeout: 30000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Origin': 'https://polymarket.com',
-                'Referer': 'https://polymarket.com/',
-                'Accept': 'application/json',
-                'Accept-Language': 'en-US,en;q=0.9',
-            }
-        });
-
         let apiCreds = this.config.l2ApiCredentials;
 
         if (!apiCreds || !apiCreds.key) {
             this.logger.info('🤝 Performing L2 Handshake...');
             
+            // Handshake Client
             const tempClient = new ClobClient(
                 HOST_URL,
                 Chain.POLYGON,
@@ -152,11 +141,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 SignatureType.EOA,
                 this.funderAddress
             );
-            
-            // Patch internal axios if possible
-            try {
-                (tempClient as any).axiosInstance = stealthAxios;
-            } catch(e) {}
 
             try {
                 const rawCreds = await tempClient.createOrDeriveApiKey();
@@ -195,6 +179,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             });
         }
         
+        // Normalize secret to standard Base64
         const normalizedCreds = {
             ...apiCreds,
             secret: this.base64UrlToBase64(apiCreds.secret)
@@ -211,16 +196,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
             undefined,
             builderConfig
         );
-        
-        // --- CRITICAL PATCH ---
-        // Force the client to use our stealth axios instance
-        // The SDK property is usually 'axiosInstance' or 'httpClient' depending on version
-        try {
-            (this.client as any).axiosInstance = stealthAxios;
-            (this.client as any).httpClient = stealthAxios; // Cover both bases
-        } catch(e) {
-            this.logger.warn("Could not patch ClobClient axios instance");
-        }
         
         await this.ensureAllowance();
     }
@@ -278,7 +253,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
     async getOrderBook(tokenId: string): Promise<OrderBook> {
         if (!this.client) throw new Error("Client not authenticated");
-        // Using standard SDK call, but with patched axios
+        // Using standard SDK call
         const book = await this.client.getOrderBook(tokenId);
         return {
             bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
@@ -289,12 +264,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
     async fetchPublicTrades(address: string, limit: number = 20): Promise<TradeSignal[]> {
         try {
             const url = `https://data-api.polymarket.com/activity?user=${address}&limit=${limit}`;
-            // Use our own stealth axios here too
-            const res = await axios.get<PolyActivityResponse[]>(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            });
+            // Standard Axios call (NO Proxy)
+            const res = await axios.get<PolyActivityResponse[]>(url);
             
             if (!res.data || !Array.isArray(res.data)) return [];
 
@@ -368,17 +339,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
                 if (orderSize <= 0) break;
 
-                const orderArgs: UserMarketOrder = {
+                const orderArgs = {
                     side: orderSide,
                     tokenID: params.tokenId,
-                    amount: orderSize,
-                    orderType: OrderType.FOK, // Use FOK
+                    size: orderSize, // CORRECT: 'size' is number of shares, 'amount' is cash value (deprecated/variant)
                     price: levelPrice,
-                    feeRateBps: 0 
+                    feeRateBps: 0,
+                    orderType: OrderType.FOK // Explicitly set OrderType here for UserOrder type compat
                 };
 
-                // 3. Execute using atomic CreateAndPost
-                const response = await this.client.createAndPostMarketOrder(orderArgs);
+                // 3. Execute using atomic createAndPostOrder
+                const response = await this.client.createAndPostOrder(orderArgs);
 
                 if (response.success && response.orderID) {
                     remaining -= orderValue;

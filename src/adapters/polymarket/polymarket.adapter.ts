@@ -134,14 +134,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private applyProxySettings() {
         const proxyUrl = this.config.proxyUrl || FALLBACK_PROXY;
         
-        // Browser Emulation Headers
+        // Browser Emulation Headers (only for CLOB requests via interceptors)
         const STEALTH_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-        
-        axios.defaults.headers.common['User-Agent'] = STEALTH_UA;
-        axios.defaults.headers.common['Accept'] = 'application/json, text/plain, */*';
-        axios.defaults.headers.common['Accept-Language'] = 'en-US,en;q=0.9';
-        axios.defaults.headers.common['Accept-Encoding'] = 'gzip, deflate, br';
-        axios.defaults.headers.common['Connection'] = 'keep-alive';
         
         if (proxyUrl && proxyUrl.startsWith('http')) {
             try {
@@ -166,12 +160,23 @@ export class PolymarketAdapter implements IExchangeAdapter {
         // --- MANUAL COOKIE INTERCEPTORS ---
         // Manually bridge tough-cookie to axios headers to avoid conflicts
         
-        // Request: Inject Cookie Header
+        // Request: Inject Cookie Header and Browser Headers (CLOB only)
         axios.interceptors.request.use(async (config) => {
-            if (config.url && config.url.includes('polymarket.com')) {
+            if (config.url && config.url.includes('clob.polymarket.com')) {
+                // Apply full browser headers for CLOB requests
                 config.headers['User-Agent'] = STEALTH_UA;
+                config.headers['Accept'] = 'application/json, text/plain, */*';
+                config.headers['Accept-Language'] = 'en-US,en;q=0.9';
+                config.headers['Accept-Encoding'] = 'gzip, deflate, br';
+                config.headers['Connection'] = 'keep-alive';
                 config.headers['Origin'] = 'https://polymarket.com';
                 config.headers['Referer'] = 'https://polymarket.com/';
+                config.headers['sec-ch-ua'] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"';
+                config.headers['sec-ch-ua-mobile'] = '?0';
+                config.headers['sec-ch-ua-platform'] = '"Windows"';
+                config.headers['sec-fetch-dest'] = 'empty';
+                config.headers['sec-fetch-mode'] = 'cors';
+                config.headers['sec-fetch-site'] = 'same-site';
                 
                 try {
                     // Promisify getCookieString
@@ -182,6 +187,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     }
                 } catch(e) { /* ignore */ }
             }
+            // For data-api.polymarket.com, use minimal headers (let axios defaults handle it)
             return config;
         });
 

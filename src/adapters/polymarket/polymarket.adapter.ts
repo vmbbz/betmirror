@@ -7,21 +7,16 @@ import { TradeSignal } from '../../domain/trade.types.js';
 import { ClobClient, Chain, OrderType, Side } from '@polymarket/clob-client';
 import { Wallet, JsonRpcProvider, Contract, MaxUint256, formatUnits, parseUnits } from 'ethers';
 import { ZeroDevService } from '../../services/zerodev.service.js';
-import { ProxyWalletConfig, L2ApiCredentials } from '../../domain/wallet.types.js';
+import { ProxyWalletConfig } from '../../domain/wallet.types.js';
 import { User } from '../../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { Logger } from '../../utils/logger.util.js';
 import axios from 'axios';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // --- CONSTANTS ---
 const USDC_BRIDGED_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const POLYMARKET_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
 const HOST_URL = 'https://clob.polymarket.com';
-
-// DEDICATED STATIC RESIDENTIAL PROXY (WebShare)
-// Format: http://user:pass@ip:port
-const PROXY_URL = 'http://toagonef:1t19is7izars@142.111.48.253:7030';
 
 const USDC_ABI = [
   'function allowance(address owner, address spender) view returns (uint256)',
@@ -73,7 +68,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             rpcUrl: string;
             walletConfig: ProxyWalletConfig;
             userId: string;
-            l2ApiCredentials?: L2ApiCredentials;
+            l2ApiCredentials?: any;
             zeroDevRpc?: string;
             zeroDevPaymasterRpc?: string;
             builderApiKey?: string;
@@ -84,7 +79,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
     ) {}
 
     async initialize(): Promise<void> {
-        this.logger.info(`[${this.exchangeName}] Initializing Adapter (Dedicated Proxy Mode)...`);
+        this.logger.info(`[${this.exchangeName}] Initializing Adapter (Pure SDK Mode)...`);
         const provider = new JsonRpcProvider(this.config.rpcUrl);
         
         if (this.config.walletConfig.type === 'SMART_ACCOUNT') {
@@ -126,30 +121,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
         return true;
     }
 
+    // Helper: Fix Base64URL encoding issues
     private base64UrlToBase64(base64Url: string): string {
         return base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    }
-    
-    // Inject Dedicated Proxy Agent into Client
-    private applyProxy(client: ClobClient) {
-        try {
-            const agent = new HttpsProxyAgent(PROXY_URL);
-            
-            // Try to patch known internal axios locations
-            if ((client as any).axiosInstance) {
-                (client as any).axiosInstance.defaults.httpsAgent = agent;
-                (client as any).axiosInstance.defaults.proxy = false; 
-            }
-            
-            if ((client as any).httpClient) {
-                 (client as any).httpClient.defaults.httpsAgent = agent;
-                 (client as any).httpClient.defaults.proxy = false;
-            }
-            
-            this.logger.info("🛡️ Dedicated Proxy Injected");
-        } catch (e) {
-            this.logger.warn("Failed to inject proxy into SDK");
-        }
     }
 
     async authenticate(): Promise<void> {
@@ -158,6 +132,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
         if (!apiCreds || !apiCreds.key) {
             this.logger.info('🤝 Performing L2 Handshake...');
             
+            // Handshake Client
             const tempClient = new ClobClient(
                 HOST_URL,
                 Chain.POLYGON,
@@ -166,8 +141,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 SignatureType.EOA,
                 this.funderAddress
             );
-            
-            this.applyProxy(tempClient);
 
             try {
                 const rawCreds = await tempClient.createOrDeriveApiKey();
@@ -206,6 +179,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             });
         }
         
+        // Normalize secret to standard Base64
         const normalizedCreds = {
             ...apiCreds,
             secret: this.base64UrlToBase64(apiCreds.secret)
@@ -222,8 +196,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
             undefined,
             builderConfig
         );
-        
-        this.applyProxy(this.client);
         
         await this.ensureAllowance();
     }
@@ -281,7 +253,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
     async getOrderBook(tokenId: string): Promise<OrderBook> {
         if (!this.client) throw new Error("Client not authenticated");
-        // Ensure proxy is used
+        // Using standard SDK call
         const book = await this.client.getOrderBook(tokenId);
         return {
             bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
@@ -292,12 +264,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
     async fetchPublicTrades(address: string, limit: number = 20): Promise<TradeSignal[]> {
         try {
             const url = `https://data-api.polymarket.com/activity?user=${address}&limit=${limit}`;
-            // Use dedicated proxy
-            const agent = new HttpsProxyAgent(PROXY_URL);
-            const res = await axios.get<PolyActivityResponse[]>(url, {
-                httpsAgent: agent,
-                proxy: false
-            });
+            // Standard Axios call (NO Proxy)
+            const res = await axios.get<PolyActivityResponse[]>(url);
             
             if (!res.data || !Array.isArray(res.data)) return [];
 
@@ -335,8 +303,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
         const maxRetries = 3;
         let lastOrderId = "";
 
+        // Retry Loop for Order Placement
         while (remaining >= 0.50 && retryCount < maxRetries) { 
             try {
+                // 1. Fetch Liquidity using SDK
                 const currentOrderBook = await this.client.getOrderBook(params.tokenId);
                 const currentLevels = isBuy ? currentOrderBook.asks : currentOrderBook.bids;
 
@@ -345,6 +315,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                      break; 
                 }
 
+                // 2. Determine Price/Size
                 const level = currentLevels[0];
                 const levelPrice = parseFloat(level.price);
 
@@ -368,15 +339,16 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
                 if (orderSize <= 0) break;
 
-                const orderArgs: any = {
-                    tokenID: params.tokenId,
+                const orderArgs = {
                     side: orderSide,
+                    tokenID: params.tokenId,
+                    size: orderSize, // CORRECT: 'size' is number of shares, 'amount' is cash value (deprecated/variant)
                     price: levelPrice,
-                    size: orderSize, 
                     feeRateBps: 0,
-                    orderType: OrderType.FOK 
+                    orderType: OrderType.FOK // Explicitly set OrderType here for UserOrder type compat
                 };
 
+                // 3. Execute using atomic createAndPostOrder
                 const response = await this.client.createAndPostOrder(orderArgs);
 
                 if (response.success && response.orderID) {
@@ -398,6 +370,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 retryCount++;
             }
             
+            // Minimal jitter for safety
             await new Promise(r => setTimeout(r, 1000));
         }
         

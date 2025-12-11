@@ -5,12 +5,13 @@ export class AiAgentService {
     }
     async analyzeTrade(marketQuestion, tradeSide, outcome, size, price, riskProfile = 'balanced', apiKey // Optional Override
     ) {
-        // Use provided key, or fall back to process.env, or fail
+        // Use provided key, or fall back to process.env
         const keyToUse = apiKey || process.env.API_KEY;
+        // FIX: If no API key is provided, bypass AI and allow the trade directly.
         if (!keyToUse) {
             return {
-                shouldCopy: false,
-                reasoning: "Missing Gemini API Key. Please add it in settings or env.",
+                shouldCopy: true,
+                reasoning: "AI Bypass: No API Key provided. Trade allowed.",
                 riskScore: 0
             };
         }
@@ -52,7 +53,9 @@ export class AiAgentService {
         }
         catch (error) {
             console.error("AI Analysis failed:", error);
-            // Fail safe: If AI fails, we default to blocking the trade in Conservative mode, but allowing in others if critical
+            // Fail safe: If AI fails (e.g. quota, network), we default to blocking the trade in Conservative mode, but allowing in others if critical
+            // However, if the error is specifically about auth/key despite our check, we might want to fail open or closed depending on preference.
+            // Current logic: Fail open on degen, closed on others.
             const fallbackDecision = riskProfile === 'degen';
             return {
                 shouldCopy: fallbackDecision,

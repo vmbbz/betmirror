@@ -1,4 +1,3 @@
-
 import { RuntimeEnv } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 import { TradeSignal } from '../domain/trade.types.js';
@@ -23,6 +22,12 @@ export class TradeMonitorService {
 
   constructor(deps: TradeMonitorDeps) {
     this.deps = deps;
+  }
+
+  // --- DYNAMIC CONFIG UPDATE ---
+  updateTargets(newTargets: string[]) {
+      this.deps.userAddresses = newTargets;
+      this.deps.logger.info(`🎯 Monitor target list updated to ${newTargets.length} wallets.`);
   }
 
   async start(startCursor?: number): Promise<void> {

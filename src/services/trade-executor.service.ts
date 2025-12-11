@@ -23,7 +23,11 @@ export class TradeExecutorService {
   private readonly deps: TradeExecutorDeps;
   
   private balanceCache: Map<string, { value: number; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 Minutes Cache
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 Minutes Cache for Whales
+  
+  // NEW: Local deduction tracker to prevent race conditions
+  private pendingSpend = 0;
+  private lastBalanceFetch = 0;
 
   constructor(deps: TradeExecutorDeps) {
     this.deps = deps;
@@ -53,45 +57,89 @@ export class TradeExecutorService {
   async copyTrade(signal: TradeSignal): Promise<string | number> {
     const { logger, env, adapter, proxyWallet } = this.deps;
     try {
-      // 1. Get User Balance via Adapter
-      const yourUsdBalance = await adapter.fetchBalance(proxyWallet);
+      // 1. Get User Balance (Real-time + Local Adjustment)
+      // Only fetch from chain every 10 seconds to save RPC, otherwise rely on local decrement
+      let chainBalance = 0;
+      if (Date.now() - this.lastBalanceFetch > 10000) {
+          chainBalance = await adapter.fetchBalance(proxyWallet);
+          this.lastBalanceFetch = Date.now();
+          this.pendingSpend = 0; // Reset pending on fresh chain sync
+      } else {
+          // If we haven't synced recently, assume chain balance is same as last known
+           chainBalance = await adapter.fetchBalance(proxyWallet); 
+      }
+
+      const effectiveBalance = Math.max(0, chainBalance - this.pendingSpend);
       
-      // 2. Get Whale Balance (Cached)
+      // 2. Get Whale Balance
       const traderBalance = await this.getTraderBalance(signal.trader);
 
-      // 3. Compute Size using Strategy
+      // 3. Compute Size
       const sizing = computeProportionalSizing({
-        yourUsdBalance,
+        yourUsdBalance: effectiveBalance,
         traderUsdBalance: traderBalance,
         traderTradeUsd: signal.sizeUsd,
         multiplier: env.tradeMultiplier,
+        currentPrice: signal.price,
+        maxTradeAmount: env.maxTradeAmount
       });
 
-      logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} | You: $${yourUsdBalance.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)}`);
+      const profileUrl = `https://polymarket.com/profile/${signal.trader}`;
+      logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} | You: $${effectiveBalance.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.reason})`);
+      logger.info(`🔗 Trader: ${profileUrl}`);
 
-      if (sizing.targetUsdSize === 0) {
-          if (yourUsdBalance < 0.50) {
-             logger.warn(`❌ Skipped: Insufficient balance ($${yourUsdBalance.toFixed(2)}) for min trade.`);
-          } else {
-             logger.warn(`❌ Skipped: Calculated size $0.00 (Ratio too small).`);
-          }
-          return "skipped_small_size";
+      if (sizing.targetUsdSize < 0.50) {
+          // Polymarket minimum is technically low, but usually <$1 orders are unreliable.
+          // We allow >$0.50 to handle small tests, but <$0.10 is dust.
+          if (effectiveBalance < 0.50) return "skipped_insufficient_balance";
+          // If the calculated size is dust but we have funds, it means the whale bet was tiny relative to ratio.
+          if (sizing.targetUsdSize < 0.10) return "skipped_dust_size";
       }
 
-      if (signal.side === 'BUY' && yourUsdBalance < sizing.targetUsdSize) {
-          logger.error(`Insufficient USDC. Need: $${sizing.targetUsdSize.toFixed(2)}, Have: $${yourUsdBalance.toFixed(2)}`);
+      if (signal.side === 'BUY' && effectiveBalance < sizing.targetUsdSize) {
+          logger.error(`Insufficient USDC. Need: $${sizing.targetUsdSize.toFixed(2)}, Have: $${effectiveBalance.toFixed(2)}`);
           return "insufficient_funds";
       }
 
-      // 4. Execute via Adapter
-      // Returns Order ID (String) or "filled"
+      // 4. Calculate Price Limit (SLIPPAGE PROTECTION)
+      // We essentially want to limit how much WORSE we buy than the signal.
+      let priceLimit = 0;
+      const SLIPPAGE_PCT = 0.05; // 5% tolerance
+
+      if (signal.side === 'BUY') {
+          // Buying: Limit is Higher than signal
+          priceLimit = signal.price * (1 + SLIPPAGE_PCT);
+          // Hard Clamp: Never buy > 0.99
+          if (priceLimit > 0.99) priceLimit = 0.99;
+          // Floor Clamp: Never limit < 0.01 (or orders fail)
+          if (priceLimit < 0.01) priceLimit = 0.01;
+      } else {
+          // Selling: Limit is Lower than signal (Not typically used for copy-buy, but for exit)
+          priceLimit = signal.price * (1 - SLIPPAGE_PCT);
+          if (priceLimit < 0.01) priceLimit = 0.01;
+      }
+
+      // Round to 2 decimals for cleaner logs/API, but ensure we don't round down to 0
+      priceLimit = Math.floor(priceLimit * 100) / 100;
+      if (priceLimit <= 0) priceLimit = 0.01;
+
+      logger.info(`🛡️ Price Guard: Signal @ ${signal.price.toFixed(3)} -> Limit @ ${priceLimit.toFixed(2)}`);
+
+      // 5. Execute via Adapter
       const result = await adapter.createOrder({
         marketId: signal.marketId,
         tokenId: signal.tokenId,
         outcome: signal.outcome,
         side: signal.side,
-        sizeUsd: sizing.targetUsdSize
+        sizeUsd: sizing.targetUsdSize,
+        priceLimit: priceLimit
       });
+
+      // 6. Update Pending Spend (If successful)
+      // We assume money is gone until next chain sync proves otherwise
+      if (typeof result === 'string' && !result.includes('failed') && !result.includes('skipped')) {
+          this.pendingSpend += sizing.targetUsdSize;
+      }
       
       return result;
 

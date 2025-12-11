@@ -1,32 +1,52 @@
 export function computeProportionalSizing(input) {
-    const { yourUsdBalance, traderUsdBalance, traderTradeUsd, multiplier } = input;
+    const { yourUsdBalance, traderUsdBalance, traderTradeUsd, multiplier, currentPrice, maxTradeAmount } = input;
+    // 0. Safety: Valid Price
+    const price = Math.max(0.01, currentPrice); // Prevent div by zero
     // 1. Calculate raw ratio
     // We use a minimum denominator of 1 to avoid division by zero
     const denom = Math.max(1, traderUsdBalance + Math.max(0, traderTradeUsd));
     const ratio = Math.max(0, yourUsdBalance / denom);
-    // 2. Calculate raw target size
+    // 2. Calculate raw target size based on proportion
     const base = Math.max(0, traderTradeUsd * ratio);
     let targetUsdSize = Math.max(0, base * Math.max(0, multiplier));
-    // 3. Smart Floor Logic (World Class Enhancement)
-    // Polymarket requires a minimum order size (usually $1 or 5 shares).
-    // We lower this to $0.50 to allow for micro-testing with small wallets ($2).
-    // WARNING: This drastically increases risk for small wallets (betting 25% of port instead of 1%),
-    // but it is necessary for the bot to function during testing.
-    const MIN_ORDER_SIZE = 0.50;
-    if (targetUsdSize > 0 && targetUsdSize < MIN_ORDER_SIZE) {
-        if (yourUsdBalance >= MIN_ORDER_SIZE) {
-            // User has enough for a min bet, so we round up
-            // This allows small wallets to still copy whales (albeit with higher risk ratio)
-            targetUsdSize = MIN_ORDER_SIZE;
+    let reason = "proportional";
+    // 3. THE "SMART MATCH" LOGIC
+    // A. The Hard Floor ($1.00)
+    // Polymarket APIs typically reject orders < $1 (Dust). 
+    // If the proportional math says "$0.05", we boost it to "$1.00" so the user actually participates.
+    const SYSTEM_MIN_ORDER = 1.00;
+    if (targetUsdSize < SYSTEM_MIN_ORDER) {
+        if (yourUsdBalance >= SYSTEM_MIN_ORDER) {
+            targetUsdSize = SYSTEM_MIN_ORDER;
+            reason = "floor_boost_min_1";
         }
         else {
-            // User is too poor even for the min bet
-            targetUsdSize = 0;
+            // User has less than $1.00. 
+            // Can they buy at least 1 share?
+            if (yourUsdBalance > price) {
+                targetUsdSize = yourUsdBalance; // All in (Micro-balance)
+                reason = "all_in_micro";
+            }
+            else {
+                targetUsdSize = 0; // Too poor to buy even 1 share
+                reason = "insufficient_for_1_share";
+            }
         }
     }
-    // 4. Cap at available balance (Safety)
+    // B. The Safety Ceiling (Max Cap)
+    // If user has $1M and sets max trade to $500, we clamp.
+    if (maxTradeAmount && targetUsdSize > maxTradeAmount) {
+        targetUsdSize = maxTradeAmount;
+        reason = "capped_at_max";
+    }
+    // C. The Wallet Cap
     if (targetUsdSize > yourUsdBalance) {
         targetUsdSize = yourUsdBalance;
+        reason = "capped_at_balance";
     }
-    return { targetUsdSize, ratio };
+    // 4. Final Formatting
+    // Polymarket requires strict 2-decimal precision for USDC amounts (FOK orders).
+    // We floor to avoid "Insufficient Balance" due to 0.00001 diffs.
+    targetUsdSize = Math.floor(targetUsdSize * 100) / 100;
+    return { targetUsdSize, ratio, reason };
 }

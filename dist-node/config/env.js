@@ -81,6 +81,8 @@ export function loadEnv() {
         mainWalletAddress: process.env.MAIN_WALLET_ADDRESS,
         maxRetentionAmount: process.env.MAX_RETENTION_AMOUNT ? Number(process.env.MAX_RETENTION_AMOUNT) : undefined,
         enableAutoCashout: String(process.env.ENABLE_AUTO_CASHOUT ?? 'false') === 'true',
+        // Safety Caps
+        maxTradeAmount: Number(process.env.MAX_TRADE_AMOUNT ?? 100), // Default $100 cap per trade
         // Notifications
         enableNotifications: String(process.env.ENABLE_NOTIFICATIONS ?? 'false') === 'true',
         twilioAccountSid: process.env.TWILIO_ACCOUNT_SID,

@@ -6,6 +6,11 @@ export class TradeMonitorService {
         this.isPolling = false;
         this.deps = deps;
     }
+    // --- DYNAMIC CONFIG UPDATE ---
+    updateTargets(newTargets) {
+        this.deps.userAddresses = newTargets;
+        this.deps.logger.info(`🎯 Monitor target list updated to ${newTargets.length} wallets.`);
+    }
     async start(startCursor) {
         const { logger, env } = this.deps;
         logger.info(`Initializing Monitor for ${this.deps.userAddresses.length} target wallets...`);

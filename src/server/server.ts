@@ -255,7 +255,7 @@ app.post('/api/feedback', async (req: any, res: any) => {
 
 // 5. Start Bot
 app.post('/api/bot/start', async (req: any, res: any) => {
-  const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, autoTp, notifications, autoCashout } = req.body;
+  const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
   
   if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
   const normId = userId.toLowerCase();
@@ -282,6 +282,7 @@ app.post('/api/bot/start', async (req: any, res: any) => {
         enableNotifications: notifications?.enabled,
         userPhoneNumber: notifications?.phoneNumber,
         autoCashout: autoCashout,
+        maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : 100, // Handle new param
         activePositions: user.activePositions || [],
         stats: user.stats,
         // PASS ENV VARS
@@ -313,6 +314,54 @@ app.post('/api/bot/stop', async (req: any, res: any) => {
     
     await User.updateOne({ address: normId }, { isBotRunning: false });
     res.json({ success: true, status: 'STOPPED' });
+});
+
+// 6b. Live Update Bot (NEW)
+app.post('/api/bot/update', async (req: any, res: any) => {
+    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount } = req.body;
+    
+    if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
+    const normId = userId.toLowerCase();
+
+    try {
+        const user = await User.findOne({ address: normId });
+        if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+        // 1. Update Database Config
+        if (!user.activeBotConfig) user.activeBotConfig = {} as any;
+        const cfg = user.activeBotConfig!;
+
+        if (targets) cfg.userAddresses = targets;
+        if (multiplier) cfg.multiplier = multiplier;
+        if (riskProfile) cfg.riskProfile = riskProfile;
+        if (autoTp) cfg.autoTp = autoTp;
+        if (autoCashout) cfg.autoCashout = autoCashout;
+        if (maxTradeAmount) cfg.maxTradeAmount = maxTradeAmount;
+        if (notifications) {
+            cfg.enableNotifications = notifications.enabled;
+            cfg.userPhoneNumber = notifications.phoneNumber;
+        }
+
+        await User.updateOne({ address: normId }, { activeBotConfig: cfg });
+
+        // 2. Update Live Bot Instance (if running)
+        const engine = ACTIVE_BOTS.get(normId);
+        if (engine && engine.isRunning) {
+            engine.updateConfig({
+                userAddresses: targets,
+                multiplier: multiplier ? Number(multiplier) : undefined,
+                riskProfile: riskProfile,
+                autoTp: autoTp ? Number(autoTp) : undefined,
+                autoCashout: autoCashout,
+                maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : undefined
+            });
+        }
+
+        res.json({ success: true });
+    } catch (e: any) {
+        console.error("Failed to update bot config:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // 7. Bot Status & Logs

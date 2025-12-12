@@ -132,6 +132,7 @@ app.post('/api/wallet/status', async (req: any, res: any) => {
 });
 
 // 2. Activate Trading Wallet (EOA)
+// UPDATED: Now checks for existing wallet to prevent overwrite (Safe Restoration)
 app.post('/api/wallet/activate', async (req: any, res: any) => {
     console.log(`[ACTIVATION REQUEST] Received payload for user: ${req.body?.userId}`);
     const { userId } = req.body;
@@ -143,10 +144,20 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
     const normId = userId.toLowerCase();
 
     try {
-        // Generate new Trading EOA
+        // 1. Check if user already exists with a wallet
+        let user = await User.findOne({ address: normId });
+        
+        if (user && user.tradingWallet && user.tradingWallet.address) {
+            console.log(`[ACTIVATION] User ${normId} already has wallet: ${user.tradingWallet.address}. Returning existing.`);
+            // IDEMPOTENCY: Return existing wallet, do not overwrite keys!
+            res.json({ success: true, address: user.tradingWallet.address, restored: true });
+            return;
+        }
+
+        // 2. Generate NEW Trading EOA only if none exists
+        console.log(`[ACTIVATION] Generating NEW keys for ${normId}...`);
         const walletConfig = await evmWalletService.createTradingWallet(normId);
         
-        // Add type manually
         const configToSave: TradingWalletConfig = {
             ...walletConfig,
             type: 'TRADING_EOA'
@@ -299,6 +310,7 @@ app.post('/api/bot/start', async (req: any, res: any) => {
 
       await startUserBot(normId, config);
       
+      // PERSIST RUNNING STATE
       user.activeBotConfig = config;
       user.isBotRunning = true;
       await user.save();
@@ -540,8 +552,12 @@ app.get('*', (req, res) => {
 async function restoreBots() {
     console.log("🔄 Restoring Active Bots from Database...");
     try {
+        // Debug: Check total users first
+        const totalUsers = await User.countDocuments();
+        console.log(`Diagnostic: Total Users in DB: ${totalUsers}`);
+
         const activeUsers = await User.find({ isBotRunning: true, activeBotConfig: { $exists: true } });
-        console.log(`Found ${activeUsers.length} bots to restore.`);
+        console.log(`Found ${activeUsers.length} active bots to restore (isBotRunning=true).`);
 
         for (const user of activeUsers) {
             if (user.activeBotConfig && user.tradingWallet) {
@@ -564,7 +580,7 @@ async function restoreBots() {
                     await startUserBot(user.address, config);
                     console.log(`✅ Restored Bot: ${user.address}`);
                  } catch (err: any) {
-                    console.error(`Bot Start Error: ${err.message}`);
+                    console.error(`Bot Start Error for ${user.address}: ${err.message}`);
                  }
             }
         }

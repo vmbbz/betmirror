@@ -30,6 +30,9 @@ export interface TradingWalletConfig {
   
   // Metadata for recovery (Salt used to derive)
   saltNonce?: number;
+
+  // Track if recovery owner (Main Wallet) has been added to Safe
+  recoveryOwnerAdded?: boolean;
 }
 
 export interface WalletBalance {

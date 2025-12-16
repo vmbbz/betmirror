@@ -12,11 +12,11 @@ Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLe
 Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
 Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle, AreaChart,
 Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown, Sliders, Bell, ShieldAlert,
-Wrench
+Wrench, Fingerprint, ShieldCheck
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_BRIDGED_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
-import { TradeHistoryEntry } from './src/domain/trade.types';
+import { TradeHistoryEntry, ActivePosition } from './src/domain/trade.types';
 import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/alpha.types';
 import { UserStats } from './src/domain/user.types';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
@@ -103,7 +103,7 @@ interface PolyTrade {
 const STORAGE_KEY = 'bet_mirror_v3_config';
 
 // --- Sound Manager ---
-const playSound = (type: 'start' | 'stop' | 'trade' | 'cashout' | 'error') => {
+const playSound = (type: 'start' | 'stop' | 'trade' | 'cashout' | 'error' | 'success') => {
     try {
         const audio = new Audio(`/sounds/${type}.mp3`);
         audio.volume = 0.5;
@@ -123,6 +123,8 @@ const Tooltip = ({ text }: { text: string }) => (
         </div>
     </div>
 );
+
+// ... [DepositModal, WithdrawalModal, TraderDetailsModal, FeedbackWidget, BridgeStepper, HeroBackground, Landing, ActivationView components remain unchanged] ...
 
 // --- New Component: Deposit Modal ---
 const DepositModal = ({
@@ -670,6 +672,7 @@ const FeedbackWidget = ({ userId }: { userId: string }) => {
 };
 
 const BridgeStepper = ({ status }: { status: string }) => {
+    // ... existing bridge stepper ...
     const isError = status.toLowerCase().includes('failed');
     
     let activeStep = 0;
@@ -717,6 +720,7 @@ const BridgeStepper = ({ status }: { status: string }) => {
 };
 
 const HeroBackground = () => {
+    // ... existing background ...
 return (
     <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
     <div className="absolute inset-0 bg-grid-slate-200/[0.04] bg-[bottom_1px_center] dark:bg-grid-slate-800/[0.05]" style={{ backgroundSize: '40px 40px', maskImage: 'linear-gradient(to bottom, transparent 5%, black 40%, black 70%, transparent 95%)' }}></div>
@@ -725,6 +729,7 @@ return (
 }
 
 const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, theme: string, toggleTheme: () => void }) => (
+    // ... existing landing ...
     <div className="min-h-screen bg-gray-50 dark:bg-[#050505] font-sans transition-colors duration-300 flex flex-col relative overflow-x-hidden">
         {/* ... existing landing code ... */}
         <HeroBackground />
@@ -939,6 +944,7 @@ const ActivationView = ({
     theme, 
     toggleTheme 
 }: any) => {
+    // ... existing activation view ...
     const [recoveryMode, setRecoveryMode] = useState(false);
     const [computedAddress, setComputedAddress] = useState<string>('');
     const [checking, setChecking] = useState(false);
@@ -1077,6 +1083,7 @@ const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 // RENAMED from history to tradeHistory to prevent collision with History component from lucide-react
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
+const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); // ADDED STATE for positions
 const [stats, setStats] = useState<UserStats | null>(null);
 const [registry, setRegistry] = useState<TraderProfile[]>([]);
 const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
@@ -1085,6 +1092,7 @@ const [theme, setTheme] = useState<'light' | 'dark'>('light');
 const [systemView, setSystemView] = useState<'attribution' | 'global'>('attribution');
 // -- MOBILE MENU STATE --
 const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+const [tradePanelTab, setTradePanelTab] = useState<'active' | 'history'>('active'); // NEW: Tab state for right panel
 
 // --- STATE: Forms & Actions ---
 const [isDepositing, setIsDepositing] = useState(false);
@@ -1099,6 +1107,9 @@ const [newWalletInput, setNewWalletInput] = useState('');
 const [showSecrets, setShowSecrets] = useState(false);
 const [isAddingWallet, setIsAddingWallet] = useState(false);
 const [selectedTrader, setSelectedTrader] = useState<TraderProfile | null>(null);
+const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
+const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
+
 
 // --- STATE: Bridging (Updated for Bidirectional Flow) ---
 const [bridgeMode, setBridgeMode] = useState<'IN' | 'OUT'>('IN');
@@ -1115,6 +1126,10 @@ const [recipientAddress, setRecipientAddress] = useState<string>(''); // Editabl
 const [isSourceChainSelectOpen, setIsSourceChainSelectOpen] = useState(false);
 const [isDestChainSelectOpen, setIsDestChainSelectOpen] = useState(false);
 const [showBridgeGuide, setShowBridgeGuide] = useState(false);
+
+// --- STATE: Recovery & Sovereignty ---
+const [recoveryOwnerAdded, setRecoveryOwnerAdded] = useState(false);
+const [isAddingRecovery, setIsAddingRecovery] = useState(false);
 
 const [config, setConfig] = useState<AppConfig>({
     targets: [],
@@ -1291,6 +1306,8 @@ useEffect(() => {
             if (res.data.logs) setLogs(res.data.logs); // Now fetches from DB
             if (res.data.history) setTradeHistory(res.data.history);
             if (res.data.stats) setStats(res.data.stats);
+            // Sync Active Positions
+            if (res.data.positions) setActivePositions(res.data.positions);
 
             // Sync Config from Server ONLY IF RUNNING (Source of Truth)
             // If stopped, local state is king (allows editing without overwrite)
@@ -1464,6 +1481,8 @@ const handleConnect = async () => {
             // CRITICAL FIX: Prefer Safe Address (Funder) over EOA Signer address for display and balance checks
             setProxyAddress(res.data.safeAddress || res.data.address);
             setSignerAddress(res.data.address); // Track the EOA separately
+            // Capture recovery status from backend
+            setRecoveryOwnerAdded(res.data.recoveryOwnerAdded || false);
             setNeedsActivation(false);
             setIsConnected(true);
         }
@@ -1484,6 +1503,7 @@ const handleInitializeWallet = async () => {
         // Use safeAddress if returned, otherwise fallback to EOA address
         setProxyAddress(res.data.safeAddress || res.data.address);
         setSignerAddress(res.data.address);
+        setRecoveryOwnerAdded(false); // New wallets don't have recovery by default
         setNeedsActivation(false);
         
         alert("✅ Trading Wallet Created!\n\nDeposit USDC.e (Trading) to start. Gas is paid by Relayer!");
@@ -1493,6 +1513,33 @@ const handleInitializeWallet = async () => {
         alert("Activation failed: " + (e.response?.data?.error || e.message));
     } finally {
         setIsActivating(false);
+    }
+};
+
+// --- HANDLERS: Add Recovery Owner ---
+const handleAddRecoveryOwner = async () => {
+    if (!confirm("Add Recovery Owner?\n\nThis will add your Main Wallet as a co-owner of the Gnosis Safe. You will be able to execute transactions directly on-chain if this website ever goes down.\n\nCost: ~0.05 POL (Paid by Signer/Bot)")) return;
+
+    // Pre-check Signer Gas
+    if (parseFloat(signerWalletBal.native) < 0.05) {
+        alert("⚠️ Insufficient Gas in Signer Wallet.\n\nTo add an owner, the Signer (Bot) needs about 0.05 POL.\n\nPlease deposit a small amount of POL via the Bridge or Deposit modal.");
+        return;
+    }
+
+    setIsAddingRecovery(true);
+    try {
+        const res = await axios.post('/api/wallet/add-recovery', { userId: userAddress });
+        if (res.data.success) {
+            setRecoveryOwnerAdded(true);
+            if (config.enableSounds) playSound('success');
+            alert("✅ SUCCESS: Your Main Wallet is now an owner of the Safe.\n\nYou have full custody and can recover funds manually via Gnosis Safe interface at any time.");
+        } else {
+             throw new Error("API returned failure");
+        }
+    } catch (e: any) {
+        alert("Failed to add recovery owner: " + (e.response?.data?.error || e.message));
+    } finally {
+        setIsAddingRecovery(false);
     }
 };
 
@@ -1693,6 +1740,32 @@ const handleWithdraw = async (tokenType: 'USDC' | 'USDC.e' | 'POL', isRescue: bo
     setIsWithdrawing(false);
 };
 
+// --- MANUAL EXIT HANDLER ---
+const handleManualExit = async (position: ActivePosition) => {
+    if(!confirm(`Are you sure you want to SELL/EXIT this position?\n\nMarket: ${position.marketId}\nOutcome: ${position.outcome}\n\nThis will trigger an immediate Market Sell order for your full position size.`)) return;
+    
+    setExitingPositionId(position.marketId + position.outcome);
+    try {
+        const res = await axios.post('/api/trade/exit', {
+            userId: userAddress,
+            marketId: position.marketId,
+            outcome: position.outcome
+        });
+
+        if (res.data.success) {
+            alert("✅ Sell Order Submitted!");
+            // Optimistic UI update: Remove position immediately
+            setActivePositions(prev => prev.filter(p => !(p.marketId === position.marketId && p.outcome === position.outcome)));
+        } else {
+            alert("Exit Failed: " + res.data.error);
+        }
+    } catch (e: any) {
+        alert("Exit Error: " + (e.response?.data?.error || e.message));
+    } finally {
+        setExitingPositionId(null);
+    }
+};
+
 // --- HANDLERS: Bot ---
 const handleStart = async () => {
     if (config.targets.length === 0) {
@@ -1738,6 +1811,28 @@ const handleStop = async () => {
         await axios.post('/api/bot/stop', { userId: userAddress });
         setIsRunning(false);
     } catch (e) { console.error(e); }
+};
+
+const handleSyncPositions = async () => {
+    if (!userAddress) return;
+    setIsSyncingPositions(true);
+    try {
+        // FIX: Send force: true to tell the bot to fetch from Chain/API, not just update local DB prices
+        await axios.post('/api/trade/sync', { userId: userAddress, force: true });
+        
+        // Poll for update or re-fetch status
+        // Give it a split second for the backend to process
+        await new Promise(r => setTimeout(r, 1000));
+        
+        const res = await axios.get(`/api/bot/status/${userAddress}`);
+        if (res.data.positions) setActivePositions(res.data.positions);
+        
+        if (config.enableSounds) playSound('success');
+    } catch (e: any) {
+        alert("Sync Failed: " + (e.response?.data?.error || e.message));
+    } finally {
+        setIsSyncingPositions(false);
+    }
 };
 
 const addTarget = () => {
@@ -2124,33 +2219,173 @@ return (
                             </div>
                         </div>
                     </div>
-                    {/* Recent Trades */}
-                    <div className="glass-panel p-5 rounded-xl space-y-4 flex-1">
-                        <h3 className="text-sm font-bold text-gray-900 dark:text-white">Recent Trades</h3>
-                        <div className="space-y-2">
-                                {tradeHistory.slice(0, 5).map(trade => {
-                                    // PREFER EXECUTED SIZE (User's Amount)
-                                    const amountToShow = trade.executedSize && trade.executedSize > 0 ? trade.executedSize : trade.size;
-                                    
-                                    return (
-                                        <div key={trade.id} className="text-xs flex items-center justify-between p-2 bg-gray-50 dark:bg-black/40 rounded border border-gray-200 dark:border-white/5">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`w-1.5 h-1.5 rounded-full ${trade.side === 'BUY' ? 'bg-green-50 dark:bg-terminal-success' : 'bg-red-50 dark:bg-terminal-danger'}`}></span>
-                                                <span className="font-mono text-gray-700 dark:text-gray-300">{trade.side}</span>
-                                            </div>
-                                            <span className="text-gray-500 text-[10px] max-w-[80px] truncate">{trade.outcome}</span>
-                                            <div className="flex items-center gap-2">
-                                                <span className="font-mono text-gray-900 dark:text-white font-bold">${amountToShow.toFixed(2)}</span>
-                                                {trade.txHash ? (
-                                                    <a href={`https://polygonscan.com/tx/${trade.txHash}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400">
-                                                        <ExternalLink size={10}/>
-                                                    </a>
-                                                ) : <span className="w-3"></span>}
-                                            </div>
+                    {/* Live Positions & History (Tabbed) */}
+                    <div className="glass-panel p-5 rounded-xl space-y-4 flex-1 flex flex-col">
+                        <div className="flex items-center justify-between border-b border-gray-200 dark:border-white/10 pb-2">
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => setTradePanelTab('active')}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all ${tradePanelTab === 'active' ? 'bg-gray-900 dark:bg-white text-white dark:text-black shadow-md' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                                >
+                                    Active ({activePositions.length})
+                                </button>
+                                <button 
+                                    onClick={() => setTradePanelTab('history')}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all ${tradePanelTab === 'history' ? 'bg-gray-900 dark:bg-white text-white dark:text-black shadow-md' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                                >
+                                    History
+                                </button>
+                            </div>
+                            {/* Sync Button for Active Positions */}
+                            {tradePanelTab === 'active' && (
+                                <button 
+                                    onClick={handleSyncPositions}
+                                    disabled={isSyncingPositions}
+                                    className="p-1.5 text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-white/5 rounded-full transition-colors disabled:opacity-50"
+                                    title="Sync from Chain"
+                                >
+                                    <RefreshCw size={14} className={isSyncingPositions ? "animate-spin" : ""} />
+                                </button>
+                            )}
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto">
+                            {tradePanelTab === 'active' ? (
+                                /* ACTIVE POSITIONS TAB */
+                                <div className="space-y-3">
+                                    {activePositions.length > 0 ? (
+                                        activePositions.map((pos) => {
+                                            // PnL Calculation
+                                            const currentPrice = pos.currentPrice || pos.entryPrice;
+                                            const value = pos.shares * currentPrice;
+                                            const pnl = value - pos.sizeUsd;
+                                            const pnlPercent = pos.sizeUsd > 0 ? (pnl / pos.sizeUsd) * 100 : 0;
+                                            const isProfitable = pnl >= 0;
+
+                                            return (
+                                                <div key={pos.marketId + pos.outcome} className="text-xs p-3 bg-white dark:bg-white/5 rounded-xl border border-gray-200 dark:border-white/10 hover:border-blue-500/30 transition-all shadow-sm group">
+                                                    {/* Card Header: Image & Title */}
+                                                    <div className="flex gap-3 mb-3">
+                                                        <div className="shrink-0 mt-1">
+                                                            {pos.image ? (
+                                                                <img 
+                                                                    src={pos.image} 
+                                                                    alt="Market" 
+                                                                    className="w-8 h-8 rounded-full object-cover bg-gray-200 dark:bg-gray-800"
+                                                                    onError={(e) => (e.target as any).style.display = 'none'}
+                                                                />
+                                                            ) : (
+                                                                <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-800 flex items-center justify-center text-gray-400">
+                                                                    <Activity size={14}/>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="font-bold text-gray-900 dark:text-white line-clamp-2 leading-tight" title={pos.question || pos.marketId}>
+                                                                {pos.question || pos.marketId}
+                                                            </div>
+                                                            <div className="text-[10px] text-gray-500 mt-1 flex items-center gap-2">
+                                                                <span className="font-mono">{pos.marketId.slice(0, 8)}...</span>
+                                                                {pos.endDate && <span>• Ends {new Date(pos.endDate).toLocaleDateString()}</span>}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Stats Grid */}
+                                                    <div className="grid grid-cols-2 gap-2 bg-gray-50 dark:bg-black/20 p-2 rounded-lg mb-3">
+                                                        <div>
+                                                            <div className="text-[10px] text-gray-500 uppercase font-bold">Outcome</div>
+                                                            <div className={`font-bold ${pos.outcome === 'YES' ? 'text-green-600' : 'text-red-600'}`}>{pos.outcome}</div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-[10px] text-gray-500 uppercase font-bold">Size</div>
+                                                            <div className="font-mono">{pos.shares.toFixed(2)} Shares</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] text-gray-500 uppercase font-bold">Entry</div>
+                                                            <div className="font-mono text-gray-700 dark:text-gray-300">${pos.entryPrice.toFixed(2)}</div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-[10px] text-gray-500 uppercase font-bold">Current</div>
+                                                            <div className={`font-mono font-bold ${(pos.currentPrice || 0) > pos.entryPrice ? 'text-green-500' : 'text-red-500'}`}>
+                                                                ${(pos.currentPrice || pos.entryPrice).toFixed(2)}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Footer: PnL & Action */}
+                                                    <div className="flex items-center justify-between pt-1">
+                                                        <div className={`text-xs font-mono font-bold ${isProfitable ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                                                            {isProfitable ? '+' : ''}{pnl.toFixed(2)} ({pnlPercent.toFixed(1)}%)
+                                                        </div>
+                                                        <button 
+                                                            onClick={() => handleManualExit(pos)}
+                                                            disabled={exitingPositionId === (pos.marketId + pos.outcome)}
+                                                            className="px-3 py-1.5 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 text-[10px] font-bold rounded border border-red-200 dark:border-red-900/30 transition-colors flex items-center gap-1"
+                                                        >
+                                                            {exitingPositionId === (pos.marketId + pos.outcome) ? <Loader2 size={10} className="animate-spin"/> : <X size={10}/>}
+                                                            SELL
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    ) : (
+                                        <div className="text-center py-8 text-gray-400 dark:text-gray-600 flex flex-col items-center gap-2">
+                                            <div className="p-3 bg-gray-100 dark:bg-white/5 rounded-full"><ZapIcon size={20} className="opacity-50"/></div>
+                                            <p className="text-xs italic">No active positions.</p>
                                         </div>
-                                    );
-                                })}
-                                {tradeHistory.length === 0 && <div className="text-center text-gray-500 dark:text-gray-600 text-xs py-4 italic">No trades yet</div>}
+                                    )}
+                                </div>
+                            ) : (
+                                /* HISTORY TAB */
+                                <div className="space-y-2">
+                                    {tradeHistory.length > 0 ? (
+                                        tradeHistory.slice(0, 8).map(trade => {
+                                            // FIX: Use executedSize as primary, fallback to size for legacy.
+                                            // If executedSize is 0 but status is FILLED/OPEN, use size (legacy assumption)
+                                            const displayAmount = (trade.executedSize && trade.executedSize > 0) ? trade.executedSize : trade.size;
+                                            
+                                            // Ensure user understands this is THEIR amount
+                                            return (
+                                                <div key={trade.id} className="text-xs flex items-center justify-between p-2 bg-gray-50 dark:bg-black/40 rounded border border-gray-200 dark:border-white/5 hover:border-gray-300 dark:hover:border-gray-700 transition-colors">
+                                                    <div className="flex items-center gap-3 overflow-hidden">
+                                                        {/* Side Badge */}
+                                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${trade.side === 'BUY' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}`}>
+                                                            {trade.side}
+                                                        </span>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className="font-bold text-gray-900 dark:text-white truncate max-w-[100px]">{trade.outcome}</span>
+                                                            <span className="text-[10px] text-gray-500">{new Date(trade.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="text-right">
+                                                            <div className="font-mono font-bold text-gray-900 dark:text-white">${displayAmount.toFixed(2)}</div>
+                                                            <div className="text-[10px] text-gray-500">@ {trade.price.toFixed(2)}</div>
+                                                        </div>
+                                                        {trade.txHash ? (
+                                                            <a href={`https://polygonscan.com/tx/${trade.txHash}`} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-blue-500 transition-colors p-1" title="View Transaction">
+                                                                <ExternalLink size={12}/>
+                                                            </a>
+                                                        ) : <span className="w-5"></span>}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    ) : (
+                                        <div className="text-center py-8 text-gray-400 dark:text-gray-600 flex flex-col items-center gap-2">
+                                            <div className="p-3 bg-gray-100 dark:bg-white/5 rounded-full"><History size={20} className="opacity-50"/></div>
+                                            <p className="text-xs italic">No trade history yet.</p>
+                                        </div>
+                                    )}
+                                    {tradeHistory.length > 8 && (
+                                        <button onClick={() => setActiveTab('history')} className="w-full py-2 text-[10px] text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5 rounded-lg transition-colors">
+                                            View Full History
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -2713,6 +2948,43 @@ return (
                         <div>
                             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Strategy & Risk</h2>
                             <p className="text-gray-500 text-sm">Configure how your bot sizes positions and manages risk.</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* NEW: Sovereignty Section (Top Level) */}
+                <div className="mb-8 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800/30 rounded-xl p-6 relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                         {recoveryOwnerAdded ? <ShieldCheck size={100} className="text-green-600"/> : <Fingerprint size={100} className="text-purple-600"/>}
+                    </div>
+                    
+                    <div className="relative z-10">
+                        <div className="flex justify-between items-start">
+                             <div>
+                                <h3 className="text-lg font-bold text-purple-900 dark:text-purple-100 flex items-center gap-2">
+                                    <Shield size={20}/> Vault Sovereignty (Multi-Sig)
+                                </h3>
+                                <p className="text-sm text-purple-800 dark:text-purple-300 mt-1 max-w-2xl">
+                                    Upgrade your Gnosis Safe to a <strong>Multi-Owner Setup</strong>. This adds your Main Wallet as a signer, giving you 
+                                    full on-chain control independent of this platform. If our servers disappear, you can still access funds via Safe{`{Wallet}`}.
+                                </p>
+                             </div>
+                             
+                             {recoveryOwnerAdded ? (
+                                 <div className="flex items-center gap-2 px-4 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg border border-green-200 dark:border-green-800">
+                                     <ShieldCheck size={18}/>
+                                     <span className="text-xs font-bold uppercase tracking-wide">You are an Owner</span>
+                                 </div>
+                             ) : (
+                                 <button 
+                                     onClick={handleAddRecoveryOwner}
+                                     disabled={isAddingRecovery}
+                                     className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-lg shadow-purple-500/20 text-xs flex items-center gap-2 transition-all disabled:opacity-50"
+                                 >
+                                     {isAddingRecovery ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
+                                     ADD RECOVERY KEY
+                                 </button>
+                             )}
                         </div>
                     </div>
                 </div>

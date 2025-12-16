@@ -22,7 +22,8 @@ interface Position {
 export interface ExecutionResult {
     status: 'FILLED' | 'FAILED' | 'SKIPPED';
     txHash?: string;
-    executedAmount: number;
+    executedAmount: number; // USD Value
+    executedShares: number; // Share Count
     reason?: string;
 }
 
@@ -40,21 +41,23 @@ export class TradeExecutorService {
     this.deps = deps;
   }
 
+  // Updated: Execute Exit now sells SHARES, not USD amount, ensuring 100% closure regardless of price
   async executeManualExit(position: ActivePosition, currentPrice: number): Promise<boolean> {
       const { logger, adapter } = this.deps;
       try {
-          logger.info(`📉 Executing Manual Exit (Auto-TP) for ${position.tokenId} @ ${currentPrice}`);
+          logger.info(`📉 Executing Manual Exit: Selling ${position.shares} shares of ${position.tokenId}`);
           
-          await adapter.createOrder({
+          const result = await adapter.createOrder({
               marketId: position.marketId,
               tokenId: position.tokenId,
               outcome: position.outcome,
               side: 'SELL',
-              sizeUsd: position.sizeUsd,
-              priceLimit: 0 // Market sell
+              sizeUsd: 0, // Ignored when sizeShares is present
+              sizeShares: position.shares, // Sell exact number of shares held
+              priceLimit: 0 // Market sell (hit the bid)
           });
           
-          return true;
+          return result.success;
       } catch (e) {
           logger.error(`Failed to execute manual exit`, e as Error);
           return false;
@@ -68,6 +71,7 @@ export class TradeExecutorService {
     const failResult = (reason: string): ExecutionResult => ({
         status: 'SKIPPED',
         executedAmount: 0,
+        executedShares: 0,
         reason
     });
 
@@ -104,10 +108,7 @@ export class TradeExecutorService {
       logger.info(`🔗 Trader: ${profileUrl}`);
 
       if (sizing.targetUsdSize < 0.50) {
-          // Polymarket minimum is technically low, but usually <$1 orders are unreliable.
-          // We allow >$0.50 to handle small tests, but <$0.10 is dust.
           if (effectiveBalance < 0.50) return failResult("skipped_insufficient_balance");
-          // If the calculated size is dust but we have funds, it means the whale bet was tiny relative to ratio.
           if (sizing.targetUsdSize < 0.10) return failResult("skipped_dust_size");
       }
 
@@ -141,7 +142,8 @@ export class TradeExecutorService {
       logger.info(`🛡️ Price Guard: Signal @ ${signal.price.toFixed(3)} -> Limit @ ${priceLimit.toFixed(2)}`);
 
       // 5. Execute via Adapter
-      const orderIdOrHash = await adapter.createOrder({
+      // Returns rich object
+      const result = await adapter.createOrder({
         marketId: signal.marketId,
         tokenId: signal.tokenId,
         outcome: signal.outcome,
@@ -151,41 +153,40 @@ export class TradeExecutorService {
       });
 
       // 6. Check Result
-      // The adapter returns a string. It might be "failed", "skipped...", or a TxHash/OrderID.
-      
-      // Known failure strings from adapter
-      if (orderIdOrHash === "failed" || orderIdOrHash.includes("skipped") || orderIdOrHash.includes("insufficient")) {
+      if (!result.success) {
           return {
               status: 'FAILED',
               executedAmount: 0,
-              reason: orderIdOrHash
+              executedShares: 0,
+              reason: result.error || 'Unknown error'
           };
       }
 
       // 7. Success - Update Pending Spend
-      // We assume money is gone until next chain sync proves otherwise
       this.pendingSpend += sizing.targetUsdSize;
+      
+      // Calculate Exact Shares and Amount
+      const shares = result.sharesFilled;
+      const price = result.priceFilled;
+      const actualUsd = shares * price;
       
       return {
           status: 'FILLED',
-          txHash: orderIdOrHash, // This is the Tx Hash or Order ID
-          executedAmount: sizing.targetUsdSize,
+          txHash: result.orderId || result.txHash, // Prefer Order ID for tracking
+          executedAmount: actualUsd,
+          executedShares: shares,
           reason: 'executed'
       };
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      if (errorMessage.includes('closed') || errorMessage.includes('resolved') || errorMessage.includes('No orderbook')) {
-        logger.warn(`Skipping - Market closed/resolved.`);
-        return failResult("market_closed");
-      } else {
-        logger.error(`Failed to copy trade: ${errorMessage}`, err as Error);
-        return {
+      logger.error(`Failed to copy trade: ${errorMessage}`, err as Error);
+      return {
             status: 'FAILED',
             executedAmount: 0,
+            executedShares: 0,
             reason: errorMessage
-        };
-      }
+      };
     }
   }
 

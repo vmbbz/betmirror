@@ -1,13 +1,15 @@
 
+// ... imports ...
 import { 
     IExchangeAdapter, 
-    OrderParams
+    OrderParams,
+    OrderResult
 } from '../interfaces.js';
-import { OrderBook } from '../../domain/market.types.js';
-import { TradeSignal } from '../../domain/trade.types.js';
+import { OrderBook, PositionData } from '../../domain/market.types.js';
+import { TradeSignal, TradeHistoryEntry } from '../../domain/trade.types.js';
 import { ClobClient, Chain, OrderType, Side } from '@polymarket/clob-client';
 import { Wallet as WalletV6, JsonRpcProvider, Contract, formatUnits } from 'ethers';
-import { Wallet as WalletV5 } from 'ethers-v5'; // V5 for SDK
+import { Wallet as WalletV5 } from 'ethers-v5'; 
 import { EvmWalletService } from '../../services/evm-wallet.service.js';
 import { SafeManagerService } from '../../services/safe-manager.service.js';
 import { TradingWalletConfig } from '../../domain/wallet.types.js';
@@ -16,6 +18,7 @@ import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { Logger } from '../../utils/logger.util.js';
 import { TOKENS } from '../../config/env.js';
 import axios from 'axios';
+import crypto from 'crypto';
 
 const HOST_URL = 'https://clob.polymarket.com';
 const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
@@ -26,17 +29,38 @@ enum SignatureType {
     POLY_GNOSIS_SAFE = 2
 }
 
-interface PolyActivityResponse {
-  type: string;
-  timestamp: number;
-  conditionId: string;
-  asset: string;
-  size: number;
-  usdcSize: number;
-  price: number;
-  side: string;
-  outcomeIndex: number;
-  transactionHash: string;
+interface PolyTradeResponse {
+    id: string;
+    timestamp: number;
+    market: string;
+    asset: string;
+    side: string;
+    size: number;
+    price: number;
+    fee: number;
+    orderId: string;
+    takerOrder: string;
+    makerOrder: string;
+    matchId: string;
+    owner: string;
+    status: string;
+    transactionHash: string;
+    outcome: string; 
+    outcomeIndex?: number;
+}
+
+// Data API Response Structure
+interface PolyPositionResponse {
+    asset: string;
+    title: string;
+    size: number;
+    currentPrice: number;
+    market: string; // Market ID (Condition ID)
+    outcome: string;
+    outcomeIndex: number;
+    initialValue: number;
+    currentValue: number;
+    percentChange: number;
 }
 
 export class PolymarketAdapter implements IExchangeAdapter {
@@ -44,7 +68,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
     
     private client?: ClobClient;
     private wallet?: WalletV6; 
-    private walletV5?: WalletV5; // Dedicated V5 wallet for SDK
+    private walletV5?: WalletV5; 
     private walletService?: EvmWalletService;
     private safeManager?: SafeManagerService;
     private usdcContract?: Contract;
@@ -66,21 +90,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
     ) {}
 
     async initialize(): Promise<void> {
-        this.logger.info(`[${this.exchangeName}] Initializing Adapter (Ethers v6/v5 Hybrid)...`);
+        this.logger.info(`[${this.exchangeName}] Initializing Adapter...`);
         
         this.walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
         
         if (this.config.walletConfig.encryptedPrivateKey) {
-             // V6 for general operations
              this.wallet = await this.walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
-             // V5 for SDK stability
              this.walletV5 = await this.walletService.getWalletInstanceV5(this.config.walletConfig.encryptedPrivateKey);
         } else {
              throw new Error("Missing Encrypted Private Key for Trading Wallet");
         }
 
-        // Initialize Safe Manager
-        // Check for safe address in config, or compute it now
         let safeAddressToUse = this.config.walletConfig.safeAddress;
         
         if (!safeAddressToUse) {
@@ -115,13 +135,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
     async authenticate(): Promise<void> {
         if (!this.wallet || !this.safeManager || !this.safeAddress) throw new Error("Adapter not initialized");
 
-        // 1. Ensure Safe is Deployed
         await this.safeManager.deploySafe();
-
-        // 2. Ensure Approvals
         await this.safeManager.enableApprovals();
 
-        // 3. L2 Auth (API Keys)
         let apiCreds = this.config.l2ApiCredentials;
         if (!apiCreds || !apiCreds.key) {
             this.logger.info('🤝 Deriving L2 API Keys...');
@@ -131,8 +147,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
              this.logger.info('🔌 Using existing CLOB Credentials');
         }
 
-        // 4. Initialize Clob Client
         this.initClobClient(apiCreds);
+    }
+
+    public isReady(): boolean {
+        return !!this.client;
     }
 
     private initClobClient(apiCreds: any) {
@@ -152,8 +171,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
             Chain.POLYGON,
             this.walletV5 as any, 
             apiCreds,
-            SignatureType.POLY_GNOSIS_SAFE, // Funder is Safe
-            this.safeAddress, // Explicitly set funder (Maker)
+            SignatureType.POLY_GNOSIS_SAFE, 
+            this.safeAddress, 
             undefined, 
             undefined,
             builderConfig
@@ -162,7 +181,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
     private async deriveAndSaveKeys() {
         try {
-            // Keys must be derived using SignatureType.EOA because the EOA is the signer.
             const tempClient = new ClobClient(
                 HOST_URL,
                 Chain.POLYGON,
@@ -201,12 +219,100 @@ export class PolymarketAdapter implements IExchangeAdapter {
         } catch (e) { return 0; }
     }
 
+    async getPortfolioValue(address: string): Promise<number> {
+        try {
+            const url = `https://data-api.polymarket.com/value?user=${address}`;
+            const res = await axios.get(url);
+            return parseFloat(res.data) || 0;
+        } catch (e) {
+            this.logger.debug(`Portfolio Value fetch failed: ${(e as Error).message}`);
+            return 0;
+        }
+    }
+
     async getMarketPrice(marketId: string, tokenId: string): Promise<number> {
         if (!this.client) return 0;
         try {
             const mid = await this.client.getMidpoint(tokenId);
             return parseFloat(mid.mid);
         } catch (e) { return 0; }
+    }
+    
+    // --- UPDATED: POSITION FETCHING WITH RICH DATA ENRICHMENT ---
+    // 1. Fetches basic list from Data API
+    // 2. Calls CLOB to get Market Details (Question, Image)
+    // 3. Calls CLOB to get Live Price (Midpoint) for accuracy
+    async getPositions(address: string): Promise<PositionData[]> {
+        this.logger.debug(`Fetching positions for ${address}...`);
+
+        let apiPositions: PolyPositionResponse[] = [];
+        try {
+            const url = `https://data-api.polymarket.com/positions?user=${address}`;
+            const res = await axios.get<PolyPositionResponse[]>(url);
+            
+            if (Array.isArray(res.data)) {
+                // Filter dust
+                apiPositions = res.data.filter(p => p.size > 0.001);
+            }
+        } catch (e: any) {
+            this.logger.warn(`Data API Position fetch failed: ${e.message}.`);
+            // Can't do much without base data, return empty or retry
+            return [];
+        }
+
+        // ENRICHMENT LOOP
+        // Use Promise.all to fetch metadata in parallel
+        const enrichmentPromises = apiPositions.map(async (p) => {
+            try {
+                let marketData: any = null;
+                let currentPrice = Number(p.currentPrice); // Default to API price
+
+                if (this.client) {
+                    // A. Fetch Market Metadata (Question, Image)
+                    try {
+                        marketData = await this.client.getMarket(p.market);
+                    } catch (err) {
+                        // console.warn(`Market fetch failed for ${p.market}`);
+                    }
+
+                    // B. Fetch Real-Time CLOB Price
+                    try {
+                        const mid = await this.client.getMidpoint(p.asset);
+                        if (mid && mid.mid) {
+                            currentPrice = parseFloat(mid.mid);
+                        }
+                    } catch (err) {
+                        // console.warn(`Price fetch failed for ${p.asset}`);
+                    }
+                }
+
+                const size = Number(p.size);
+                
+                return {
+                    marketId: p.market,
+                    tokenId: p.asset,
+                    outcome: p.outcome || 'UNK',
+                    balance: size,
+                    valueUsd: size * currentPrice,
+                    entryPrice: Number(p.initialValue) / size, // Approx avg entry
+                    currentPrice: currentPrice,
+                    // Rich Fields
+                    question: marketData?.question || p.title || "Loading Market Data...",
+                    image: marketData?.image || marketData?.icon || "",
+                    endDate: marketData?.end_date_iso
+                } as PositionData;
+
+            } catch (e) {
+                // If one fails, don't break the whole list, just skip or return basic
+                return null;
+            }
+        });
+
+        const results = await Promise.all(enrichmentPromises);
+        const validPositions = results.filter((p): p is PositionData => p !== null);
+
+        this.logger.info(`✅ Synced ${validPositions.length} positions (Enriched)`);
+        return validPositions;
     }
 
     async getOrderBook(tokenId: string): Promise<OrderBook> {
@@ -227,111 +333,151 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
     async fetchPublicTrades(address: string, limit: number = 20): Promise<TradeSignal[]> {
         try {
-            const url = `https://data-api.polymarket.com/activity?user=${address}&limit=${limit}`;
-            const res = await axios.get<PolyActivityResponse[]>(url);
+            const url = `https://data-api.polymarket.com/trades?user=${address}&limit=${limit}`;
+            const res = await axios.get<PolyTradeResponse[]>(url);
             if (!res.data || !Array.isArray(res.data)) return [];
 
-            return res.data
-                .filter(act => act.type === 'TRADE' || act.type === 'ORDER_FILLED')
-                .map(act => ({
-                    trader: address,
-                    marketId: act.conditionId,
-                    tokenId: act.asset,
-                    outcome: act.outcomeIndex === 0 ? 'YES' : 'NO',
-                    side: act.side.toUpperCase() as 'BUY' | 'SELL',
-                    sizeUsd: act.usdcSize || (act.size * act.price),
-                    price: act.price,
-                    timestamp: (act.timestamp > 1e11 ? act.timestamp : act.timestamp * 1000)
-                }));
+            const signals: TradeSignal[] = [];
+            for (const t of res.data) {
+                let outcome: 'YES' | 'NO' | undefined;
+                if (t.outcome === 'YES' || t.outcome === 'NO') outcome = t.outcome;
+                else if (t.outcomeIndex === 0) outcome = 'YES';
+                else if (t.outcomeIndex === 1) outcome = 'NO';
+                
+                if (outcome) {
+                    signals.push({
+                        trader: address,
+                        marketId: t.market,
+                        tokenId: t.asset,
+                        outcome: outcome,
+                        side: t.side.toUpperCase() as 'BUY' | 'SELL',
+                        sizeUsd: t.size * t.price, 
+                        price: t.price,
+                        timestamp: t.timestamp * 1000 
+                    });
+                }
+            }
+            return signals;
         } catch (e) { return []; }
     }
+    
+    async getTradeHistory(address: string, limit: number = 50): Promise<TradeHistoryEntry[]> {
+        if (this.client) {
+            try {
+                this.logger.debug(`Fetching CLOB trade history for ${address}`);
+                const trades = await this.client.getTrades({
+                    maker_address: address,
+                    limit: limit.toString() as any 
+                } as any);
 
-    async createOrder(params: OrderParams, retryCount = 0): Promise<string> {
-        if (!this.client) throw new Error("Client not authenticated");
+                if (Array.isArray(trades)) {
+                    return trades.map((t: any) => ({
+                        id: t.id,
+                        timestamp: t.match_time ? new Date(Number(t.match_time) * 1000).toISOString() : new Date().toISOString(),
+                        marketId: t.market,
+                        outcome: t.outcome || (t.outcomeIndex === 0 ? 'YES' : 'NO'),
+                        side: t.side ? t.side.toUpperCase() : 'UNK',
+                        size: parseFloat(t.size) * parseFloat(t.price),
+                        executedSize: parseFloat(t.size) * parseFloat(t.price),
+                        price: parseFloat(t.price),
+                        status: 'FILLED',
+                        txHash: t.transaction_hash,
+                        clobOrderId: t.maker_order_id || t.taker_order_id 
+                    }));
+                }
+            } catch (e) {
+                this.logger.warn(`CLOB History fetch failed (fallback to public API): ${(e as Error).message}`);
+            }
+        }
+
+        return this.fetchPublicTrades(address, limit).then(signals => 
+            signals.map(s => ({
+                id: crypto.randomUUID(),
+                timestamp: new Date(s.timestamp).toISOString(),
+                marketId: s.marketId,
+                outcome: s.outcome,
+                side: s.side,
+                size: s.sizeUsd,
+                price: s.price,
+                status: 'FILLED'
+            }))
+        );
+    }
+
+    async createOrder(params: OrderParams, retryCount = 0): Promise<OrderResult> {
+        if (!this.client) return { success: false, error: "Client not authenticated", sharesFilled: 0, priceFilled: 0 };
 
         try {
-            // 1. FETCH MARKET CONFIG (Tick Size & Min Size)
-            // Default values usually safe for binary markets, but we try to fetch real ones
-            let negRisk = false;
+            const marketPromise = this.client.getMarket(params.marketId);
+            const bookPromise = this.client.getOrderBook(params.tokenId);
+
+            const [market, book] = await Promise.all([
+                marketPromise.catch(e => null), 
+                bookPromise.catch(e => null)
+            ]);
+
+            if (!market) throw new Error("Market data not available");
+            if (!book) throw new Error("Orderbook not available (Liquidity check failed)");
+
+            const negRisk = market.neg_risk;
             let minOrderSize = 5; 
             let tickSize = 0.01;
 
-            try {
-                // Get market details to check for Neg Risk and specific constraints
-                const market = await this.client.getMarket(params.marketId);
-                negRisk = market.neg_risk;
-                
-                // Parse Order constraints if available
-                if (market.minimum_order_size) minOrderSize = Number(market.minimum_order_size);
-                if (market.minimum_tick_size) tickSize = Number(market.minimum_tick_size);
-            } catch (e) {
-                this.logger.debug(`[Order] Market info fetch fallback for ${params.marketId}`);
+            if (book.tick_size) {
+                tickSize = Number(book.tick_size);
+            } else if (market.minimum_tick_size) {
+                tickSize = Number(market.minimum_tick_size);
             }
+
+            if (market.minimum_order_size) minOrderSize = Number(market.minimum_order_size);
 
             const side = params.side === 'BUY' ? Side.BUY : Side.SELL;
             
-            // 2. PRICE DETERMINATION & TICK ROUNDING
             let rawPrice = params.priceLimit;
 
-            // If no limit provided, take Market Price (hit the book)
             if (rawPrice === undefined) {
-                 const book = await this.client.getOrderBook(params.tokenId);
                  if (side === Side.BUY) {
-                     if (!book.asks || book.asks.length === 0) return "skipped_no_liquidity";
-                     rawPrice = Number(book.asks[0].price); // Buy at lowest ask
+                     if (!book.asks || book.asks.length === 0) return { success: false, error: "skipped_no_liquidity", sharesFilled: 0, priceFilled: 0 };
+                     rawPrice = Number(book.asks[0].price); 
                  } else {
-                     if (!book.bids || book.bids.length === 0) return "skipped_no_liquidity";
-                     rawPrice = Number(book.bids[0].price); // Sell at highest bid
+                     if (!book.bids || book.bids.length === 0) return { success: false, error: "skipped_no_liquidity", sharesFilled: 0, priceFilled: 0 };
+                     rawPrice = Number(book.bids[0].price); 
                  }
             }
 
-            // SAFETY: Clamp Price to valid ranges (0.01 - 0.99 usually)
-            // We use tickSize to determine the floor/ceil
             if (rawPrice >= 0.99) rawPrice = 0.99;
             if (rawPrice <= 0.01) rawPrice = 0.01;
 
-            // ROUND TO TICK SIZE
-            // This is critical. If tick is 0.01, price 0.543 becomes 0.54.
-            // If we send 0.543, CLOB rejects it.
             const inverseTick = Math.round(1 / tickSize);
             const roundedPrice = Math.floor(rawPrice * inverseTick) / inverseTick;
             
-            // 3. SIZE CALCULATION (SHARES)
-            // Polymarket orders are in SHARES, not USD.
-            // shares = sizeUsd / price
-            const rawShares = params.sizeUsd / roundedPrice;
+            let shares = params.sizeShares || 0;
             
-            // We must floor the shares to avoid fractional share errors if the market doesn't support them well,
-            // though Polymarket supports partials, integers are safer for "min size" checks.
-            const shares = Math.floor(rawShares);
-
-            // 4. MINIMUM SIZE CHECK
-            // If our calculated share count is below the market minimum (usually 5 shares), the API will reject it.
-            if (shares < minOrderSize) {
-                this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice}`);
-                return `skipped_min_size_limit`; 
+            if (!shares && params.sizeUsd > 0) {
+                 const rawShares = params.sizeUsd / roundedPrice;
+                 shares = Math.floor(rawShares);
             }
 
-            // 5. CONSTRUCT ORDER
+            if (shares < minOrderSize) {
+                this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice}`);
+                return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 }; 
+            }
+
             const order: any = {
                 tokenID: params.tokenId,
                 price: roundedPrice,
                 side: side,
                 size: shares,
                 feeRateBps: 0,
-                taker: "0x0000000000000000000000000000000000000000" // Standard taker address
+                taker: "0x0000000000000000000000000000000000000000" 
             };
 
-            this.logger.info(`📝 Placing Order (Safe): ${params.side} ${shares} shares @ $${roundedPrice.toFixed(2)} (Total: $${(shares*roundedPrice).toFixed(2)})`);
+            this.logger.info(`📝 Placing Order (Safe): ${params.side} ${shares} shares @ $${roundedPrice} (Tick: ${tickSize})`);
 
-            // 6. POST ORDER (FOK - Fill Or Kill)
-            // We use FOK so we don't end up with open orders that clog the account
             const res = await this.client.createAndPostOrder(
                 order, 
                 { 
                     negRisk,
-                    // Ensure tickSize is passed as a number or string based on SDK requirements
-                    // Casting to any to bypass strict type checks in some SDK versions that have mismatched types
                     tickSize: tickSize as any 
                 }, 
                 OrderType.FOK as any
@@ -339,7 +485,13 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
             if (res && res.success) {
                 this.logger.success(`✅ Order Accepted. Tx: ${res.transactionHash || res.orderID || 'OK'}`);
-                return res.orderID || res.transactionHash || "filled";
+                return { 
+                    success: true, 
+                    orderId: res.orderID, 
+                    txHash: res.transactionHash, 
+                    sharesFilled: shares,
+                    priceFilled: roundedPrice
+                };
             }
             
             throw new Error(res.errorMsg || "Order failed response");
@@ -347,7 +499,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
         } catch (error: any) {
             const errStr = String(error);
 
-            // Auth Retry Logic (Token Expiry)
             if (retryCount < 1 && (errStr.includes("401") || errStr.includes("403") || errStr.includes("invalid signature"))) {
                 this.logger.warn("⚠️ Auth Error. Refreshing keys and retrying...");
                 this.config.l2ApiCredentials = undefined; 
@@ -358,20 +509,19 @@ export class PolymarketAdapter implements IExchangeAdapter {
             
             const errorMsg = error.response?.data?.error || error.message;
             
-            // Map common errors to readable logs
             if (errorMsg?.includes("allowance")) {
                 this.logger.error("❌ Failed: Insufficient Allowance. Retrying approvals...");
                 await this.safeManager?.enableApprovals();
             } else if (errorMsg?.includes("balance")) {
                 this.logger.error("❌ Failed: Insufficient USDC Balance.");
-                return "insufficient_funds";
+                return { success: false, error: "insufficient_funds", sharesFilled: 0, priceFilled: 0 };
             } else if (errorMsg?.includes("minimum")) {
                  this.logger.error(`❌ Failed: Below Min Size (CLOB Rejection).`);
-                 return "skipped_min_size_limit";
+                 return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 };
             } else {
                 this.logger.error(`Order Error: ${errorMsg}`);
             }
-            return "failed";
+            return { success: false, error: "failed", sharesFilled: 0, priceFilled: 0 };
         }
     }
 

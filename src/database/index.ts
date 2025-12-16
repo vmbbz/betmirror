@@ -24,6 +24,10 @@ export interface IUser extends Document {
 export interface ITrade extends Document {
   userId: string;
   marketId: string;
+  // NEW FIELDS FOR CLOB TRACKING
+  clobOrderId?: string; 
+  assetId?: string;
+  
   outcome: string;
   side: 'BUY' | 'SELL';
   size: number;         // Signal Size (Whale)
@@ -52,6 +56,15 @@ export interface IFeedback extends Document {
 export interface IBridgeTransaction extends Document, Omit<BridgeTransactionRecord, 'id'> {
   userId: string;
   bridgeId: string; // Internal ID
+  timestamp: string;
+  fromChain: string;
+  toChain: string;
+  amountIn: string;
+  amountOut: string;
+  status: 'PENDING' | 'COMPLETED' | 'FAILED';
+  txHash: string;
+  tool: string;
+  fees: string;
 }
 
 export interface IDepositLog extends Document {
@@ -71,12 +84,19 @@ export interface IBotLog extends Document {
 // --- Schemas ---
 
 const ActivePositionSchema = new Schema({
+  tradeId: String, // Link to history
+  clobOrderId: String,
   marketId: String,
   tokenId: String,
   outcome: String,
   entryPrice: Number,
+  shares: Number, // Exact share count
   sizeUsd: Number,
-  timestamp: Number
+  timestamp: Number,
+  // Rich Data
+  currentPrice: Number,
+  question: String,
+  image: String
 }, { _id: false });
 
 const TradingWalletSchema = new Schema({
@@ -85,6 +105,9 @@ const TradingWalletSchema = new Schema({
   encryptedPrivateKey: String,
   ownerAddress: String,
   createdAt: String,
+  safeAddress: String,
+  isSafeDeployed: Boolean,
+  recoveryOwnerAdded: Boolean, // NEW: Track if user has added their own wallet
   // L2 CLOB Credentials (Not Private Keys, just API Access tokens)
   l2ApiCredentials: {
       key: String,
@@ -105,7 +128,9 @@ const UserSchema = new Schema<IUser>({
     totalFeesPaid: { type: Number, default: 0 },
     winRate: { type: Number, default: 0 },
     tradesCount: { type: Number, default: 0 },
-    allowanceApproved: { type: Boolean, default: false }
+    allowanceApproved: { type: Boolean, default: false },
+    portfolioValue: { type: Number, default: 0 },
+    cashBalance: { type: Number, default: 0 }
   },
   cashoutHistory: [Schema.Types.Mixed],
   lastActive: { type: Date, default: Date.now },
@@ -115,6 +140,8 @@ const UserSchema = new Schema<IUser>({
 const TradeSchema = new Schema<ITrade>({
   userId: { type: String, required: true, index: true },
   marketId: { type: String, required: true },
+  clobOrderId: { type: String, index: true }, // Fast lookups
+  assetId: String,
   outcome: String,
   side: String,
   size: Number,
@@ -194,20 +221,14 @@ export const BotLog = mongoose.model<IBotLog>('BotLog', BotLogSchema);
 export const connectDB = async (uri: string) => {
   try {
     mongoose.set('strictQuery', true);
-    
-    // Mask URI for safety in logs
     const maskedUri = uri.replace(/:\/\/.*@/, '://***:***@');
     console.log(`🔌 Attempting to connect to MongoDB...`);
-    
-    // Optimized connection options for cloud containers
     await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: 15000, // Wait 15s before giving up
-      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-      family: 4, // FORCE IPv4
-      dbName: 'betmirror' // Explicitly set DB name to avoid defaulting to 'test'
+      serverSelectionTimeoutMS: 15000, 
+      socketTimeoutMS: 45000, 
+      family: 4, 
+      dbName: 'betmirror' 
     });
-
-    // --- FIX: Drop Legacy Index ---
     try {
         if (mongoose.connection.db) {
             const indexName = 'handle_1';
@@ -216,11 +237,7 @@ export const connectDB = async (uri: string) => {
                 await mongoose.connection.db.collection('users').dropIndex(indexName);
             }
         }
-    } catch (e: any) {
-        // Ignore
-    }
-    
-    // Detailed Connection Logging
+    } catch (e: any) { }
     const dbName = mongoose.connection.name;
     const dbHost = mongoose.connection.host;
     console.log(`📦 Connected to MongoDB successfully!`);
@@ -230,8 +247,6 @@ export const connectDB = async (uri: string) => {
 
   } catch (error) {
     console.error('❌ MongoDB Connection Error:', error);
-    // Do NOT exit process. This kills the container and fails deployment health checks.
-    // Instead, throw error so the caller knows, but keeps the HTTP server alive.
     throw error;
   }
 };

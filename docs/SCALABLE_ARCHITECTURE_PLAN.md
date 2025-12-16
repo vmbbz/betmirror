@@ -48,11 +48,14 @@ export interface IExchangeAdapter {
     getMarketPrice(marketId: string, tokenId: string): Promise<number>;
     
     // Execution
-    createOrder(params: OrderParams): Promise<string>; // Returns Order ID / Tx Hash
+    createOrder(params: OrderParams): Promise<OrderResult>;
     cancelOrder(orderId: string): Promise<boolean>;
     
     // Order Management
     cashout(amount: number, destination: string): Promise<string>;
+    
+    // Legacy Accessors (Optional)
+    getFunderAddress?(): string | undefined;
 }
 ```
 
@@ -65,10 +68,27 @@ This adapter encapsulates the Gnosis Safe logic.
 *   **Auth:** Performs the `createOrDeriveApiKey` handshake using `SignatureType.POLY_GNOSIS_SAFE`.
 *   **Gas:** Uses `SafeManagerService` to route withdrawals via the Relayer.
 
-### C. Future Scaling (Kalshi Example)
+### C. Future Scaling (PredictBase Example)
 
-When we add Kalshi, we simply create `KalshiAdapter`:
+The architecture is fully ready for **PredictBase** (or Kalshi) integration. To add PredictBase:
 
-*   **Signer:** Uses `KALSHI_API_KEY` and `KALSHI_API_SECRET`.
-*   **Funder:** N/A (Custodial/KYC account).
-*   **Auth:** Direct HTTP Basic Auth or Bearer Token.
+1.  **Create Adapter:** `src/adapters/predictbase/predictbase.adapter.ts`.
+2.  **Implement Contract:**
+    *   `getPositions()`: Map PredictBase's API response to our `PositionData` type.
+    *   `createOrder()`: Use the PredictBase SDK to submit the order.
+3.  **Inject:** Simply change the import in `bot-engine.ts`.
+
+```typescript
+// Example PredictBase Adapter Stub
+export class PredictBaseAdapter implements IExchangeAdapter {
+    readonly exchangeName = 'PredictBase';
+    
+    async createOrder(params: OrderParams): Promise<OrderResult> {
+        // ... Call PredictBase Contract/API ...
+        return { success: true, txHash: '0x...' };
+    }
+    // ... implement other methods
+}
+```
+
+This ensures that the core bot logic (AI Risk Analysis, Notification Service, Database Sync) remains **100% reusable** across different markets.

@@ -142,6 +142,22 @@ graph TD
 
 ---
 
+## 🔌 Extensibility & Plugins
+
+Bet Mirror Pro utilizes a **Plugin-based Interface Architecture** (`IExchangeAdapter`) to decouple the core trading logic from specific market implementations.
+
+### The `IExchangeAdapter` Pattern
+The core `BotEngine` does not communicate directly with the Polymarket API. Instead, it talks to a standardized interface located at `src/adapters/interfaces.ts`.
+
+This allows for seamless integration of new prediction markets (e.g., **PredictBase**, **Kalshi**) without rewriting the bot's risk management, database, or notification logic.
+
+**How to add a new market:**
+1.  **Create Adapter:** Implement `src/adapters/predictbase/predictbase.adapter.ts`.
+2.  **Implement Methods:** Fulfill the `IExchangeAdapter` contract (`getPositions`, `createOrder`, `fetchBalance`).
+3.  **Dependency Injection:** Swap the adapter import in `src/server/bot-engine.ts`.
+
+---
+
 ## 📸 Screenshots
 
 ![Dashboard View](./docs/assets/dashboard_view.png)

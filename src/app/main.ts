@@ -10,11 +10,12 @@ import { FeeDistributorService } from '../services/fee-distributor.service.js';
 import { ConsoleLogger } from '../utils/logger.util.js';
 import { getUsdBalanceApprox, getPolBalance } from '../utils/get-balance.util.js';
 import { AlphaRegistryService } from '../services/alpha-registry.service.js';
-import { IExchangeAdapter, OrderParams } from '../adapters/interfaces.js';
-import { OrderBook } from '../domain/market.types.js';
+import { IExchangeAdapter, OrderParams, OrderResult } from '../adapters/interfaces.js';
+import { OrderBook, PositionData } from '../domain/market.types.js';
 import { Side, OrderType } from '@polymarket/clob-client';
 import axios from 'axios';
-import { TradeSignal } from '../domain/trade.types.js';
+import { TradeSignal, TradeHistoryEntry } from '../domain/trade.types.js';
+import crypto from 'crypto';
 
 interface PolyActivityResponse {
   type: string;
@@ -64,11 +65,15 @@ async function main(): Promise<void> {
       initialize: async () => {},
       validatePermissions: async () => true,
       authenticate: async () => {}, 
+      isReady: () => true, // Headless is always ready if init passes
       fetchBalance: async (address: string) => {
           if (address.toLowerCase() === client.wallet.address.toLowerCase()) {
               return getUsdBalanceApprox(client.wallet, env.usdcContractAddress);
           }
           return 0; 
+      },
+      getPortfolioValue: async (address: string) => {
+          return getUsdBalanceApprox(client.wallet, env.usdcContractAddress); // Approximate
       },
       getMarketPrice: async () => 0, 
       getOrderBook: async (tokenId: string): Promise<OrderBook> => {
@@ -77,6 +82,29 @@ async function main(): Promise<void> {
             bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
             asks: book.asks.map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
           };
+      },
+      getPositions: async (address: string): Promise<PositionData[]> => {
+        try {
+            // Note: In headless mode we still use data-api for simplicity unless refactored
+            // But since this is likely EOA, it might be fine or we can switch to getTrades reconstruction too.
+            // Keeping as is to minimize changes unless requested, but added isReady to satisfy interface.
+            const url = `https://data-api.polymarket.com/positions?user=${address}`;
+            const res = await axios.get(url);
+            
+            if(!Array.isArray(res.data)) return [];
+            
+            return res.data.map((p: any) => ({
+                marketId: p.conditionId || p.market,
+                tokenId: p.asset,
+                outcome: p.outcome || 'UNK',
+                balance: Number(p.size),
+                valueUsd: Number(p.size) * Number(p.price),
+                entryPrice: Number(p.avgPrice || p.price),
+                currentPrice: Number(p.price)
+            }));
+        } catch(e) {
+            return [];
+        }
       },
       fetchPublicTrades: async (address: string, limit: number = 20): Promise<TradeSignal[]> => {
         try {
@@ -107,25 +135,37 @@ async function main(): Promise<void> {
             return [];
         }
       },
-      createOrder: async (params: OrderParams): Promise<string> => {
+      getTradeHistory: async (address: string, limit: number = 20): Promise<TradeHistoryEntry[]> => {
+          return []; // Simplified for headless
+      },
+      createOrder: async (params: OrderParams): Promise<OrderResult> => {
           const isBuy = params.side === 'BUY';
           const orderSide = isBuy ? Side.BUY : Side.SELL;
           
           try {
              const currentOrderBook = await client.getOrderBook(params.tokenId);
              const currentLevels = isBuy ? currentOrderBook.asks : currentOrderBook.bids;
-             if (!currentLevels || currentLevels.length === 0) throw new Error("No liquidity");
+             if (!currentLevels || currentLevels.length === 0) {
+                 return { success: false, sharesFilled: 0, priceFilled: 0, error: "No liquidity" };
+             }
              
              const level = currentLevels[0];
              const price = parseFloat(level.price);
              if (params.priceLimit) {
-                 if (isBuy && price > params.priceLimit) throw new Error("Price too high");
-                 if (!isBuy && price < params.priceLimit) throw new Error("Price too low");
+                 if (isBuy && price > params.priceLimit) return { success: false, sharesFilled: 0, priceFilled: 0, error: "Price too high" };
+                 if (!isBuy && price < params.priceLimit) return { success: false, sharesFilled: 0, priceFilled: 0, error: "Price too low" };
              }
 
-             const size = params.sizeUsd / price;
-             const safeSize = Math.floor(size * 100) / 100;
-             if (safeSize <= 0) return "skipped_small_size";
+             // Handle explicit share size (selling) vs USD size (buying)
+             let safeSize = 0;
+             if (params.sizeShares) {
+                 safeSize = params.sizeShares;
+             } else {
+                 const size = params.sizeUsd / price;
+                 safeSize = Math.floor(size * 100) / 100;
+             }
+             
+             if (safeSize <= 0) return { success: false, sharesFilled: 0, priceFilled: 0, error: "skipped_small_size" };
 
              const orderArgs = {
                 side: orderSide,
@@ -137,11 +177,19 @@ async function main(): Promise<void> {
              const signedOrder = await client.createMarketOrder(orderArgs);
              const response = await client.postOrder(signedOrder, OrderType.FOK);
              
-             if(response.success) return response.orderID || "filled";
-             throw new Error(response.errorMsg || "Order failed");
+             if(response.success) {
+                 return {
+                     success: true,
+                     orderId: response.orderID,
+                     txHash: response.transactionHash,
+                     sharesFilled: safeSize,
+                     priceFilled: price
+                 };
+             }
+             return { success: false, sharesFilled: 0, priceFilled: 0, error: response.errorMsg || "Order failed" };
         } catch(e: any) {
             logger.error("Headless Order Failed", e);
-            throw e;
+            return { success: false, sharesFilled: 0, priceFilled: 0, error: e.message };
         }
       },
       cancelOrder: async () => true,

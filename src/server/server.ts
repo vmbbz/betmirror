@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -62,27 +63,37 @@ async function startUserBot(userId: string, config: BotConfig) {
 
     const engine = new BotEngine(engineConfig, dbRegistryService, {
         onPositionsUpdate: async (positions) => {
+            // We still update DB for persistence/backup, but UI will prefer live feed
             await User.updateOne({ address: normId }, { activePositions: positions });
         },
         onCashout: async (record) => {
             await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
         },
         onTradeComplete: async (trade) => {
-            await Trade.create({
-                userId: normId,
-                marketId: trade.marketId,
-                outcome: trade.outcome,
-                side: trade.side,
-                size: trade.size,
-                executedSize: (trade as any).executedSize || 0,
-                price: trade.price,
-                pnl: trade.pnl,
-                status: trade.status,
-                txHash: trade.txHash,
-                aiReasoning: trade.aiReasoning,
-                riskScore: trade.riskScore,
-                timestamp: trade.timestamp
-            });
+            // NOTE: Trade creation is now handled inside BotEngine for BUYs.
+            // This callback is mainly for logs or extra handling.
+            // Only create if ID doesn't exist (avoid dups)
+            const exists = await Trade.findById(trade.id);
+            if (!exists) {
+                await Trade.create({
+                    _id: trade.id, // Use passed ID
+                    userId: normId,
+                    marketId: trade.marketId,
+                    outcome: trade.outcome,
+                    side: trade.side,
+                    size: trade.size,
+                    executedSize: (trade as any).executedSize || 0,
+                    price: trade.price,
+                    pnl: trade.pnl,
+                    status: trade.status,
+                    txHash: trade.txHash,
+                    clobOrderId: trade.clobOrderId, 
+                    assetId: trade.assetId,         
+                    aiReasoning: trade.aiReasoning,
+                    riskScore: trade.riskScore,
+                    timestamp: trade.timestamp
+                });
+            }
         },
         onStatsUpdate: async (stats) => {
             await User.updateOne({ address: normId }, { stats });
@@ -133,10 +144,8 @@ app.post('/api/wallet/status', async (req: any, res: any) => {
       } else {
         let safeAddr = user.tradingWallet.safeAddress || null;
         
-        // REPAIR LOGIC: Only compute if missing from DB.
         if (user.tradingWallet.address && !safeAddr) {
             try {
-                // Lock it in now
                 const newSafeAddr = await SafeManagerService.computeAddress(user.tradingWallet.address);
                 safeAddr = newSafeAddr;
                 user.tradingWallet.safeAddress = safeAddr;
@@ -154,7 +163,8 @@ app.post('/api/wallet/status', async (req: any, res: any) => {
             status: 'ACTIVE', 
             address: user.tradingWallet.address, // EOA (Signer)
             safeAddress: safeAddr,               // Gnosis (Funder)
-            type: user.tradingWallet.type
+            type: user.tradingWallet.type,
+            recoveryOwnerAdded: user.tradingWallet.recoveryOwnerAdded || false
         });
       }
   } catch (e: any) {
@@ -175,13 +185,10 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
     const normId = userId.toLowerCase();
 
     try {
-        // 1. Check if user already exists with a wallet
         let user = await User.findOne({ address: normId });
         
         if (user && user.tradingWallet && user.tradingWallet.address) {
             console.log(`[ACTIVATION] User ${normId} already has wallet.`);
-            
-            // Ensure Safe address is present
             let safeAddr = user.tradingWallet.safeAddress;
             if (!safeAddr) {
                  safeAddr = await SafeManagerService.computeAddress(user.tradingWallet.address);
@@ -199,19 +206,16 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
             return;
         }
 
-        // 2. Generate NEW Trading EOA
         console.log(`[ACTIVATION] Generating NEW keys for ${normId}...`);
         const walletConfig = await evmWalletService.createTradingWallet(normId);
-        
-        // 3. Compute Safe Address IMMEDIATELY and STORE IT
-        // This makes the pair (Signer <-> Safe) permanent.
         const safeAddr = await SafeManagerService.computeAddress(walletConfig.address);
         
         const configToSave: TradingWalletConfig = {
             ...walletConfig,
             type: 'GNOSIS_SAFE',
-            safeAddress: safeAddr, // <--- Source of Truth
-            isSafeDeployed: false
+            safeAddress: safeAddr, 
+            isSafeDeployed: false,
+            recoveryOwnerAdded: false
         };
 
         await User.findOneAndUpdate(
@@ -232,7 +236,44 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
     }
 });
 
-// 3. Global Stats
+// 2b. Add Recovery Owner (Multi-Owner Safe)
+app.post('/api/wallet/add-recovery', async (req: any, res: any) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'Missing User ID' });
+    const normId = userId.toLowerCase();
+
+    try {
+        const user = await User.findOne({ address: normId });
+        if (!user || !user.tradingWallet || !user.tradingWallet.encryptedPrivateKey) {
+            return res.status(404).json({ error: 'User wallet not found' });
+        }
+
+        const walletConfig = user.tradingWallet;
+        const safeAddr = walletConfig.safeAddress || await SafeManagerService.computeAddress(walletConfig.address);
+
+        const signer = await evmWalletService.getWalletInstance(walletConfig.encryptedPrivateKey);
+        const safeManager = new SafeManagerService(
+            signer, ENV.builderApiKey, ENV.builderApiSecret, ENV.builderApiPassphrase, serverLogger, safeAddr
+        );
+
+        // Execute Add Owner
+        const txHash = await safeManager.addOwner(normId);
+        
+        if (txHash === "ALREADY_OWNER" || txHash.startsWith("0x")) {
+            user.tradingWallet.recoveryOwnerAdded = true;
+            await user.save();
+            res.json({ success: true, txHash: txHash === "ALREADY_OWNER" ? null : txHash, alreadyOwner: txHash === "ALREADY_OWNER" });
+        } else {
+             throw new Error("Failed to add owner");
+        }
+
+    } catch (e: any) {
+        serverLogger.error(`Recovery Add Failed: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3. Global Stats (No Change)
 app.get('/api/stats/global', async (req: any, res: any) => {
     try {
         const userCount = await User.countDocuments();
@@ -340,7 +381,6 @@ app.post('/api/bot/start', async (req: any, res: any) => {
           return; 
       }
 
-      // --- EXTRACT L2 CREDENTIALS ---
       const l2Creds = user.tradingWallet.l2ApiCredentials;
       
       const config: BotConfig = {
@@ -355,13 +395,11 @@ app.post('/api/bot/start', async (req: any, res: any) => {
         enableNotifications: notifications?.enabled,
         userPhoneNumber: notifications?.phoneNumber,
         autoCashout: autoCashout,
-        maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : 100, // Handle new param
+        maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : 100, 
         activePositions: user.activePositions || [],
         stats: user.stats,
-        // PASS ENV VARS
         l2ApiCredentials: l2Creds,
         mongoEncryptionKey: ENV.mongoEncryptionKey,
-        // PASS BUILDER CREDENTIALS FOR RELAYER & ATTRIBUTION
         builderApiKey: ENV.builderApiKey,
         builderApiSecret: ENV.builderApiSecret,
         builderApiPassphrase: ENV.builderApiPassphrase,
@@ -370,7 +408,6 @@ app.post('/api/bot/start', async (req: any, res: any) => {
 
       await startUserBot(normId, config);
       
-      // PERSIST RUNNING STATE
       user.activeBotConfig = config;
       user.isBotRunning = true;
       await user.save();
@@ -405,7 +442,6 @@ app.post('/api/bot/update', async (req: any, res: any) => {
         const user = await User.findOne({ address: normId });
         if (!user) { res.status(404).json({ error: 'User not found' }); return; }
 
-        // 1. Update Database Config
         if (!user.activeBotConfig) user.activeBotConfig = {} as any;
         const cfg = user.activeBotConfig!;
 
@@ -422,7 +458,6 @@ app.post('/api/bot/update', async (req: any, res: any) => {
 
         await User.updateOne({ address: normId }, { activeBotConfig: cfg });
 
-        // 2. Update Live Bot Instance (if running)
         const engine = ACTIVE_BOTS.get(normId);
         if (engine && engine.isRunning) {
             engine.updateConfig({
@@ -467,15 +502,87 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
              id: t._id.toString()
         }));
 
+        // LIVE FEED:
+        // Use active memory state if running, else DB state.
+        let livePositions = [];
+        
+        if (engine) {
+            // Priority: Active Engine Memory (which is synced from DB)
+            livePositions = (engine as any).activePositions || [];
+        } else if (user && user.activePositions) {
+            // Fallback: Database State
+            livePositions = user.activePositions;
+        }
+
+        // --- DEBUG LOG FOR POSITIONS ---
+        // Prints the raw position data returned to the UI for inspection
+        if (livePositions.length > 0) {
+            console.log(`\n📦 [DEBUG] Raw Positions Payload for ${normId.slice(0, 6)}... :`);
+            console.dir(livePositions, { depth: null, colors: true });
+        }
+        // -------------------------------
+
         res.json({ 
             isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
             logs: formattedLogs,
             history: historyUI,
+            positions: livePositions, 
             stats: user?.stats || null,
             config: user?.activeBotConfig || null
         });
     } catch (e) {
+        console.error("Status Error:", e);
         res.status(500).json({ error: 'DB Error' });
+    }
+});
+
+// 7b. Manual Exit (Updated)
+app.post('/api/trade/exit', async (req: any, res: any) => {
+    const { userId, marketId, outcome, tradeId } = req.body;
+    
+    if (!userId || (!marketId && !tradeId)) { 
+        res.status(400).json({ error: 'Missing parameters' }); 
+        return; 
+    }
+    const normId = userId.toLowerCase();
+    
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine) {
+        res.status(400).json({ error: 'Bot not active in memory. Please Start Engine to manage positions.' });
+        return;
+    }
+
+    try {
+        // Support exiting via tradeId directly
+        const idToSell = tradeId || marketId;
+        const txHash = await engine.emergencySell(idToSell, outcome);
+        res.json({ success: true, txHash });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message || 'Exit failed' });
+    }
+});
+
+// 7c. Manual Sync Positions (Updated)
+app.post('/api/trade/sync', async (req: any, res: any) => {
+    const { userId, force } = req.body;
+    
+    if (!userId) { 
+        res.status(400).json({ error: 'Missing parameters' }); 
+        return; 
+    }
+    const normId = userId.toLowerCase();
+    
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine) {
+        res.status(400).json({ error: 'Bot must be running to sync positions.' });
+        return;
+    }
+
+    try {
+        await engine.syncPositions(force === true); // Allow forcing chain sync
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message || 'Sync failed' });
     }
 });
 
@@ -509,7 +616,7 @@ app.post('/api/registry', async (req, res) => {
             listedBy: listedBy.toLowerCase(), 
             listedAt: new Date().toISOString(),
             isSystem: false,
-            tags: [], // Fixed: Empty array for new user-listed wallets
+            tags: [], 
             winRate: 0, totalPnl: 0, tradesLast30d: 0, followers: 0, copyCount: 0, copyProfitGenerated: 0
         });
         
@@ -593,35 +700,26 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
         const walletConfig = user.tradingWallet;
         let txHash = '';
 
-        // Provider for balance checks
         const provider = new JsonRpcProvider(ENV.rpcUrl);
         const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
         const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, USDC_ABI, provider);
 
-        // 1. DETERMINE SAFE ADDRESS FROM DB (Source of Truth)
-        // If targetSafeAddress is provided (Emergency mode), use it. Otherwise use DB.
         let safeAddr = targetSafeAddress || walletConfig.safeAddress;
         
         if (!safeAddr) {
-             // Fallback calculation only if DB is empty (should not happen after activation)
              safeAddr = await SafeManagerService.computeAddress(walletConfig.address);
         }
         
-        // Case A: Withdraw from SAFE (Type 2 - Gasless via Relayer or Rescue)
         if (!forceEoa) {
-             // 1. Check Balance based on Type
              let balanceToWithdraw = 0n;
-             
              if (tokenType === 'POL') {
                  balanceToWithdraw = await provider.getBalance(safeAddr);
              } else {
-                 // Default to USDC.e
                  try {
                     balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
                  } catch(e) {}
              }
              
-             // Check EOA Balance (for Stuck Funds logic - usually USDC but good to be consistent)
              let eoaBalance = 0n;
              if (!targetSafeAddress) {
                 try {
@@ -638,12 +736,10 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
              if (balanceToWithdraw > 0n) {
                  const signer = await evmWalletService.getWalletInstance(walletConfig.encryptedPrivateKey);
                  
-                 // INITIALIZE MANAGER WITH KNOWN ADDRESS
                  const safeManager = new SafeManagerService(
                      signer, ENV.builderApiKey, ENV.builderApiSecret, ENV.builderApiPassphrase, serverLogger, safeAddr
                  );
 
-                 // Attempt withdrawal using the specific safe instance
                  if (tokenType === 'POL') {
                      txHash = await safeManager.withdrawNative(toAddress || normId, balanceToWithdraw.toString());
                  } else {
@@ -651,16 +747,13 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
                  }
 
              } else if (eoaBalance > 0n && !targetSafeAddress) {
-                 // AUTO RESCUE: Safe is empty, but EOA has funds
                  serverLogger.warn(`[WITHDRAW] Safe empty, but found ${eoaBalance.toString()} ${tokenType || 'USDC'} in EOA Signer. Executing Auto-Rescue.`);
                  
                  let tokenAddr = TOKENS.USDC_BRIDGED;
                  if (tokenType === 'POL') tokenAddr = TOKENS.POL;
 
-                 // For POL rescue from EOA, we need to leave some gas
                  let amountStr: string | undefined = undefined;
                  if (tokenType === 'POL') {
-                     // Leave 0.05 POL for gas
                      const reserve = ethers.parseEther("0.05");
                      if (eoaBalance > reserve) {
                          amountStr = ethers.formatEther(eoaBalance - reserve);
@@ -680,7 +773,7 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
              }
 
         } else {
-            // Case B: Forced EOA Withdrawal
+            // Forced EOA Withdrawal
             serverLogger.info(`[WITHDRAW] Forced EOA/Signer Withdrawal for ${normId}`);
             
             let tokenAddress = TOKENS.USDC_BRIDGED;
@@ -701,8 +794,6 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
 });
 
 app.get('*', (req, res) => {
-    // SECURITY: Ensure index.html exists before trying to serve it.
-    // This prevents unhandled ENOENT errors crashing the server if the build failed or wasn't run.
     const indexPath = path.join(distPath, 'index.html');
     if (!fs.existsSync(indexPath)) {
         console.error(`[SERVER] Missing index.html at ${indexPath}. Frontend not built?`);
@@ -715,7 +806,6 @@ app.get('*', (req, res) => {
 async function restoreBots() {
     console.log("🔄 Restoring Active Bots from Database...");
     try {
-        // Debug: Check total users first
         const totalUsers = await User.countDocuments();
         const dbName = mongoose.connection.name;
         console.log(`Diagnostic: DB [${dbName}] contains ${totalUsers} users.`);
@@ -738,7 +828,6 @@ async function restoreBots() {
                      startCursor: lastTime,
                      l2ApiCredentials: l2Creds,
                      mongoEncryptionKey: ENV.mongoEncryptionKey,
-                     // PASS BUILDER CREDENTIALS ON RESTORE
                      builderApiKey: ENV.builderApiKey,
                      builderApiSecret: ENV.builderApiSecret,
                      builderApiPassphrase: ENV.builderApiPassphrase
@@ -787,9 +876,7 @@ async function seedRegistry() {
                 });
                 console.log(`   + Added ${normalized.slice(0,8)}...`);
             } else if (!exists.isSystem) {
-                // Upgrade existing to system if matched
                 exists.isSystem = true;
-                // Add OFFICIAL tag if not present
                 if (!exists.tags?.includes('OFFICIAL')) {
                     exists.tags = [...(exists.tags || []), 'OFFICIAL'];
                 }
@@ -801,21 +888,18 @@ async function seedRegistry() {
         }
     }
     
-    // Run analytics immediately after seeding to populate stats
     await registryAnalytics.updateAllRegistryStats();
 }
 
 // --- BOOTSTRAP ---
-// 1. Start HTTP Server immediately
 const server = app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`🌍 Bet Mirror Cloud Server running on port ${PORT}`);
 });
 
-// 2. Connect to DB asynchronously
 connectDB(ENV.mongoUri)
     .then(async () => {
         console.log("✅ DB Connected. Initializing background services...");
-        await seedRegistry(); // Seed wallets.txt into DB
+        await seedRegistry(); 
         restoreBots();
     })
     .catch((err) => {

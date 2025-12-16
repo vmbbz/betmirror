@@ -1,12 +1,19 @@
 import mongoose, { Schema } from 'mongoose';
 // --- Schemas ---
 const ActivePositionSchema = new Schema({
+    tradeId: String, // Link to history
+    clobOrderId: String,
     marketId: String,
     tokenId: String,
     outcome: String,
     entryPrice: Number,
+    shares: Number, // Exact share count
     sizeUsd: Number,
-    timestamp: Number
+    timestamp: Number,
+    // Rich Data
+    currentPrice: Number,
+    question: String,
+    image: String
 }, { _id: false });
 const TradingWalletSchema = new Schema({
     address: String,
@@ -14,6 +21,9 @@ const TradingWalletSchema = new Schema({
     encryptedPrivateKey: String,
     ownerAddress: String,
     createdAt: String,
+    safeAddress: String,
+    isSafeDeployed: Boolean,
+    recoveryOwnerAdded: Boolean, // NEW: Track if user has added their own wallet
     // L2 CLOB Credentials (Not Private Keys, just API Access tokens)
     l2ApiCredentials: {
         key: String,
@@ -33,7 +43,9 @@ const UserSchema = new Schema({
         totalFeesPaid: { type: Number, default: 0 },
         winRate: { type: Number, default: 0 },
         tradesCount: { type: Number, default: 0 },
-        allowanceApproved: { type: Boolean, default: false }
+        allowanceApproved: { type: Boolean, default: false },
+        portfolioValue: { type: Number, default: 0 },
+        cashBalance: { type: Number, default: 0 }
     },
     cashoutHistory: [Schema.Types.Mixed],
     lastActive: { type: Date, default: Date.now },
@@ -42,6 +54,8 @@ const UserSchema = new Schema({
 const TradeSchema = new Schema({
     userId: { type: String, required: true, index: true },
     marketId: { type: String, required: true },
+    clobOrderId: { type: String, index: true }, // Fast lookups
+    assetId: String,
     outcome: String,
     side: String,
     size: Number,
@@ -112,17 +126,14 @@ export const BotLog = mongoose.model('BotLog', BotLogSchema);
 export const connectDB = async (uri) => {
     try {
         mongoose.set('strictQuery', true);
-        // Mask URI for safety in logs
         const maskedUri = uri.replace(/:\/\/.*@/, '://***:***@');
         console.log(`🔌 Attempting to connect to MongoDB...`);
-        // Optimized connection options for cloud containers
         await mongoose.connect(uri, {
-            serverSelectionTimeoutMS: 15000, // Wait 15s before giving up
-            socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-            family: 4, // FORCE IPv4
-            dbName: 'betmirror' // Explicitly set DB name to avoid defaulting to 'test'
+            serverSelectionTimeoutMS: 15000,
+            socketTimeoutMS: 45000,
+            family: 4,
+            dbName: 'betmirror'
         });
-        // --- FIX: Drop Legacy Index ---
         try {
             if (mongoose.connection.db) {
                 const indexName = 'handle_1';
@@ -132,10 +143,7 @@ export const connectDB = async (uri) => {
                 }
             }
         }
-        catch (e) {
-            // Ignore
-        }
-        // Detailed Connection Logging
+        catch (e) { }
         const dbName = mongoose.connection.name;
         const dbHost = mongoose.connection.host;
         console.log(`📦 Connected to MongoDB successfully!`);
@@ -145,8 +153,6 @@ export const connectDB = async (uri) => {
     }
     catch (error) {
         console.error('❌ MongoDB Connection Error:', error);
-        // Do NOT exit process. This kills the container and fails deployment health checks.
-        // Instead, throw error so the caller knows, but keeps the HTTP server alive.
         throw error;
     }
 };

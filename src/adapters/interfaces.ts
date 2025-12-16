@@ -1,6 +1,6 @@
 
-import { OrderBook } from '../domain/market.types.js';
-import { TradeSignal } from '../domain/trade.types.js';
+import { OrderBook, PositionData } from '../domain/market.types.js';
+import { TradeSignal, TradeHistoryEntry } from '../domain/trade.types.js';
 
 export type OrderSide = 'BUY' | 'SELL';
 
@@ -11,6 +11,17 @@ export interface OrderParams {
     side: OrderSide;
     sizeUsd: number;
     priceLimit?: number;
+    // New: Allow specifying raw share count for sells
+    sizeShares?: number; 
+}
+
+export interface OrderResult {
+    success: boolean;
+    orderId?: string;
+    txHash?: string;
+    sharesFilled: number;
+    priceFilled: number;
+    error?: string;
 }
 
 /**
@@ -26,18 +37,24 @@ export interface IExchangeAdapter {
     // Auth & Setup
     validatePermissions(): Promise<boolean>;
     authenticate(): Promise<void>;
+    isReady(): boolean; // Check if authenticated/connected
     
     // Market Data
     fetchBalance(address: string): Promise<number>;
+    getPortfolioValue(address: string): Promise<number>; // NEW: Total Equity
     getMarketPrice(marketId: string, tokenId: string): Promise<number>;
     getOrderBook(tokenId: string): Promise<OrderBook>;
+    getPositions(address: string): Promise<PositionData[]>; // Sync positions
     
     // Monitoring
     // Returns normalized TradeSignals for the monitoring loop
     fetchPublicTrades(address: string, limit?: number): Promise<TradeSignal[]>;
+    
+    // History Sync
+    getTradeHistory(address: string, limit?: number): Promise<TradeHistoryEntry[]>;
 
     // Execution
-    createOrder(params: OrderParams): Promise<string>; // Returns Order ID / Tx Hash
+    createOrder(params: OrderParams): Promise<OrderResult>; // Updated return type
     cancelOrder(orderId: string): Promise<boolean>;
     
     // Order Management

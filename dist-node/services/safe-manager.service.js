@@ -14,6 +14,7 @@ const CTF_EXCHANGE_ADDRESS = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
 const NEG_RISK_CTF_EXCHANGE_ADDRESS = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
 const NEG_RISK_ADAPTER_ADDRESS = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296";
 // Gnosis Safe Constants (Polymarket Specific Factory)
+// Users should verify this matches their deployment target.
 const SAFE_PROXY_FACTORY_ADDRESS = "0xaacfeea03eb1561c4e67d661e40682bd20e3541b";
 const SAFE_SINGLETON_ADDRESS = "0x3e5c63644e683549055b9be8653de26e0b4cd36e";
 const FALLBACK_HANDLER_ADDRESS = "0xf48f2b2d2a534e40247ecb36350021948091179d";
@@ -21,7 +22,9 @@ const SAFE_ABI = [
     "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) payable returns (bool success)",
     "function nonce() view returns (uint256)",
     "function getTransactionHash(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, uint256 _nonce) view returns (bytes32)",
-    "function setup(address[] calldata _owners, uint256 _threshold, address to, bytes calldata data, address fallbackHandler, address paymentToken, uint256 payment, address paymentReceiver)"
+    "function setup(address[] calldata _owners, uint256 _threshold, address to, bytes calldata data, address fallbackHandler, address paymentToken, uint256 payment, address paymentReceiver)",
+    "function isOwner(address owner) view returns (bool)",
+    "function addOwnerWithThreshold(address owner, uint256 _threshold)"
 ];
 const PROXY_FACTORY_ABI = [
     "function createProxyWithNonce(address _singleton, bytes memory initializer, uint256 saltNonce) returns (address proxy)"
@@ -57,6 +60,8 @@ export class SafeManagerService {
             throw new Error("SafeManagerService initialized without a valid Safe Address.");
         }
         this.safeAddress = knownSafeAddress;
+        // Log Factory for verification
+        this.logger.info(`ℹ️ Using Safe Proxy Factory: ${SAFE_PROXY_FACTORY_ADDRESS}`);
         let builderConfig = undefined;
         if (!builderApiKey || !builderApiSecret || !builderApiPassphrase) {
             this.logger.warn(`⚠️ Builder Creds Missing. Safe Relayer functionality limited.`);
@@ -76,10 +81,11 @@ export class SafeManagerService {
             }
         }
         const account = privateKeyToAccount(signer.privateKey);
+        // FIX: Use explicit high-reliability RPC. Default http() uses public nodes which flake often.
         const viemClient = createWalletClient({
             account,
             chain: polygon,
-            transport: http()
+            transport: http('https://polygon-rpc.com')
         });
         this.viemPublicClient = createPublicClient({
             chain: polygon,
@@ -245,6 +251,50 @@ export class SafeManagerService {
             this.logger.warn(`   -> Switching to RESCUE MODE (On-Chain) for ${safe}.`);
             return await this.withdrawNativeOnChain(to, amount);
         }
+    }
+    // --- ON-CHAIN RECOVERY & ADMIN METHODS ---
+    async addOwner(newOwnerAddress) {
+        this.logger.info(`🛡️ Adding Recovery Owner: ${newOwnerAddress} to Safe ${this.safeAddress}`);
+        if (!this.signer.provider)
+            throw new Error("No provider available");
+        // 1. Verify not already owner
+        const safeContract = new Contract(this.safeAddress, SAFE_ABI, this.signer);
+        const isOwner = await safeContract.isOwner(newOwnerAddress);
+        if (isOwner) {
+            this.logger.info("   Address is already an owner.");
+            return "ALREADY_OWNER";
+        }
+        // 2. Check Gas on Signer (Relayer usually doesn't pay for Safe Admin tasks)
+        const gasBal = await this.signer.provider.getBalance(this.signer.address);
+        if (gasBal < 20000000000000000n) { // 0.02 POL
+            throw new Error("Bot Signer Wallet needs ~0.05 POL (Matic) to execute this admin transaction.");
+        }
+        // 3. Prepare Add Owner Tx
+        const safeInterface = new Interface(SAFE_ABI);
+        // addOwnerWithThreshold(address owner, uint256 _threshold)
+        // We keep threshold at 1 so EITHER the bot OR the user can sign independently.
+        const innerData = safeInterface.encodeFunctionData("addOwnerWithThreshold", [newOwnerAddress, 1]);
+        const safeTxGas = 0;
+        const baseGas = 0;
+        const gasPrice = 0;
+        const gasToken = "0x0000000000000000000000000000000000000000";
+        const refundReceiver = "0x0000000000000000000000000000000000000000";
+        const operation = 0; // Call
+        let nonce = 0;
+        try {
+            nonce = await safeContract.nonce();
+        }
+        catch (e) { }
+        const txHashBytes = await safeContract.getTransactionHash(this.safeAddress, // To Self
+        0, // Value
+        innerData, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce);
+        const signature = await this.signer.signMessage(Buffer.from(txHashBytes.slice(2), 'hex'));
+        this.logger.info(`   Broadcasting Admin Tx...`);
+        const tx = await safeContract.execTransaction(this.safeAddress, // Safe calls itself to add owner
+        0, innerData, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signature);
+        await tx.wait();
+        this.logger.success(`   ✅ Owner Added! Tx: ${tx.hash}`);
+        return tx.hash;
     }
     async deploySafeOnChain() {
         this.logger.warn(`🏗️ STARTING ON-CHAIN RESCUE DEPLOYMENT...`);

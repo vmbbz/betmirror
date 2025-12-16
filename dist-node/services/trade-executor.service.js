@@ -10,19 +10,21 @@ export class TradeExecutorService {
     constructor(deps) {
         this.deps = deps;
     }
+    // Updated: Execute Exit now sells SHARES, not USD amount, ensuring 100% closure regardless of price
     async executeManualExit(position, currentPrice) {
         const { logger, adapter } = this.deps;
         try {
-            logger.info(`📉 Executing Manual Exit (Auto-TP) for ${position.tokenId} @ ${currentPrice}`);
-            await adapter.createOrder({
+            logger.info(`📉 Executing Manual Exit: Selling ${position.shares} shares of ${position.tokenId}`);
+            const result = await adapter.createOrder({
                 marketId: position.marketId,
                 tokenId: position.tokenId,
                 outcome: position.outcome,
                 side: 'SELL',
-                sizeUsd: position.sizeUsd,
-                priceLimit: 0 // Market sell
+                sizeUsd: 0, // Ignored when sizeShares is present
+                sizeShares: position.shares, // Sell exact number of shares held
+                priceLimit: 0 // Market sell (hit the bid)
             });
-            return true;
+            return result.success;
         }
         catch (e) {
             logger.error(`Failed to execute manual exit`, e);
@@ -31,6 +33,13 @@ export class TradeExecutorService {
     }
     async copyTrade(signal) {
         const { logger, env, adapter, proxyWallet } = this.deps;
+        // Default Failure Result
+        const failResult = (reason) => ({
+            status: 'SKIPPED',
+            executedAmount: 0,
+            executedShares: 0,
+            reason
+        });
         try {
             // 1. Get User Balance (Real-time + Local Adjustment)
             // Only fetch from chain every 10 seconds to save RPC, otherwise rely on local decrement
@@ -60,17 +69,14 @@ export class TradeExecutorService {
             logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} | You: $${effectiveBalance.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.reason})`);
             logger.info(`🔗 Trader: ${profileUrl}`);
             if (sizing.targetUsdSize < 0.50) {
-                // Polymarket minimum is technically low, but usually <$1 orders are unreliable.
-                // We allow >$0.50 to handle small tests, but <$0.10 is dust.
                 if (effectiveBalance < 0.50)
-                    return "skipped_insufficient_balance";
-                // If the calculated size is dust but we have funds, it means the whale bet was tiny relative to ratio.
+                    return failResult("skipped_insufficient_balance");
                 if (sizing.targetUsdSize < 0.10)
-                    return "skipped_dust_size";
+                    return failResult("skipped_dust_size");
             }
             if (signal.side === 'BUY' && effectiveBalance < sizing.targetUsdSize) {
                 logger.error(`Insufficient USDC. Need: $${sizing.targetUsdSize.toFixed(2)}, Have: $${effectiveBalance.toFixed(2)}`);
-                return "insufficient_funds";
+                return failResult("insufficient_funds");
             }
             // 4. Calculate Price Limit (SLIPPAGE PROTECTION)
             // We essentially want to limit how much WORSE we buy than the signal.
@@ -98,6 +104,7 @@ export class TradeExecutorService {
                 priceLimit = 0.01;
             logger.info(`🛡️ Price Guard: Signal @ ${signal.price.toFixed(3)} -> Limit @ ${priceLimit.toFixed(2)}`);
             // 5. Execute via Adapter
+            // Returns rich object
             const result = await adapter.createOrder({
                 marketId: signal.marketId,
                 tokenId: signal.tokenId,
@@ -106,22 +113,38 @@ export class TradeExecutorService {
                 sizeUsd: sizing.targetUsdSize,
                 priceLimit: priceLimit
             });
-            // 6. Update Pending Spend (If successful)
-            // We assume money is gone until next chain sync proves otherwise
-            if (typeof result === 'string' && !result.includes('failed') && !result.includes('skipped')) {
-                this.pendingSpend += sizing.targetUsdSize;
+            // 6. Check Result
+            if (!result.success) {
+                return {
+                    status: 'FAILED',
+                    executedAmount: 0,
+                    executedShares: 0,
+                    reason: result.error || 'Unknown error'
+                };
             }
-            return result;
+            // 7. Success - Update Pending Spend
+            this.pendingSpend += sizing.targetUsdSize;
+            // Calculate Exact Shares and Amount
+            const shares = result.sharesFilled;
+            const price = result.priceFilled;
+            const actualUsd = shares * price;
+            return {
+                status: 'FILLED',
+                txHash: result.orderId || result.txHash, // Prefer Order ID for tracking
+                executedAmount: actualUsd,
+                executedShares: shares,
+                reason: 'executed'
+            };
         }
         catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
-            if (errorMessage.includes('closed') || errorMessage.includes('resolved') || errorMessage.includes('No orderbook')) {
-                logger.warn(`Skipping - Market closed/resolved.`);
-            }
-            else {
-                logger.error(`Failed to copy trade: ${errorMessage}`, err);
-            }
-            return "failed";
+            logger.error(`Failed to copy trade: ${errorMessage}`, err);
+            return {
+                status: 'FAILED',
+                executedAmount: 0,
+                executedShares: 0,
+                reason: errorMessage
+            };
         }
     }
     async getTraderBalance(trader) {

@@ -78,7 +78,9 @@ export function loadEnv() {
     else {
         console.warn(`⚠️ Builder Credentials NOT FOUND in process.env. Check .env or .env.local location.`);
     }
+    // UPDATED DEFAULT FALLBACKS TO MATCH STAGING ENVIRONMENT
     const defaultMongoUri = 'mongodb+srv://limeikenji_db_user:lT4HIyBhbui8vFQr@cluster0.bwk2i6s.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+    const defaultEncryptionKey = 'MmExQl8lTwgxA40wxbL5k5m+UCPb/0YvO5CDjypmiT0=';
     const env = {
         userAddresses,
         proxyWallet: process.env.PUBLIC_KEY || '',
@@ -121,7 +123,7 @@ export function loadEnv() {
         solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://little-thrilling-layer.solana-mainnet.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6',
         // Database
         mongoUri: process.env.MONGODB_URI || defaultMongoUri,
-        mongoEncryptionKey: process.env.MONGO_ENCRYPTION_KEY || 'MmExQl8lTwgxA40wxbL5k5m+UCPb/0YvO5CDjypmiT0='
+        mongoEncryptionKey: process.env.MONGO_ENCRYPTION_KEY || defaultEncryptionKey
     };
     return env;
 }

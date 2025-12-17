@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { ethers, JsonRpcProvider } from 'ethers';
+import { formatUnits, ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog } from '../database/index.js';
@@ -686,7 +686,7 @@ app.post('/api/deposit/record', async (req, res) => {
     }
 });
 
-// 11. Withdraw Funds (Safe Aware)
+// 11. Withdraw Funds (Safe Aware + Legacy EOA Support)
 app.post('/api/wallet/withdraw', async (req: any, res: any) => {
     const { userId, tokenType, toAddress, forceEoa, targetSafeAddress } = req.body;
     const normId = userId.toLowerCase();
@@ -694,102 +694,53 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
     try {
         const user = await User.findOne({ address: normId });
         if (!user || !user.tradingWallet || !user.tradingWallet.encryptedPrivateKey) {
-            res.status(400).json({ error: 'Wallet not configured' });
-            return;
+            return res.status(400).json({ error: 'Wallet not configured' });
         }
 
         const walletConfig = user.tradingWallet;
-        let txHash = '';
-
         const provider = new JsonRpcProvider(ENV.rpcUrl);
-        const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
-        const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, USDC_ABI, provider);
+        const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, ['function balanceOf(address) view returns (uint256)'], provider);
 
-        let safeAddr = targetSafeAddress || walletConfig.safeAddress;
+        let safeAddr = targetSafeAddress || walletConfig.safeAddress || await SafeManagerService.computeAddress(walletConfig.address);
         
-        if (!safeAddr) {
-             safeAddr = await SafeManagerService.computeAddress(walletConfig.address);
-        }
+        // 1. Check Balances
+        const [safeBal, eoaBal] = await Promise.all([
+            tokenType === 'POL' ? provider.getBalance(safeAddr) : usdcContract.balanceOf(safeAddr).catch(() => 0n),
+            tokenType === 'POL' ? provider.getBalance(walletConfig.address) : usdcContract.balanceOf(walletConfig.address).catch(() => 0n)
+        ]);
+
+        console.log(`[WITHDRAW] User: ${normId} | Safe: ${formatUnits(safeBal, tokenType === 'POL' ? 18 : 6)} | EOA: ${formatUnits(eoaBal, tokenType === 'POL' ? 18 : 6)}`);
+
+        if (safeBal > 0n && !forceEoa) {
+            // NEW MODE: Move funds from Gnosis Safe via Relayer
+            const signer = await evmWalletService.getWalletInstance(walletConfig.encryptedPrivateKey);
+            const safeManager = new SafeManagerService(signer, ENV.builderApiKey, ENV.builderApiSecret, ENV.builderApiPassphrase, serverLogger, safeAddr);
+
+            const txHash = tokenType === 'POL' 
+                ? await safeManager.withdrawNative(toAddress || normId, safeBal.toString()) // Assuming withdrawNative implemented similarly to withdrawUSDC
+                : await safeManager.withdrawUSDC(toAddress || normId, safeBal.toString());
+            
+            return res.json({ success: true, txHash, mode: 'SAFE' });
+        } 
         
-        if (!forceEoa) {
-             let balanceToWithdraw = 0n;
-             if (tokenType === 'POL') {
-                 balanceToWithdraw = await provider.getBalance(safeAddr);
-             } else {
-                 try {
-                    balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
-                 } catch(e) {}
-             }
-             
-             let eoaBalance = 0n;
-             if (!targetSafeAddress) {
-                try {
-                    if (tokenType === 'POL') {
-                        eoaBalance = await provider.getBalance(walletConfig.address);
-                    } else {
-                        eoaBalance = await usdcContract.balanceOf(walletConfig.address);
-                    }
-                } catch(e) {}
-             }
-
-             console.log(`[WITHDRAW] Target Safe: ${safeAddr} | Balance: ${balanceToWithdraw.toString()} (${tokenType || 'USDC'})`);
-
-             if (balanceToWithdraw > 0n) {
-                 const signer = await evmWalletService.getWalletInstance(walletConfig.encryptedPrivateKey);
-                 
-                 const safeManager = new SafeManagerService(
-                     signer, ENV.builderApiKey, ENV.builderApiSecret, ENV.builderApiPassphrase, serverLogger, safeAddr
-                 );
-
-                 if (tokenType === 'POL') {
-                     txHash = await safeManager.withdrawNative(toAddress || normId, balanceToWithdraw.toString());
-                 } else {
-                     txHash = await safeManager.withdrawUSDC(toAddress || normId, balanceToWithdraw.toString());
-                 }
-
-             } else if (eoaBalance > 0n && !targetSafeAddress) {
-                 serverLogger.warn(`[WITHDRAW] Safe empty, but found ${eoaBalance.toString()} ${tokenType || 'USDC'} in EOA Signer. Executing Auto-Rescue.`);
-                 
-                 let tokenAddr = TOKENS.USDC_BRIDGED;
-                 if (tokenType === 'POL') tokenAddr = TOKENS.POL;
-
-                 let amountStr: string | undefined = undefined;
-                 if (tokenType === 'POL') {
-                     const reserve = ethers.parseEther("0.05");
-                     if (eoaBalance > reserve) {
-                         amountStr = ethers.formatEther(eoaBalance - reserve);
-                     } else {
-                         throw new Error("Insufficient POL in EOA to cover gas for rescue.");
-                     }
-                 }
-
-                 txHash = await evmWalletService.withdrawFunds(
-                    walletConfig.encryptedPrivateKey,
-                    toAddress || normId,
-                    tokenAddr,
-                    amountStr
-                 );
-             } else {
-                 return res.status(400).json({ error: `Insufficient ${tokenType || 'USDC'} funds in Safe (and EOA).` });
-             }
-
-        } else {
-            // Forced EOA Withdrawal
-            serverLogger.info(`[WITHDRAW] Forced EOA/Signer Withdrawal for ${normId}`);
+        if (eoaBal > 0n) {
+            // LEGACY/RESCUE MODE: Move funds from the EOA Signer directly to User Main Wallet
+            // We use standard EIP-155 signing here. No Safe logic.
+            serverLogger.info(`[WITHDRAW] Executing Legacy EOA Rescue for ${normId}`);
             
-            let tokenAddress = TOKENS.USDC_BRIDGED;
-            if (tokenType === 'POL') tokenAddress = TOKENS.POL;
-            
-            txHash = await evmWalletService.withdrawFunds(
+            const tokenAddr = tokenType === 'POL' ? TOKENS.POL : TOKENS.USDC_BRIDGED;
+            const txHash = await evmWalletService.withdrawFunds(
                 walletConfig.encryptedPrivateKey,
                 toAddress || normId,
-                tokenAddress
+                tokenAddr
             );
+            
+            return res.json({ success: true, txHash, mode: 'EOA_RESCUE' });
         }
 
-        res.json({ success: true, txHash });
+        res.status(400).json({ error: 'No funds found in Safe or EOA.' });
     } catch (e: any) {
-        console.error("Withdrawal Failed:", e);
+        serverLogger.error("Withdrawal Failed:", e);
         res.status(500).json({ error: e.message });
     }
 });

@@ -442,14 +442,14 @@ export class BotEngine {
                     if (!hasPosition) return; 
                 }
 
+                // Fix: Removed geminiApiKey as it's redundant and handled by process.env.API_KEY in the service
                 const aiResult = await aiAgent.analyzeTrade(
                     signal.marketId, 
                     signal.side,
                     signal.outcome,
                     signal.sizeUsd,
                     signal.price,
-                    this.config.riskProfile,
-                    this.config.geminiApiKey
+                    this.config.riskProfile
                 );
 
                 if (!aiResult.shouldCopy) {

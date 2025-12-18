@@ -6,14 +6,8 @@ import { User } from '../../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { TOKENS } from '../../config/env.js';
 import axios from 'axios';
-import crypto from 'crypto';
 const HOST_URL = 'https://clob.polymarket.com';
 const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
-// Standard User Agent to prevent Cloudflare 403s
-const HTTP_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json'
-};
 var SignatureType;
 (function (SignatureType) {
     SignatureType[SignatureType["EOA"] = 0] = "EOA";
@@ -26,7 +20,7 @@ export class PolymarketAdapter {
     exchangeName = 'Polymarket';
     client;
     wallet;
-    walletV5;
+    walletV5; // Dedicated V5 wallet for SDK
     walletService;
     safeManager;
     usdcContract;
@@ -37,15 +31,18 @@ export class PolymarketAdapter {
         this.logger = logger;
     }
     async initialize() {
-        this.logger.info(`[${this.exchangeName}] Initializing Adapter...`);
+        this.logger.info(`[${this.exchangeName}] Initializing Adapter (Ethers v6/v5 Hybrid)...`);
         this.walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
         if (this.config.walletConfig.encryptedPrivateKey) {
+            // V6 for general operations
             this.wallet = await this.walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
+            // V5 for SDK stability
             this.walletV5 = await this.walletService.getWalletInstanceV5(this.config.walletConfig.encryptedPrivateKey);
         }
         else {
             throw new Error("Missing Encrypted Private Key for Trading Wallet");
         }
+        // Initialize Safe Manager
         let safeAddressToUse = this.config.walletConfig.safeAddress;
         if (!safeAddressToUse) {
             this.logger.warn(`   ⚠️ Safe address missing in config. Computing...`);
@@ -66,8 +63,11 @@ export class PolymarketAdapter {
     async authenticate() {
         if (!this.wallet || !this.safeManager || !this.safeAddress)
             throw new Error("Adapter not initialized");
+        // 1. Ensure Safe is Deployed
         await this.safeManager.deploySafe();
+        // 2. Ensure Approvals
         await this.safeManager.enableApprovals();
+        // 3. L2 Auth (API Keys)
         let apiCreds = this.config.l2ApiCredentials;
         if (!apiCreds || !apiCreds.key) {
             this.logger.info('🤝 Deriving L2 API Keys...');
@@ -77,10 +77,8 @@ export class PolymarketAdapter {
         else {
             this.logger.info('🔌 Using existing CLOB Credentials');
         }
+        // 4. Initialize Clob Client
         this.initClobClient(apiCreds);
-    }
-    isReady() {
-        return !!this.client;
     }
     initClobClient(apiCreds) {
         let builderConfig;
@@ -93,10 +91,13 @@ export class PolymarketAdapter {
                 }
             });
         }
-        this.client = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5, apiCreds, SignatureType.POLY_GNOSIS_SAFE, this.safeAddress, undefined, undefined, builderConfig);
+        this.client = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5, apiCreds, SignatureType.POLY_GNOSIS_SAFE, // Funder is Safe
+        this.safeAddress, // Explicitly set funder (Maker)
+        undefined, undefined, builderConfig);
     }
     async deriveAndSaveKeys() {
         try {
+            // Keys must be derived using SignatureType.EOA because the EOA is the signer.
             const tempClient = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5, undefined, SignatureType.EOA, undefined);
             const rawCreds = await tempClient.createOrDeriveApiKey();
             if (!rawCreds || !rawCreds.key)
@@ -128,33 +129,17 @@ export class PolymarketAdapter {
     }
     async getPortfolioValue(address) {
         try {
-            const url = `https://data-api.polymarket.com/value?user=${address}`;
-            const res = await axios.get(url, { headers: HTTP_HEADERS });
+            const res = await axios.get(`https://data-api.polymarket.com/value?user=${address}`);
             return parseFloat(res.data) || 0;
         }
         catch (e) {
-            this.logger.debug(`Portfolio Value fetch failed: ${e.message}`);
             return 0;
         }
     }
-    async getMarketPrice(marketId, tokenId, side = 'BUY') {
-        if (!this.client || !tokenId)
+    async getMarketPrice(marketId, tokenId) {
+        if (!this.client)
             return 0;
         try {
-            // FIX: Fully Side-Aware Pricing. 
-            // If selling, we check the Bid (Money in). If buying, we check the Ask (Money out).
-            const book = await this.client.getOrderBook(tokenId);
-            if (side === 'SELL') {
-                if (book.bids && book.bids.length > 0) {
-                    return parseFloat(book.bids[0].price);
-                }
-            }
-            else {
-                if (book.asks && book.asks.length > 0) {
-                    return parseFloat(book.asks[0].price);
-                }
-            }
-            // Fallback only if book is empty
             const mid = await this.client.getMidpoint(tokenId);
             return parseFloat(mid.mid);
         }
@@ -162,156 +147,63 @@ export class PolymarketAdapter {
             return 0;
         }
     }
-    async getPositions(address) {
-        this.logger.debug(`Fetching positions for ${address}...`);
-        let apiPositions = [];
-        try {
-            const url = `https://data-api.polymarket.com/positions?user=${address}`;
-            const res = await axios.get(url, { headers: HTTP_HEADERS });
-            if (Array.isArray(res.data)) {
-                // Filter dust
-                apiPositions = res.data.filter(p => p.size > 0.001);
-            }
-        }
-        catch (e) {
-            this.logger.warn(`Data API Position fetch failed: ${e.message}.`);
-            return [];
-        }
-        // ENRICHMENT LOOP
-        const enrichmentPromises = apiPositions.map(async (p) => {
-            try {
-                const marketId = p.market || p.conditionId;
-                let marketData = null;
-                // Default to API current price, but we will try to get a better one
-                let currentPrice = Number(p.currentPrice);
-                if (this.client && marketId && marketId !== 'undefined') {
-                    try {
-                        marketData = await this.client.getMarket(marketId);
-                    }
-                    catch (err) { }
-                }
-                // Fetch real-time Bid price for accurate liquidation value
-                if (this.client && p.asset) {
-                    try {
-                        const sidePrice = await this.getMarketPrice(marketId, p.asset, 'SELL');
-                        if (sidePrice > 0)
-                            currentPrice = sidePrice;
-                    }
-                    catch (err) { }
-                }
-                const size = Number(p.size);
-                return {
-                    marketId: marketId || "UNKNOWN",
-                    tokenId: p.asset,
-                    outcome: p.outcome || 'UNK',
-                    balance: size,
-                    valueUsd: size * currentPrice,
-                    entryPrice: Number(p.initialValue) / size,
-                    currentPrice: currentPrice,
-                    question: marketData?.question || p.title || "Unknown Market",
-                    image: marketData?.image || marketData?.icon || "",
-                    endDate: marketData?.end_date_iso,
-                    marketSlug: marketData?.market_slug
-                };
-            }
-            catch (e) {
-                return null;
-            }
-        });
-        const results = await Promise.all(enrichmentPromises);
-        const validPositions = results.filter((p) => p !== null);
-        this.logger.info(`✅ Synced ${validPositions.length} positions (Enriched)`);
-        return validPositions;
-    }
     async getOrderBook(tokenId) {
         if (!this.client)
             throw new Error("Not auth");
+        const book = await this.client.getOrderBook(tokenId);
+        return {
+            bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
+            asks: book.asks.map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
+        };
+    }
+    async getPositions(address) {
         try {
-            const book = await this.client.getOrderBook(tokenId);
-            return {
-                bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
-                asks: book.asks.map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
-            };
+            const url = `https://data-api.polymarket.com/positions?user=${address}`;
+            const res = await axios.get(url);
+            if (!Array.isArray(res.data))
+                return [];
+            return res.data.map((p) => ({
+                marketId: p.conditionId || p.market,
+                tokenId: p.asset,
+                outcome: p.outcome || 'UNK',
+                balance: Number(p.size),
+                valueUsd: Number(p.size) * Number(p.price),
+                entryPrice: Number(p.avgPrice || p.price),
+                currentPrice: Number(p.price),
+                question: p.title,
+                image: p.icon,
+                marketSlug: p.market_slug
+            }));
         }
         catch (e) {
-            if (e.message && e.message.includes('404')) {
-                throw new Error("Orderbook not found (Market might be closed)");
-            }
-            throw e;
+            return [];
         }
     }
     async fetchPublicTrades(address, limit = 20) {
         try {
-            const url = `https://data-api.polymarket.com/trades?user=${address}&limit=${limit}`;
-            const res = await axios.get(url, { headers: HTTP_HEADERS });
+            const url = `https://data-api.polymarket.com/activity?user=${address}&limit=${limit}`;
+            const res = await axios.get(url);
             if (!res.data || !Array.isArray(res.data))
                 return [];
-            const signals = [];
-            for (const t of res.data) {
-                let outcome;
-                if (t.outcome === 'YES' || t.outcome === 'NO')
-                    outcome = t.outcome;
-                else if (t.outcomeIndex === 0)
-                    outcome = 'YES';
-                else if (t.outcomeIndex === 1)
-                    outcome = 'NO';
-                if (outcome) {
-                    signals.push({
-                        trader: address,
-                        marketId: t.market,
-                        tokenId: t.asset,
-                        outcome: outcome,
-                        side: t.side.toUpperCase(),
-                        sizeUsd: t.size * t.price,
-                        price: t.price,
-                        timestamp: t.timestamp * 1000
-                    });
-                }
-            }
-            return signals;
+            return res.data
+                .filter(act => act.type === 'TRADE' || act.type === 'ORDER_FILLED')
+                .map(act => ({
+                trader: address,
+                marketId: act.conditionId,
+                tokenId: act.asset,
+                outcome: act.outcomeIndex === 0 ? 'YES' : 'NO',
+                side: act.side.toUpperCase(),
+                sizeUsd: act.usdcSize || (act.size * act.price),
+                price: act.price,
+                timestamp: (act.timestamp > 1e11 ? act.timestamp : act.timestamp * 1000)
+            }));
         }
         catch (e) {
             return [];
         }
     }
     async getTradeHistory(address, limit = 50) {
-        if (this.client) {
-            try {
-                this.logger.debug(`Fetching CLOB trade history for ${address}`);
-                const trades = await this.client.getTrades({
-                    maker_address: address,
-                    limit: limit.toString()
-                });
-                if (Array.isArray(trades)) {
-                    return trades.map((t) => ({
-                        id: t.id,
-                        timestamp: t.match_time ? new Date(Number(t.match_time) * 1000).toISOString() : new Date().toISOString(),
-                        marketId: t.market,
-                        outcome: t.outcome || (t.outcomeIndex === 0 ? 'YES' : 'NO'),
-                        side: t.side ? t.side.toUpperCase() : 'UNK',
-                        size: parseFloat(t.size) * parseFloat(t.price),
-                        executedSize: parseFloat(t.size) * parseFloat(t.price),
-                        price: parseFloat(t.price),
-                        status: 'FILLED',
-                        txHash: t.transaction_hash,
-                        clobOrderId: t.maker_order_id || t.taker_order_id
-                    }));
-                }
-            }
-            catch (e) {
-                this.logger.warn(`CLOB History fetch failed (fallback to public API): ${e.message}`);
-            }
-        }
-        return this.fetchPublicTrades(address, limit).then(signals => signals.map(s => ({
-            id: crypto.randomUUID(),
-            timestamp: new Date(s.timestamp).toISOString(),
-            marketId: s.marketId,
-            outcome: s.outcome,
-            side: s.side,
-            size: s.sizeUsd,
-            price: s.price,
-            status: 'FILLED'
-        })));
+        return [];
     }
     async createOrder(params, retryCount = 0) {
         if (!this.client)
@@ -352,11 +244,12 @@ export class PolymarketAdapter {
                     rawPrice = Number(book.bids[0].price);
                 }
             }
+            // Price clamp safety
             if (rawPrice >= 0.99)
                 rawPrice = 0.99;
             if (rawPrice <= 0.01)
                 rawPrice = 0.01;
-            // TICK ALIGNMENT (CRITICAL)
+            // Tick alignment
             const inverseTick = Math.round(1 / tickSize);
             const roundedPrice = Math.floor(rawPrice * inverseTick) / inverseTick;
             let shares = params.sizeShares || 0;
@@ -364,10 +257,12 @@ export class PolymarketAdapter {
                 const rawShares = params.sizeUsd / roundedPrice;
                 shares = Math.ceil(rawShares);
             }
+            // MINIMUM SHARE CHECK (5 Shares)
             if (shares < minOrderSize) {
                 this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice}`);
                 return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 };
             }
+            // MINIMUM USD AMOUNT CHECK ($1.00 USD hard requirement from CLOB error)
             const usdValue = shares * roundedPrice;
             if (usdValue < 1.00) {
                 this.logger.warn(`⚠️ Order Rejected: Value ($${usdValue.toFixed(2)}) < $1.00 Minimum. Req: ${shares} shares @ ${roundedPrice}`);

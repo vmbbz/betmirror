@@ -1,20 +1,19 @@
 import mongoose, { Schema } from 'mongoose';
 // --- Schemas ---
 const ActivePositionSchema = new Schema({
-    tradeId: String, // Link to history
+    tradeId: String,
     clobOrderId: String,
     marketId: String,
     tokenId: String,
     outcome: String,
     entryPrice: Number,
-    shares: Number, // Exact share count
+    shares: Number,
     sizeUsd: Number,
     timestamp: Number,
-    // Rich Data
     currentPrice: Number,
     question: String,
     image: String,
-    marketSlug: String // ADDED
+    marketSlug: String
 }, { _id: false });
 const TradingWalletSchema = new Schema({
     address: String,
@@ -24,8 +23,7 @@ const TradingWalletSchema = new Schema({
     createdAt: String,
     safeAddress: String,
     isSafeDeployed: Boolean,
-    recoveryOwnerAdded: Boolean, // NEW: Track if user has added their own wallet
-    // L2 CLOB Credentials (Not Private Keys, just API Access tokens)
+    recoveryOwnerAdded: Boolean,
     l2ApiCredentials: {
         key: String,
         secret: String,
@@ -34,8 +32,8 @@ const TradingWalletSchema = new Schema({
 }, { _id: false });
 const UserSchema = new Schema({
     address: { type: String, required: true, unique: true, index: true },
-    tradingWallet: TradingWalletSchema, // Updated field name
-    activeBotConfig: { type: Schema.Types.Mixed }, // Store flex config
+    tradingWallet: TradingWalletSchema,
+    activeBotConfig: { type: Schema.Types.Mixed },
     isBotRunning: { type: Boolean, default: false },
     activePositions: [ActivePositionSchema],
     stats: {
@@ -53,15 +51,15 @@ const UserSchema = new Schema({
     createdAt: { type: Date, default: Date.now }
 });
 const TradeSchema = new Schema({
-    _id: { type: String, required: true }, // Explicitly define _id as String to accept UUIDs
+    _id: { type: String, required: true },
     userId: { type: String, required: true, index: true },
     marketId: { type: String, required: true },
-    clobOrderId: { type: String, index: true }, // Fast lookups
+    clobOrderId: { type: String, index: true },
     assetId: String,
     outcome: String,
     side: String,
     size: Number,
-    executedSize: { type: Number, default: 0 }, // NEW: Track actual bot volume
+    executedSize: { type: Number, default: 0 },
     price: Number,
     pnl: Number,
     status: String,
@@ -114,7 +112,7 @@ const BotLogSchema = new Schema({
     userId: { type: String, required: true, index: true },
     type: String,
     message: String,
-    timestamp: { type: Date, default: Date.now, expires: 86400 * 3 } // TTL 3 days
+    timestamp: { type: Date, default: Date.now, expires: 86400 * 3 }
 });
 // --- Models ---
 export const User = mongoose.model('User', UserSchema);
@@ -128,30 +126,11 @@ export const BotLog = mongoose.model('BotLog', BotLogSchema);
 export const connectDB = async (uri) => {
     try {
         mongoose.set('strictQuery', true);
-        const maskedUri = uri.replace(/:\/\/.*@/, '://***:***@');
         console.log(`🔌 Attempting to connect to MongoDB...`);
         await mongoose.connect(uri, {
-            serverSelectionTimeoutMS: 15000,
-            socketTimeoutMS: 45000,
-            family: 4,
             dbName: 'betmirror'
         });
-        try {
-            if (mongoose.connection.db) {
-                const indexName = 'handle_1';
-                const indexExists = await mongoose.connection.db.collection('users').indexExists(indexName);
-                if (indexExists) {
-                    await mongoose.connection.db.collection('users').dropIndex(indexName);
-                }
-            }
-        }
-        catch (e) { }
-        const dbName = mongoose.connection.name;
-        const dbHost = mongoose.connection.host;
         console.log(`📦 Connected to MongoDB successfully!`);
-        console.log(`   - Host: ${dbHost}`);
-        console.log(`   - DB Name: ${dbName}`);
-        console.log(`   - Environment: ${uri.includes('mongodb.net') ? 'Atlas Cloud' : 'Local/Self-Hosted'}`);
     }
     catch (error) {
         console.error('❌ MongoDB Connection Error:', error);

@@ -65,7 +65,6 @@ async function main(): Promise<void> {
       initialize: async () => {},
       validatePermissions: async () => true,
       authenticate: async () => {}, 
-      isReady: () => true, // Headless is always ready if init passes
       fetchBalance: async (address: string) => {
           if (address.toLowerCase() === client.wallet.address.toLowerCase()) {
               return getUsdBalanceApprox(client.wallet, env.usdcContractAddress);

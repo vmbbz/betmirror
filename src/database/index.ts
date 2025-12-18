@@ -1,8 +1,7 @@
-
-import mongoose, { Schema, Document, Model } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 import { TraderProfile } from '../domain/alpha.types.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
-import { ActivePosition, TradeHistoryEntry } from '../domain/trade.types.js';
+import { ActivePosition } from '../domain/trade.types.js';
 import { UserStats } from '../domain/user.types.js';
 import { BotConfig } from '../server/bot-engine.js';
 import { BridgeTransactionRecord } from '../services/lifi-bridge.service.js';
@@ -11,7 +10,7 @@ import { BridgeTransactionRecord } from '../services/lifi-bridge.service.js';
 
 export interface IUser extends Document {
   address: string;
-  tradingWallet?: TradingWalletConfig; // RENAMED from proxyWallet
+  tradingWallet?: TradingWalletConfig; 
   activeBotConfig?: BotConfig;
   isBotRunning: boolean;
   activePositions: ActivePosition[];
@@ -21,19 +20,16 @@ export interface IUser extends Document {
   lastActive: Date;
 }
 
-// FIX: Override _id to allow String UUIDs from Polymarket
-export interface ITrade extends Omit<Document, '_id'> {
-  _id: string; 
+export interface ITrade extends Document {
+  _id: any; // Manually managed string ID (UUID)
   userId: string;
   marketId: string;
-  // NEW FIELDS FOR CLOB TRACKING
   clobOrderId?: string; 
   assetId?: string;
-  
   outcome: string;
   side: 'BUY' | 'SELL';
-  size: number;         // Signal Size (Whale)
-  executedSize: number; // Bot Size (Real)
+  size: number;         
+  executedSize: number; 
   price: number;
   pnl?: number;
   status: string;
@@ -44,7 +40,7 @@ export interface ITrade extends Omit<Document, '_id'> {
 }
 
 export interface IRegistry extends Document, TraderProfile {
-    isSystem?: boolean; // If true, added by env var/admin
+    isSystem?: boolean; 
     tags?: string[];
 }
 
@@ -57,7 +53,7 @@ export interface IFeedback extends Document {
 
 export interface IBridgeTransaction extends Document, Omit<BridgeTransactionRecord, 'id'> {
   userId: string;
-  bridgeId: string; // Internal ID
+  bridgeId: string; 
   timestamp: string;
   fromChain: string;
   toChain: string;
@@ -86,20 +82,19 @@ export interface IBotLog extends Document {
 // --- Schemas ---
 
 const ActivePositionSchema = new Schema({
-  tradeId: String, // Link to history
+  tradeId: String, 
   clobOrderId: String,
   marketId: String,
   tokenId: String,
   outcome: String,
   entryPrice: Number,
-  shares: Number, // Exact share count
+  shares: Number, 
   sizeUsd: Number,
   timestamp: Number,
-  // Rich Data
   currentPrice: Number,
   question: String,
   image: String,
-  marketSlug: String // ADDED
+  marketSlug: String 
 }, { _id: false });
 
 const TradingWalletSchema = new Schema({
@@ -110,8 +105,7 @@ const TradingWalletSchema = new Schema({
   createdAt: String,
   safeAddress: String,
   isSafeDeployed: Boolean,
-  recoveryOwnerAdded: Boolean, // NEW: Track if user has added their own wallet
-  // L2 CLOB Credentials (Not Private Keys, just API Access tokens)
+  recoveryOwnerAdded: Boolean, 
   l2ApiCredentials: {
       key: String,
       secret: String,
@@ -121,8 +115,8 @@ const TradingWalletSchema = new Schema({
 
 const UserSchema = new Schema<IUser>({
   address: { type: String, required: true, unique: true, index: true },
-  tradingWallet: TradingWalletSchema, // Updated field name
-  activeBotConfig: { type: Schema.Types.Mixed }, // Store flex config
+  tradingWallet: TradingWalletSchema, 
+  activeBotConfig: { type: Schema.Types.Mixed }, 
   isBotRunning: { type: Boolean, default: false },
   activePositions: [ActivePositionSchema],
   stats: {
@@ -141,15 +135,15 @@ const UserSchema = new Schema<IUser>({
 });
 
 const TradeSchema = new Schema<ITrade>({
-  _id: { type: String, required: true }, // Explicitly define _id as String to accept UUIDs
+  _id: { type: String, required: true }, 
   userId: { type: String, required: true, index: true },
   marketId: { type: String, required: true },
-  clobOrderId: { type: String, index: true }, // Fast lookups
+  clobOrderId: { type: String, index: true }, 
   assetId: String,
   outcome: String,
   side: String,
   size: Number,
-  executedSize: { type: Number, default: 0 }, // NEW: Track actual bot volume
+  executedSize: { type: Number, default: 0 }, 
   price: Number,
   pnl: Number,
   status: String,
@@ -207,7 +201,7 @@ const BotLogSchema = new Schema<IBotLog>({
   userId: { type: String, required: true, index: true },
   type: String,
   message: String,
-  timestamp: { type: Date, default: Date.now, expires: 86400 * 3 } // TTL 3 days
+  timestamp: { type: Date, default: Date.now, expires: 86400 * 3 } 
 });
 
 // --- Models ---
@@ -225,30 +219,11 @@ export const BotLog = mongoose.model<IBotLog>('BotLog', BotLogSchema);
 export const connectDB = async (uri: string) => {
   try {
     mongoose.set('strictQuery', true);
-    const maskedUri = uri.replace(/:\/\/.*@/, '://***:***@');
     console.log(`🔌 Attempting to connect to MongoDB...`);
     await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: 15000, 
-      socketTimeoutMS: 45000, 
-      family: 4, 
       dbName: 'betmirror' 
-    });
-    try {
-        if (mongoose.connection.db) {
-            const indexName = 'handle_1';
-            const indexExists = await mongoose.connection.db.collection('users').indexExists(indexName);
-            if (indexExists) {
-                await mongoose.connection.db.collection('users').dropIndex(indexName);
-            }
-        }
-    } catch (e: any) { }
-    const dbName = mongoose.connection.name;
-    const dbHost = mongoose.connection.host;
+    } as any);
     console.log(`📦 Connected to MongoDB successfully!`);
-    console.log(`   - Host: ${dbHost}`);
-    console.log(`   - DB Name: ${dbName}`);
-    console.log(`   - Environment: ${uri.includes('mongodb.net') ? 'Atlas Cloud' : 'Local/Self-Hosted'}`);
-
   } catch (error) {
     console.error('❌ MongoDB Connection Error:', error);
     throw error;

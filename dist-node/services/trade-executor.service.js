@@ -4,38 +4,25 @@ export class TradeExecutorService {
     deps;
     balanceCache = new Map();
     CACHE_TTL = 5 * 60 * 1000; // 5 Minutes Cache for Whales
-    // deduction tracker to prevent race conditions during high-frequency signals
+    // NEW: Local deduction tracker to prevent race conditions
     pendingSpend = 0;
     lastBalanceFetch = 0;
     constructor(deps) {
         this.deps = deps;
     }
-    /**
-     * Manually exits a position.
-     * Uses Side-Aware pricing to check for Dust ($1.00 limit) before execution.
-     */
+    // Updated: Execute Exit now sells SHARES, not USD amount, ensuring 100% closure regardless of price
     async executeManualExit(position, currentPrice) {
         const { logger, adapter } = this.deps;
         try {
-            // 1. Fetch REAL execution price (Best Bid) - Side-Aware Call
-            const executionPrice = await adapter.getMarketPrice(position.marketId, position.tokenId, 'SELL');
-            const finalPrice = executionPrice || currentPrice;
-            const realExitValue = position.shares * finalPrice;
-            logger.info(`📉 Manual Exit Request: ${position.shares} shares @ ~$${finalPrice.toFixed(3)}`);
-            // 2. Pre-flight Dust Check (Prevents loops of failed orders)
-            if (realExitValue < 1.0) {
-                logger.error(`❌ Manual Exit Blocked: Position value ($${realExitValue.toFixed(2)}) is below the $1.00 CLOB minimum.`);
-                return false;
-            }
-            // 3. Execute share-based sell to ensure 100% closure
+            logger.info(`📉 Executing Manual Exit: Selling ${position.shares} shares of ${position.tokenId}`);
             const result = await adapter.createOrder({
                 marketId: position.marketId,
                 tokenId: position.tokenId,
                 outcome: position.outcome,
                 side: 'SELL',
-                sizeUsd: 0,
-                sizeShares: position.shares,
-                priceLimit: undefined
+                sizeUsd: 0, // Ignored when sizeShares is present
+                sizeShares: position.shares, // Sell exact number of shares held
+                priceLimit: 0 // Market sell (hit the bid)
             });
             return result.success;
         }
@@ -44,11 +31,9 @@ export class TradeExecutorService {
             return false;
         }
     }
-    /**
-     * Copies a trade signal using proportional risk management.
-     */
     async copyTrade(signal) {
         const { logger, env, adapter, proxyWallet } = this.deps;
+        // Default Failure Result
         const failResult = (reason) => ({
             status: 'SKIPPED',
             executedAmount: 0,
@@ -60,11 +45,13 @@ export class TradeExecutorService {
             let usableBalanceForTrade = 0;
             // 1. Determine Source Capital (Cash vs Position)
             if (signal.side === 'BUY') {
+                // BUY: Use Wallet Cash
                 let chainBalance = 0;
+                // Cache chain balance for 10s to save RPC calls
                 if (Date.now() - this.lastBalanceFetch > 10000) {
                     chainBalance = await adapter.fetchBalance(proxyWallet);
                     this.lastBalanceFetch = Date.now();
-                    this.pendingSpend = 0;
+                    this.pendingSpend = 0; // Reset pending on fresh chain sync
                 }
                 else {
                     chainBalance = await adapter.fetchBalance(proxyWallet);
@@ -72,50 +59,61 @@ export class TradeExecutorService {
                 usableBalanceForTrade = Math.max(0, chainBalance - this.pendingSpend);
             }
             else {
-                // SELL side logic
+                // SELL: Use Existing Position Value
+                // We must fetch our current holdings to know how much we can sell
+                // Note: This fetches all positions, optimized adapter should cache or allow filtered lookup
                 const positions = await adapter.getPositions(proxyWallet);
                 const myPosition = positions.find(p => p.tokenId === signal.tokenId);
                 if (!myPosition || myPosition.balance <= 0) {
                     return failResult("no_position_to_sell");
                 }
+                // We use the USD value of our position as the 'balance' to proportion against
                 usableBalanceForTrade = myPosition.valueUsd;
             }
-            // 2. Get Whale Balance
+            // 2. Get Whale Balance (Total Portfolio Value)
+            // For proper ratio, we need their total equity, not just cash
             const traderBalance = await this.getTraderBalance(signal.trader);
-            // 3. Fetch ACTUAL execution price (Ask for Buy, Bid for Sell)
-            const executionPrice = await adapter.getMarketPrice(signal.marketId, signal.tokenId, signal.side);
-            const currentPrice = executionPrice || signal.price;
-            // 4. Compute Size with Smart Boost and Share Minimums
+            // 3. Compute Size
             const sizing = computeProportionalSizing({
                 yourUsdBalance: usableBalanceForTrade,
                 traderUsdBalance: traderBalance,
                 traderTradeUsd: signal.sizeUsd,
                 multiplier: env.tradeMultiplier,
-                currentPrice: currentPrice,
+                currentPrice: signal.price,
                 maxTradeAmount: env.maxTradeAmount
             });
+            const profileUrl = `https://polymarket.com/profile/${signal.trader}`;
+            logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | You: $${usableBalanceForTrade.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)}`);
+            logger.info(`🔗 Trader: ${profileUrl}`);
             if (sizing.targetUsdSize < 1.00) {
-                return failResult(sizing.reason || "skipped_size_too_small");
+                if (usableBalanceForTrade < 1.00)
+                    return failResult("skipped_insufficient_balance_min_1");
+                return failResult("skipped_size_too_small");
             }
-            // 5. Calculate Price Limit (SLIPPAGE PROTECTION)
+            // 4. Calculate Price Limit (SLIPPAGE PROTECTION)
             let priceLimit = 0;
-            const SLIPPAGE_PCT = 0.05;
+            const SLIPPAGE_PCT = 0.05; // 5% tolerance
             if (signal.side === 'BUY') {
-                priceLimit = currentPrice * (1 + SLIPPAGE_PCT);
+                // Buying: Limit is Higher than signal
+                priceLimit = signal.price * (1 + SLIPPAGE_PCT);
                 if (priceLimit > 0.99)
                     priceLimit = 0.99;
-            }
-            else {
-                priceLimit = currentPrice * (1 - SLIPPAGE_PCT);
                 if (priceLimit < 0.01)
                     priceLimit = 0.01;
             }
-            // Tick alignment
+            else {
+                // Selling: Limit is Lower than signal
+                priceLimit = signal.price * (1 - SLIPPAGE_PCT);
+                if (priceLimit < 0.01)
+                    priceLimit = 0.01;
+            }
+            // Round to 2 decimals
             priceLimit = Math.floor(priceLimit * 100) / 100;
             if (priceLimit <= 0)
                 priceLimit = 0.01;
-            logger.info(`🛡️ Price Guard: Execution Side @ ${currentPrice.toFixed(3)} -> Limit @ ${priceLimit.toFixed(2)}`);
-            // 6. Execute via Adapter
+            logger.info(`🛡️ Price Guard: Signal @ ${signal.price.toFixed(3)} -> Limit @ ${priceLimit.toFixed(2)}`);
+            // 5. Execute via Adapter
+            // Note: If selling, we pass sizeUsd. The adapter will calculate shares = sizeUsd / priceLimit (or market price)
             const result = await adapter.createOrder({
                 marketId: signal.marketId,
                 tokenId: signal.tokenId,
@@ -124,6 +122,7 @@ export class TradeExecutorService {
                 sizeUsd: sizing.targetUsdSize,
                 priceLimit: priceLimit
             });
+            // 6. Check Result
             if (!result.success) {
                 return {
                     status: 'FAILED',
@@ -133,9 +132,13 @@ export class TradeExecutorService {
                     reason: result.error || 'adapter_rejection'
                 };
             }
+            // 7. Success - Update Pending Spend (Only for Buys)
             if (signal.side === 'BUY') {
                 this.pendingSpend += sizing.targetUsdSize;
             }
+            const shares = result.sharesFilled;
+            const price = result.priceFilled;
+            const actualUsd = shares * price;
             return {
                 status: 'FILLED',
                 txHash: result.txHash || result.orderId,
@@ -170,7 +173,7 @@ export class TradeExecutorService {
             return val;
         }
         catch {
-            return 10000;
+            return 10000; // Fallback whale size
         }
     }
 }

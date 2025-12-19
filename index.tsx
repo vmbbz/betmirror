@@ -117,16 +117,13 @@ const playSound = (type: 'start' | 'stop' | 'trade' | 'cashout' | 'error' | 'suc
 const Tooltip = ({ text }: { text: string }) => (
     <div className="group relative flex items-center ml-1 inline-block">
         <HelpCircle size={12} className="text-gray-400 hover:text-blue-500 cursor-help" />
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded text-[10px] text-gray-600 dark:text-gray-300 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed">
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-terminal-border rounded text-[10px] text-gray-600 dark:text-gray-300 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed">
             {text}
             <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white dark:bg-gray-900 border-b border-r border-gray-200 dark:border-gray-700 rotate-45"></div>
         </div>
     </div>
 );
 
-// ... [DepositModal, WithdrawalModal, TraderDetailsModal, FeedbackWidget, BridgeStepper, HeroBackground, Landing, ActivationView components remain unchanged] ...
-
-// --- New Component: Deposit Modal ---
 const DepositModal = ({
     isOpen,
     onClose,
@@ -191,7 +188,6 @@ const DepositModal = ({
                     </div>
                 </div>
 
-                {/* Asset Tabs */}
                 <div className="flex p-1 bg-gray-100 dark:bg-black/40 rounded-lg mb-6">
                     <button 
                         onClick={() => setAssetTab('USDC')}
@@ -207,7 +203,6 @@ const DepositModal = ({
                     </button>
                 </div>
 
-                {/* USDC Sub-Selector (Only if USDC Tab) */}
                 {assetTab === 'USDC' && (
                     <div className="mb-4 grid grid-cols-2 gap-3">
                         <div 
@@ -233,7 +228,6 @@ const DepositModal = ({
                     </div>
                 )}
 
-                {/* Input Area */}
                 <div className="relative mb-6">
                     <label className="text-[10px] font-bold text-gray-500 uppercase mb-1.5 block flex justify-between">
                         Amount to Deposit
@@ -259,7 +253,6 @@ const DepositModal = ({
                     </div>
                 </div>
 
-                {/* Actions or Bridge Prompt */}
                 {isLowBalance ? (
                     <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl border border-yellow-200 dark:border-yellow-800/50">
                         <div className="flex items-start gap-3">
@@ -292,7 +285,6 @@ const DepositModal = ({
         </div>
     );
 };
-
 
 const WithdrawalModal = ({ 
     isOpen, 
@@ -365,7 +357,6 @@ const WithdrawalModal = ({
                             <p className="text-xs text-gray-500 mt-1">Move funds from Safe Wallet to Main Wallet.</p>
                         </div>
                         
-                        {/* Toggle Rescue Mode */}
                         <div className="flex justify-center mb-6">
                             <button 
                                 onClick={() => setIsRescueMode(!isRescueMode)}
@@ -375,7 +366,6 @@ const WithdrawalModal = ({
                             </button>
                         </div>
 
-                        {/* Rescue Mode Input */}
                         {isRescueMode && (
                             <div className="mb-6 p-4 bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-gray-700 rounded-xl animate-in slide-in-from-top-2">
                                 <label className="text-[10px] font-bold text-gray-500 uppercase mb-2 block">
@@ -403,7 +393,6 @@ const WithdrawalModal = ({
 
                         {!isRescueMode && (
                             <div className="space-y-3">
-                                {/* Bridged USDC Option (USDC.e) - Primary for Polymarket */}
                                 <div className="p-4 bg-green-50 dark:bg-green-900/10 rounded-xl border border-green-200 dark:border-green-900/30 flex justify-between items-center">
                                     <div>
                                         <div className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -423,7 +412,6 @@ const WithdrawalModal = ({
                                     </div>
                                 </div>
                                 
-                                {/* Stuck Funds Rescue Section */}
                                 {hasStuckFunds && (
                                     <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800/50 rounded-xl animate-pulse">
                                         <div className="flex items-start gap-3">
@@ -436,7 +424,7 @@ const WithdrawalModal = ({
                                                 <button 
                                                     onClick={() => onWithdraw('USDC.e', true)}
                                                     disabled={isWithdrawing}
-                                                    className="mt-2 w-full py-2 bg-yellow-200 dark:bg-yellow-800 hover:bg-yellow-300 dark:hover:bg-yellow-700 text-yellow-900 dark:text-yellow-100 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
+                                                    className="mt-2 w-full py-2 bg-yellow-200 dark:bg-yellow-800 hover:bg-yellow-300 dark:hover:bg-yellow-700 text-yellow-900 text-yellow-100 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
                                                 >
                                                     RESCUE FROM SIGNER
                                                 </button>
@@ -445,7 +433,6 @@ const WithdrawalModal = ({
                                     </div>
                                 )}
 
-                                {/* POL Option (Gas) - Mostly for EOA but Safe might have some */}
                                 <div className="p-4 bg-gray-50 dark:bg-black/40 rounded-xl border border-gray-200 dark:border-white/10 flex justify-between items-center">
                                     <div>
                                         <div className="font-bold text-gray-900 dark:text-white">POL (Gas)</div>
@@ -479,7 +466,6 @@ const WithdrawalModal = ({
 };
 
 const TraderDetailsModal = ({ trader, onClose }: { trader: TraderProfile, onClose: () => void }) => {
-    // ... existing modal code ...
     const [trades, setTrades] = useState<PolyTrade[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -531,7 +517,7 @@ const TraderDetailsModal = ({ trader, onClose }: { trader: TraderProfile, onClos
                     </div>
                     <div className="p-4 text-center">
                         <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Est. PnL</div>
-                        <div className={`text-2xl font-bold ${trader.totalPnl >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-red-500'}`}>
+                        <div className={`text-2xl font-bold ${trader.totalPnl >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-red-600'}`}>
                             ${trader.totalPnl.toLocaleString()}
                         </div>
                     </div>
@@ -591,7 +577,6 @@ const TraderDetailsModal = ({ trader, onClose }: { trader: TraderProfile, onClos
 };
 
 const FeedbackWidget = ({ userId }: { userId: string }) => {
-    // ... existing feedback widget ...
     const [isOpen, setIsOpen] = useState(false);
     const [rating, setRating] = useState(5);
     const [comment, setComment] = useState('');
@@ -672,7 +657,6 @@ const FeedbackWidget = ({ userId }: { userId: string }) => {
 };
 
 const BridgeStepper = ({ status }: { status: string }) => {
-    // ... existing bridge stepper ...
     const isError = status.toLowerCase().includes('failed');
     
     let activeStep = 0;
@@ -720,7 +704,6 @@ const BridgeStepper = ({ status }: { status: string }) => {
 };
 
 const HeroBackground = () => {
-    // ... existing background ...
 return (
     <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
     <div className="absolute inset-0 bg-grid-slate-200/[0.04] bg-[bottom_1px_center] dark:bg-grid-slate-800/[0.05]" style={{ backgroundSize: '40px 40px', maskImage: 'linear-gradient(to bottom, transparent 5%, black 40%, black 70%, transparent 95%)' }}></div>
@@ -729,9 +712,7 @@ return (
 }
 
 const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, theme: string, toggleTheme: () => void }) => (
-    // ... existing landing ...
     <div className="min-h-screen bg-gray-50 dark:bg-[#050505] font-sans transition-colors duration-300 flex flex-col relative overflow-x-hidden">
-        {/* ... existing landing code ... */}
         <HeroBackground />
 
         <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-50 max-w-7xl mx-auto left-0 right-0">
@@ -1013,7 +994,7 @@ const ActivationView = ({
                             {recoveryMode && <span className="bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200 text-[10px] px-2 py-0.5 rounded font-mono font-bold">READY</span>}
                         </div>
                         <div className="flex justify-between text-sm items-center">
-                            <span className="text-gray-600 dark:text-gray-300 font-mono text-xs bg-white dark:bg-black/20 px-2 py-1 rounded select-all">{computedAddress}</span>
+                            <span className="text-gray-600 dark:text-gray-300 font-mono text-xs bg-white dark:bg-black/20 px-2 py-1 rounded select-all truncate">{computedAddress}</span>
                         </div>
                     </div>
                 )}
@@ -1092,7 +1073,7 @@ const [systemView, setSystemView] = useState<'attribution' | 'global'>('attribut
 // -- MOBILE MENU STATE --
 const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 const [tradePanelTab, setTradePanelTab] = useState<'active' | 'history'>('active'); // NEW: Tab state for right panel
-
+const [pollError, setPollError] = useState<boolean>(false); // Added for fallback indicator
 // --- STATE: Forms & Actions ---
 const [isDepositing, setIsDepositing] = useState(false);
 const [isDepositModalOpen, setIsDepositModalOpen] = useState(false); // New Modal State
@@ -1299,6 +1280,7 @@ useEffect(() => {
         try {
             const res = await axios.get(`/api/bot/status/${userAddress}`);
             setIsRunning(res.data.isRunning);
+            setPollError(false); 
             
             // FIX: Track latest ID instead of length
             const latestHistory = res.data.history || [];
@@ -1343,7 +1325,7 @@ useEffect(() => {
                 setSystemStats(sysRes.data);
             }
         } catch (e) {
-            // Silent fail on poll
+            setPollError(true); 
         }
     }, 2000);
     
@@ -1799,7 +1781,7 @@ const handleStart = async () => {
         },
         autoCashout: {
             enabled: config.enableAutoCashout,
-            maxRetentionAmount: config.maxRetentionAmount,
+            maxAmount: config.maxRetentionAmount,
             destinationAddress: config.coldWalletAddress || userAddress
         }
     };
@@ -2060,6 +2042,11 @@ return (
     <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 overflow-hidden">
         {activeTab === 'dashboard' && (
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full animate-in fade-in slide-in-from-bottom-4 duration-300">
+                {pollError && (
+                    <div className="col-span-12 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-200 rounded-lg flex items-center gap-2 text-xs font-bold mb-4 animate-pulse">
+                        <AlertTriangle size={14}/> Network issues, data may not be accurate.
+                    </div>
+                )}
                 {/* Left Panel */}
                 <div className="col-span-12 md:col-span-8 flex flex-col gap-6">
                     {/* Wallet Assets Matrix */}
@@ -2071,7 +2058,7 @@ return (
                             <Coins size={14}/> Asset Overview
                         </h3>
                         
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 relative z-10">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 relative z-10">
                             {/* Connected Wallet */}
                             <div className="space-y-3">
                                 <div className="flex items-center gap-2 mb-2">
@@ -2101,14 +2088,14 @@ return (
                                 <div className="flex items-center justify-between mb-2">
                                     <div className="flex items-center gap-2">
                                         <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] text-white bg-green-600">P</div>
-                                        <span className="text-sm font-bold text-gray-900 dark:text-white">Smart Bot</span>
+                                        <span className="text-sm font-bold text-gray-900 dark:text-white">Proxy Vault</span>
                                         <button 
                                             onClick={() => copyToClipboard(proxyAddress)} 
                                             className="p-1 hover:bg-gray-200 dark:hover:bg-white/10 rounded transition-colors text-gray-500"
                                         >
                                             <Copy size={12}/>
                                         </button>
-                                        <Tooltip text="This is your dedicated Gnosis Safe trading wallet managed by the server. It executes your trades on Polymarket CLOB." />
+                                        <Tooltip text="Proxy Polymarket Gnosis Safe trading wallet. It executes your trades on the CLOB." />
                                     </div>
                                     <button 
                                         onClick={fetchBalances} 
@@ -2128,6 +2115,26 @@ return (
                                         <span className="text-[8px] text-green-600 dark:text-green-400 font-bold">TRADING FUNDS</span>
                                     </div>
                                     <span className="text-sm font-mono text-gray-900 dark:text-white font-bold">{proxyWalletBal.usdc}</span>
+                                </div>
+                            </div>
+                                                        {/* Bot Signer (EOA) */}
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] text-white bg-purple-600">S</div>
+                                        <span className="text-sm font-bold text-gray-900 dark:text-white">Bot Signer</span>
+                                        <button 
+                                            onClick={() => copyToClipboard(signerAddress)} 
+                                            className="p-1 hover:bg-gray-200 dark:hover:bg-white/10 rounded transition-colors text-gray-500"
+                                        >
+                                            <Copy size={12}/>
+                                        </button>
+                                        <Tooltip text="Encrypted in-memory EOA key to sign your Vault/Safe wallet. Fund this with 1 POL (a bit of gas)" />
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-white dark:bg-black/40 rounded border border-gray-200 dark:border-gray-800 flex justify-between shadow-sm dark:shadow-none">
+                                    <span className="text-xs text-gray-500 dark:text-gray-400">POL (Gas)</span>
+                                    <span className="text-sm font-mono text-gray-900 dark:text-white">{signerWalletBal.native}</span>
                                 </div>
                             </div>
                         </div>
@@ -2372,7 +2379,7 @@ return (
                                                 return (
                                                     <div key={trade.id} className="text-xs flex items-center justify-between p-2 bg-gray-50 dark:bg-black/40 rounded border border-gray-200 dark:border-white/5 hover:border-gray-300 dark:hover:border-gray-700 transition-colors">
                                                         <div className="flex items-center gap-3 overflow-hidden">
-                                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${trade.side === 'BUY' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}`}>
+                                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${trade.side === 'BUY' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-500'}`}>
                                                                 {trade.side}
                                                             </span>
                                                             <div className="flex flex-col min-w-0">
@@ -2601,7 +2608,7 @@ return (
                                 <div className="relative min-w-[140px]">
                                     <button 
                                         onClick={() => setIsDestChainSelectOpen(!isDestChainSelectOpen)}
-                                        className="w-full flex items-center justify-between bg-white dark:bg-white/5 hover:bg-gray-50 dark:hover:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-sm rounded-lg px-3 py-2.5 transition-colors"
+                                        className="w-full flex items-center justify-between bg-white dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-sm rounded-lg px-3 py-2.5 transition-colors"
                                         disabled={bridgeMode === 'IN'} // Locked to Polygon for IN
                                     >
                                         <div className="flex items-center gap-2">
@@ -2972,45 +2979,6 @@ return (
                         <div>
                             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Strategy & Risk</h2>
                             <p className="text-gray-500 text-sm">Configure how your bot sizes positions and manages risk.</p>
-                        </div>
-                    </div>
-                </div>
-
-                {/* NEW: Sovereignty Section (Top Level) */}
-                <div className="mb-8 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800/30 rounded-xl p-6 relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
-                         {recoveryOwnerAdded ? <ShieldCheck size={100} className="text-green-600"/> : <Fingerprint size={100} className="text-purple-600"/>}
-                    </div>
-                    
-                    <div className="relative z-10">
-                        <div className="flex justify-between items-start">
-                             <div>
-                                <h3 className="text-lg font-bold text-purple-900 dark:text-purple-100 flex items-center gap-2">
-                                    <Shield size={20}/> Vault Sovereignty (Multi-Sig)
-                                </h3>
-                                <p className="text-sm text-purple-800 dark:text-purple-300 mt-1 max-w-2xl">
-                                    Upgrade your Gnosis Safe to a <strong>Multi-Owner Setup</strong>. This adds your Main Wallet as a signer, giving you 
-                                    full on-chain control independent of this platform. If our servers get knocked offline, you can still access funds via Safe{`{Wallet}`}.
-                                    By default, the only owner of the Safe is the server-generated EOA.
-                                    Your Main Wallet (MetaMask/Phantom) is linked via the Database (User.address), but it has no on-chain authority over the Safe until you run the multi-sig setup.
-                                </p>
-                             </div>
-                             
-                             {recoveryOwnerAdded ? (
-                                 <div className="flex items-center gap-2 px-4 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg border border-green-200 dark:border-green-800">
-                                     <ShieldCheck size={18}/>
-                                     <span className="text-xs font-bold uppercase tracking-wide">You are an Owner</span>
-                                 </div>
-                             ) : (
-                                 <button 
-                                     onClick={handleAddRecoveryOwner}
-                                     disabled={isAddingRecovery}
-                                     className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-lg shadow-purple-500/20 text-xs flex items-center gap-2 transition-all disabled:opacity-50"
-                                 >
-                                     {isAddingRecovery ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
-                                     ADD RECOVERY KEY
-                                 </button>
-                             )}
                         </div>
                     </div>
                 </div>

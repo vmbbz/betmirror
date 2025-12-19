@@ -34,7 +34,7 @@ export class TradeExecutorService {
   private balanceCache: Map<string, { value: number; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 Minutes Cache for Whales
   
-  // NEW: Local deduction tracker to prevent race conditions
+  // Local deduction tracker to prevent race conditions
   private pendingSpend = 0;
   private lastBalanceFetch = 0;
 
@@ -42,7 +42,9 @@ export class TradeExecutorService {
     this.deps = deps;
   }
 
-  // Updated: Execute Exit now sells SHARES, not USD amount, ensuring 100% closure regardless of price
+  /**
+   * Execute Exit sells SHARES, not USD amount, ensuring 100% closure regardless of price
+   */
   async executeManualExit(position: ActivePosition, currentPrice: number): Promise<boolean> {
       const { logger, adapter } = this.deps;
       try {
@@ -53,7 +55,7 @@ export class TradeExecutorService {
               tokenId: position.tokenId,
               outcome: position.outcome,
               side: 'SELL',
-              sizeUsd: 0, // Ignored when sizeShares is present
+              sizeUsd: 0, 
               sizeShares: position.shares, // Sell exact number of shares held
               priceLimit: 0 // Market sell (hit the bid)
           });
@@ -84,75 +86,67 @@ export class TradeExecutorService {
       if (signal.side === 'BUY') {
           // BUY: Use Wallet Cash
           let chainBalance = 0;
-          // Cache chain balance for 10s to save RPC calls
-          if (Date.now() - this.lastBalanceFetch > 10000) {
-              chainBalance = await adapter.fetchBalance(proxyWallet);
-              this.lastBalanceFetch = Date.now();
-              this.pendingSpend = 0; // Reset pending on fresh chain sync
-          } else {
-              chainBalance = await adapter.fetchBalance(proxyWallet); 
-          }
+          chainBalance = await adapter.fetchBalance(proxyWallet);
           usableBalanceForTrade = Math.max(0, chainBalance - this.pendingSpend);
       } else {
           // SELL: Use Existing Position Value
-          // We must fetch our current holdings to know how much we can sell
-          // Note: This fetches all positions, optimized adapter should cache or allow filtered lookup
           const positions = await adapter.getPositions(proxyWallet);
           const myPosition = positions.find(p => p.tokenId === signal.tokenId);
           
           if (!myPosition || myPosition.balance <= 0) {
                return failResult("no_position_to_sell");
           }
-          // We use the USD value of our position as the 'balance' to proportion against
           usableBalanceForTrade = myPosition.valueUsd;
       }
 
       // 2. Get Whale Balance (Total Portfolio Value)
-      // For proper ratio, we need their total equity, not just cash
       const traderBalance = await this.getTraderBalance(signal.trader);
 
-      // 3. Compute Size
+      // 3. Fetch market's minimum order size
+      let minOrderSize = 5; // Default
+      try {
+          const book = await adapter.getOrderBook(signal.tokenId);
+          if (book.min_order_size) {
+              minOrderSize = Number(book.min_order_size);
+          }
+      } catch (e) {
+          logger.debug(`Using default minOrderSize: ${minOrderSize}`);
+      }
+
+      // 4. Compute Size with minOrderSize and Directional intent
       const sizing = computeProportionalSizing({
         yourUsdBalance: usableBalanceForTrade,
         traderUsdBalance: traderBalance,
         traderTradeUsd: signal.sizeUsd,
         multiplier: env.tradeMultiplier,
         currentPrice: signal.price,
-        maxTradeAmount: env.maxTradeAmount
+        maxTradeAmount: env.maxTradeAmount,
+        minOrderSize: minOrderSize // NEW PARAMETER
       });
 
-      const profileUrl = `https://polymarket.com/profile/${signal.trader}`;
-      logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | You: $${usableBalanceForTrade.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)}`);
-      logger.info(`🔗 Trader: ${profileUrl}`);
-
-      if (sizing.targetUsdSize < 1.00) {
+      if (sizing.targetUsdSize < 1.00 || sizing.targetShares < minOrderSize) {
           if (usableBalanceForTrade < 1.00) return failResult("skipped_insufficient_balance_min_1");
-          return failResult("skipped_size_too_small");
+          return failResult(sizing.reason || "skipped_size_too_small");
       }
 
-      // 4. Calculate Price Limit (SLIPPAGE PROTECTION)
+      // 5. Calculate Price Limit (SLIPPAGE PROTECTION)
       let priceLimit = 0;
-      const SLIPPAGE_PCT = 0.05; // 5% tolerance
+      const SLIPPAGE_PCT = 0.05; 
 
       if (signal.side === 'BUY') {
-          // Buying: Limit is Higher than signal
+          // BUY: Willing to pay slightly more
           priceLimit = signal.price * (1 + SLIPPAGE_PCT);
           if (priceLimit > 0.99) priceLimit = 0.99;
-          if (priceLimit < 0.01) priceLimit = 0.01;
       } else {
-          // Selling: Limit is Lower than signal
+          // SELL: Willing to accept slightly less
           priceLimit = signal.price * (1 - SLIPPAGE_PCT);
           if (priceLimit < 0.01) priceLimit = 0.01;
       }
 
-      // Round to 2 decimals
-      priceLimit = Math.max(priceLimit * 100) / 100;
-      if (priceLimit <= 0) priceLimit = 0.01;
+      // 6. Log sizing info with new share-count transparency
+      logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | You: $${usableBalanceForTrade.toFixed(2)} | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.targetShares} shares)`);
 
-      logger.info(`🛡️ Price Guard: Signal @ ${signal.price.toFixed(3)} -> Limit @ ${priceLimit.toFixed(2)}`);
-
-      // 5. Execute via Adapter
-      // Note: If selling, we pass sizeUsd. The adapter will calculate shares = sizeUsd / priceLimit (or market price)
+      // 7. Execute via Adapter
       const result = await adapter.createOrder({
         marketId: signal.marketId,
         tokenId: signal.tokenId,
@@ -162,29 +156,25 @@ export class TradeExecutorService {
         priceLimit: priceLimit
       });
 
-      // 6. Check Result
+      // 8. Check Result
       if (!result.success) {
           return {
               status: 'FAILED',
               executedAmount: 0,
               executedShares: 0,
               priceFilled: 0,
-              reason: result.error || 'adapter_rejection'
+              reason: result.error || 'Unknown error'
           };
       }
 
-      // 7. Success - Update Pending Spend (Only for Buys)
+      // 9. Success - Update Pending Spend (Only for Buys)
       if (signal.side === 'BUY') {
          this.pendingSpend += sizing.targetUsdSize;
       }
       
-      const shares = result.sharesFilled;
-      const price = result.priceFilled;
-      const actualUsd = shares * price;
-      
       return {
           status: 'FILLED',
-          txHash: result.txHash || result.orderId,
+          txHash: result.orderId || result.txHash,
           executedAmount: result.sharesFilled * result.priceFilled,
           executedShares: result.sharesFilled,
           priceFilled: result.priceFilled,
@@ -220,7 +210,7 @@ export class TradeExecutorService {
       this.balanceCache.set(trader, { value: val, timestamp: Date.now() });
       return val;
     } catch {
-      return 10000; // Fallback whale size
+      return 10000; 
     }
   }
 }

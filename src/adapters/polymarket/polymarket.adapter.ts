@@ -221,7 +221,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
         const book = await this.client.getOrderBook(tokenId);
         return {
             bids: book.bids.map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) })),
-            asks: book.asks.map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
+            asks: book.asks.map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) })),
+            min_order_size: (book as any).min_order_size ? Number((book as any).min_order_size) : 5,
+            tick_size: (book as any).tick_size ? Number((book as any).tick_size) : 0.01,
+            neg_risk: (book as any).neg_risk
         };
     }
 
@@ -230,18 +233,48 @@ export class PolymarketAdapter implements IExchangeAdapter {
             const url = `https://data-api.polymarket.com/positions?user=${address}`;
             const res = await axios.get(url);
             if(!Array.isArray(res.data)) return [];
-            return res.data.map((p: any) => ({
-                marketId: p.conditionId || p.market,
-                tokenId: p.asset,
-                outcome: p.outcome || 'UNK',
-                balance: Number(p.size),
-                valueUsd: Number(p.size) * Number(p.price),
-                entryPrice: Number(p.avgPrice || p.price),
-                currentPrice: Number(p.price),
-                question: p.title,
-                image: p.icon,
-                marketSlug: p.market_slug
-            }));
+            
+            const positions: PositionData[] = [];
+            
+            for (const p of res.data) {
+                const size = parseFloat(p.size) || 0;
+                if (size <= 0) continue;
+
+                // FIX: Get real-time price from CLOB if Data API returns 0 or null
+                let currentPrice = parseFloat(p.price) || 0;
+                if (currentPrice === 0 && this.client && p.asset) {
+                    try {
+                        const mid = await this.client.getMidpoint(p.asset);
+                        currentPrice = parseFloat(mid.mid) || 0;
+                    } catch (e) {
+                        currentPrice = parseFloat(p.avgPrice) || 0.5;
+                    }
+                }
+
+                // Proper accounting logic
+                const entryPrice = parseFloat(p.avgPrice) || currentPrice || 0.5;
+                const currentValueUsd = size * currentPrice;
+                const investedValueUsd = size * entryPrice;
+                const unrealizedPnL = currentValueUsd - investedValueUsd;
+                const unrealizedPnLPercent = investedValueUsd > 0 ? (unrealizedPnL / investedValueUsd) * 100 : 0;
+
+                positions.push({
+                    marketId: p.conditionId || p.market,
+                    tokenId: p.asset,
+                    outcome: p.outcome || 'UNK',
+                    balance: size,
+                    valueUsd: currentValueUsd,
+                    investedValue: investedValueUsd,
+                    entryPrice: entryPrice,
+                    currentPrice: currentPrice,
+                    unrealizedPnL: unrealizedPnL,
+                    unrealizedPnLPercent: unrealizedPnLPercent,
+                    question: p.title,
+                    image: p.icon,
+                    marketSlug: p.market_slug
+                });
+            }
+            return positions;
         } catch(e) { return []; }
     }
 
@@ -270,72 +303,73 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async createOrder(params: OrderParams, retryCount = 0): Promise<OrderResult> {
-        if (!this.client) return { success: false, error: "Client not authenticated", sharesFilled: 0, priceFilled: 0 };
+        if (!this.client) throw new Error("Client not authenticated");
 
         try {
-            const marketPromise = this.client.getMarket(params.marketId);
-            const bookPromise = this.client.getOrderBook(params.tokenId);
-
-            const [market, book] = await Promise.all([
-                marketPromise.catch(e => null), 
-                bookPromise.catch(e => null)
-            ]);
-
-            if (!market) throw new Error("Market data not available");
-            if (!book) throw new Error("Orderbook not available (Liquidity check failed)");
-
-            const negRisk = market.neg_risk;
+            let negRisk = false;
             let minOrderSize = 5; 
             let tickSize = 0.01;
 
-            if (book.tick_size) {
-                tickSize = Number(book.tick_size);
-            } else if (market.minimum_tick_size) {
-                tickSize = Number(market.minimum_tick_size);
+            try {
+                const market = await this.client.getMarket(params.marketId);
+                negRisk = market.neg_risk;
+                if (market.minimum_order_size) minOrderSize = Number(market.minimum_order_size);
+                if (market.minimum_tick_size) tickSize = Number(market.minimum_tick_size);
+            } catch (e) {
+                // Fallback: Get from orderbook metadata
+                try {
+                    const book = await this.getOrderBook(params.tokenId);
+                    if (book.min_order_size) minOrderSize = book.min_order_size;
+                    if (book.tick_size) tickSize = book.tick_size;
+                    if (book.neg_risk !== undefined) negRisk = book.neg_risk;
+                } catch(e2) {
+                    this.logger.debug(`[Order] Market info fetch fallback for ${params.marketId}`);
+                }
             }
 
-            if (market.minimum_order_size) minOrderSize = Number(market.minimum_order_size);
-
             const side = params.side === 'BUY' ? Side.BUY : Side.SELL;
-            
             let rawPrice = params.priceLimit;
 
-            if (rawPrice === undefined) {
+            if (rawPrice === undefined || rawPrice === 0) {
+                 const book = await this.client.getOrderBook(params.tokenId);
                  if (side === Side.BUY) {
-                     if (!book.asks || book.asks.length === 0) return { success: false, error: "skipped_no_liquidity", sharesFilled: 0, priceFilled: 0 };
-                     rawPrice = Number(book.asks[0].price); 
+                     if (!book.asks || book.asks.length === 0) throw new Error("skipped_no_liquidity");
+                     rawPrice = Number(book.asks[0].price);
                  } else {
-                     if (!book.bids || book.bids.length === 0) return { success: false, error: "skipped_no_liquidity", sharesFilled: 0, priceFilled: 0 };
-                     rawPrice = Number(book.bids[0].price); 
+                     if (book.bids && book.bids.length > 0) {
+                        rawPrice = Number(book.bids[0].price);
+                     } else {
+                        throw new Error("skipped_no_liquidity");
+                     }
                  }
             }
 
-            // Price clamp safety
             if (rawPrice >= 0.99) rawPrice = 0.99;
             if (rawPrice <= 0.01) rawPrice = 0.01;
 
-            // Tick alignment
+            // DIRECTIONAL TICK ROUNDING
             const inverseTick = Math.round(1 / tickSize);
-            const roundedPrice = Math.floor(rawPrice * inverseTick) / inverseTick;
+            let roundedPrice: number;
             
-            let shares = params.sizeShares || 0;
-            
-            if (!shares && params.sizeUsd > 0) {
-                 const rawShares = params.sizeUsd / roundedPrice;
-                 shares = Math.ceil(rawShares);
+            if (side === Side.BUY) {
+                // BUY: Round UP to ensure order is competitive enough to be filled
+                roundedPrice = Math.ceil(rawPrice * inverseTick) / inverseTick;
+            } else {
+                // SELL: Round DOWN to hit existing bids
+                roundedPrice = Math.floor(rawPrice * inverseTick) / inverseTick;
             }
 
-            // MINIMUM SHARE CHECK (5 Shares)
-            if (shares < minOrderSize) {
-                this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice}`);
-                return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 }; 
-            }
+            // Post-rounding clamp
+            if (roundedPrice > 0.99) roundedPrice = 0.99;
+            if (roundedPrice < 0.01) roundedPrice = 0.01;
             
-            // MINIMUM USD AMOUNT CHECK ($1.00 USD hard requirement from CLOB error)
-            const usdValue = shares * roundedPrice;
-            if (usdValue < 1.00) {
-                this.logger.warn(`⚠️ Order Rejected: Value ($${usdValue.toFixed(2)}) < $1.00 Minimum. Req: ${shares} shares @ ${roundedPrice}`);
-                return { success: false, error: "skipped_min_usd_limit", sharesFilled: 0, priceFilled: 0 };
+            const rawShares = params.sizeUsd / roundedPrice;
+            const shares = params.sizeShares || Math.floor(rawShares);
+
+            // PRE-VALIDATE min shares to avoid server 400 errors
+            if (shares < minOrderSize) {
+                this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice.toFixed(2)}`);
+                return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 };
             }
 
             const order: any = {
@@ -344,63 +378,30 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 side: side,
                 size: shares,
                 feeRateBps: 0,
-                taker: "0x0000000000000000000000000000000000000000" 
+                taker: "0x0000000000000000000000000000000000000000"
             };
 
-            this.logger.info(`📝 Placing Order (Safe): ${params.side} ${shares} shares @ $${roundedPrice} (Tick: ${tickSize})`);
+            this.logger.info(`📝 Placing Order (Safe): ${params.side} ${shares} shares @ $${roundedPrice.toFixed(2)}`);
 
             const res = await this.client.createAndPostOrder(
                 order, 
-                { 
-                    negRisk,
-                    tickSize: tickSize as any 
-                }, 
+                { negRisk, tickSize: tickSize as any }, 
                 OrderType.FOK as any
             );
 
             if (res && res.success) {
                 this.logger.success(`✅ Order Accepted. Tx: ${res.transactionHash || res.orderID || 'OK'}`);
-                return { 
-                    success: true, 
-                    orderId: res.orderID, 
-                    txHash: res.transactionHash, 
-                    sharesFilled: shares,
-                    priceFilled: roundedPrice
-                };
+                return { success: true, orderId: res.orderID, txHash: res.transactionHash, sharesFilled: shares, priceFilled: roundedPrice };
             }
-            
             throw new Error(res.errorMsg || "Order failed response");
 
         } catch (error: any) {
-            const errStr = String(error);
-
-            if (retryCount < 1 && (errStr.includes("401") || errStr.includes("403") || errStr.includes("invalid signature"))) {
-                this.logger.warn("⚠️ Auth Error. Refreshing keys and retrying...");
-                this.config.l2ApiCredentials = undefined; 
+            if (retryCount < 1 && (String(error).includes("401") || String(error).includes("signature"))) {
                 await this.deriveAndSaveKeys();
                 this.initClobClient(this.config.l2ApiCredentials);
                 return this.createOrder(params, retryCount + 1);
             }
-            
-            if (error.response?.data) {
-                this.logger.error(`[CLOB Client] request error ${JSON.stringify(error.response)}`);
-            }
-
-            const errorMsg = error.response?.data?.error || error.message;
-            
-            if (errorMsg?.includes("allowance")) {
-                this.logger.error("❌ Failed: Insufficient Allowance. Retrying approvals...");
-                await this.safeManager?.enableApprovals();
-            } else if (errorMsg?.includes("balance")) {
-                this.logger.error("❌ Failed: Insufficient USDC Balance.");
-                return { success: false, error: "insufficient_funds", sharesFilled: 0, priceFilled: 0 };
-            } else if (errorMsg?.includes("minimum") || errorMsg?.includes("invalid amount")) {
-                 this.logger.error(`❌ Failed: Below Min Size (CLOB Rejection).`);
-                 return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 };
-            } else {
-                this.logger.error(`Order Error: ${errorMsg}`);
-            }
-            return { success: false, error: "failed", sharesFilled: 0, priceFilled: 0 };
+            return { success: false, error: error.message, sharesFilled: 0, priceFilled: 0 };
         }
     }
 

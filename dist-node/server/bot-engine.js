@@ -1,4 +1,3 @@
-// ... existing imports ...
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -31,6 +30,9 @@ export class BotEngine {
         portfolioValue: 0,
         cashBalance: 0
     };
+    // SYNC THROTTLING
+    lastPositionSync = 0;
+    POSITION_SYNC_INTERVAL = 30000; // 30 seconds
     constructor(config, registryService, callbacks) {
         this.config = config;
         this.registryService = registryService;
@@ -74,47 +76,56 @@ export class BotEngine {
     async syncPositions(forceChainSync = false) {
         if (!this.exchange)
             return;
+        const now = Date.now();
+        // Skip if too soon and not a manual/forced action
+        if (!forceChainSync && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
+            return;
+        }
+        this.lastPositionSync = now;
         try {
-            // 1. If forced, pull from chain (Emergency Resync)
             if (forceChainSync) {
-                this.addLog('warn', '⚠️ Forced Chain Sync requested. Updating positions from Chain/API...');
+                this.addLog('info', '🔄 Syncing positions from chain...');
                 const address = this.exchange.getFunderAddress();
                 if (address) {
                     const chainPositions = await this.exchange.getPositions(address);
-                    // Map to ActivePosition (Update with Rich Data)
-                    this.activePositions = chainPositions.map(p => ({
-                        tradeId: 'imported_' + Date.now() + Math.random().toString(36).substring(7),
-                        marketId: p.marketId,
-                        tokenId: p.tokenId,
-                        outcome: p.outcome,
-                        entryPrice: p.entryPrice,
-                        shares: p.balance,
-                        sizeUsd: p.valueUsd,
-                        timestamp: Date.now(),
-                        // Sync Rich Data
-                        currentPrice: p.currentPrice,
-                        question: p.question,
-                        image: p.image,
-                        marketSlug: p.marketSlug
-                    }));
+                    this.activePositions = chainPositions.map(p => {
+                        return {
+                            tradeId: 'imported_' + Date.now() + Math.random().toString(36).substring(7),
+                            clobOrderId: p.marketId,
+                            marketId: p.marketId,
+                            tokenId: p.tokenId,
+                            outcome: (p.outcome || 'YES').toUpperCase(),
+                            entryPrice: p.entryPrice || 0.5,
+                            shares: p.balance || 0,
+                            sizeUsd: p.valueUsd,
+                            investedValue: p.investedValue,
+                            timestamp: Date.now(),
+                            currentPrice: p.currentPrice,
+                            unrealizedPnL: p.unrealizedPnL,
+                            unrealizedPnLPercent: p.unrealizedPnLPercent,
+                            question: p.question || p.marketId,
+                            image: p.image || '',
+                            marketSlug: p.marketSlug || ''
+                        };
+                    });
                 }
             }
             else {
-                // 2. Standard Sync: Update Prices ONLY
                 for (const pos of this.activePositions) {
                     try {
-                        const currentPrice = await this.exchange.getMarketPrice(pos.marketId, pos.tokenId);
-                        if (currentPrice > 0) {
-                            pos.currentPrice = currentPrice; // Update live price
-                            pos.sizeUsd = pos.shares * currentPrice;
+                        const currentPrice = await this.exchange?.getMarketPrice(pos.marketId, pos.tokenId);
+                        if (currentPrice && !isNaN(currentPrice) && currentPrice > 0) {
+                            pos.currentPrice = currentPrice;
+                            const currentValue = pos.shares * currentPrice;
+                            const investedValue = pos.shares * pos.entryPrice;
+                            pos.investedValue = investedValue;
+                            pos.unrealizedPnL = currentValue - investedValue;
+                            pos.unrealizedPnLPercent = investedValue > 0 ? (pos.unrealizedPnL / investedValue) * 100 : 0;
                         }
                     }
-                    catch (e) {
-                        // Ignore price update errors
-                    }
+                    catch (e) { }
                 }
             }
-            // Persist updates
             if (this.callbacks?.onPositionsUpdate) {
                 await this.callbacks.onPositionsUpdate(this.activePositions);
             }
@@ -133,7 +144,11 @@ export class BotEngine {
                 return;
             const cashBalance = await this.exchange.fetchBalance(address);
             let positionValue = 0;
-            this.activePositions.forEach(p => positionValue += p.sizeUsd);
+            this.activePositions.forEach(p => {
+                if (p.shares && p.currentPrice && !isNaN(p.shares * p.currentPrice)) {
+                    positionValue += (p.shares * p.currentPrice);
+                }
+            });
             this.stats.portfolioValue = cashBalance + positionValue;
             this.stats.cashBalance = cashBalance;
             if (this.callbacks?.onStatsUpdate) {
@@ -188,7 +203,7 @@ export class BotEngine {
                         marketId: position.marketId,
                         outcome: position.outcome,
                         side: 'SELL',
-                        size: position.sizeUsd,
+                        size: position.shares * position.entryPrice,
                         executedSize: position.shares * currentPrice,
                         price: currentPrice,
                         status: 'FILLED',
@@ -269,7 +284,6 @@ export class BotEngine {
             const balanceUSDC = await this.exchange.fetchBalance(funderAddr);
             if (this.activePositions.length > 0)
                 return true;
-            // UPDATE: Check for at least $1.00 to avoid "Minimum Order" loops
             return balanceUSDC >= 1.0;
         }
         catch (e) {
@@ -306,7 +320,6 @@ export class BotEngine {
                 return;
             await this.exchange.authenticate();
             this.startServices(logger);
-            // Sync rich metadata for positions on start
             await this.syncPositions(true);
             await this.syncStats();
         }
@@ -397,16 +410,17 @@ export class BotEngine {
                     if (result.status === 'FILLED') {
                         await this.addLog('success', `✅ Trade Executed! Order: ${result.txHash || result.reason} ($${result.executedAmount.toFixed(2)})`);
                         if (signal.side === 'BUY') {
-                            // 1. Create Trade Record
-                            const tradeRecord = await Trade.create({
-                                _id: crypto.randomUUID(), // Force UUID for compatibility
+                            const tradeId = crypto.randomUUID();
+                            // 1. Create Trade Record in DB
+                            await Trade.create({
+                                _id: tradeId,
                                 userId: this.config.userId,
                                 marketId: signal.marketId,
                                 outcome: signal.outcome,
                                 side: 'BUY',
                                 size: signal.sizeUsd,
                                 executedSize: result.executedAmount,
-                                price: signal.price,
+                                price: result.priceFilled || signal.price,
                                 pnl: 0,
                                 status: 'OPEN',
                                 txHash: result.txHash,
@@ -416,23 +430,25 @@ export class BotEngine {
                                 riskScore: aiResult.riskScore,
                                 timestamp: new Date()
                             });
-                            // 2. Add to Active Positions with rich metadata placeholder
-                            // Sync will update Question/Image shortly
+                            // 2. Add to Local Active Positions
+                            const investedValue = result.executedAmount;
                             this.activePositions.push({
-                                tradeId: tradeRecord._id.toString(),
+                                tradeId: tradeId,
                                 clobOrderId: result.txHash,
                                 marketId: signal.marketId,
                                 tokenId: signal.tokenId,
                                 outcome: signal.outcome,
-                                entryPrice: signal.price,
+                                entryPrice: result.priceFilled || signal.price,
                                 shares: result.executedShares,
-                                sizeUsd: result.executedAmount,
+                                sizeUsd: investedValue,
+                                investedValue: investedValue,
                                 timestamp: Date.now(),
-                                currentPrice: signal.price,
-                                question: "Loading Data...",
+                                currentPrice: result.priceFilled || signal.price,
+                                unrealizedPnL: 0,
+                                unrealizedPnLPercent: 0,
+                                question: "Syncing...",
                                 image: ""
                             });
-                            // Trigger sync to get rich data
                             this.syncPositions(true);
                         }
                         else if (signal.side === 'SELL') {

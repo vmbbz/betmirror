@@ -1,9 +1,9 @@
 export function computeProportionalSizing(input) {
-    const { yourUsdBalance, traderUsdBalance, traderTradeUsd, multiplier, currentPrice, maxTradeAmount } = input;
+    const { yourUsdBalance, traderUsdBalance, traderTradeUsd, multiplier, currentPrice, maxTradeAmount, minOrderSize = 5 // Default to 5 shares if not provided
+     } = input;
     // 0. Safety: Valid Price
-    const price = Math.max(0.01, currentPrice); // Prevent div by zero
+    const price = Math.max(0.01, Math.min(0.99, currentPrice)); // Prevent div by zero and invalid ranges
     // 1. Calculate raw ratio
-    // We use a minimum denominator of 1 to avoid division by zero
     const denom = Math.max(1, traderUsdBalance + Math.max(0, traderTradeUsd));
     const ratio = Math.max(0, yourUsdBalance / denom);
     // 2. Calculate raw target size based on proportion
@@ -11,24 +11,26 @@ export function computeProportionalSizing(input) {
     let targetUsdSize = Math.max(0, base * Math.max(0, multiplier));
     let reason = "proportional";
     // 3. THE "SMART MATCH" LOGIC
-    // A. The Hard Floor ($1.00)
-    // Polymarket APIs typically reject orders < $1 (Dust) for Market/FOK orders.
-    // If the proportional math says "$0.05", we boost it to "$1.00" so the user actually participates.
-    const SYSTEM_MIN_ORDER = 1.00;
+    // A. Calculate minimum USD needed for minimum shares
+    // CRITICAL FIX: We need at least (minOrderSize * price) USD to get minOrderSize shares
+    const minUsdForMinShares = minOrderSize * price;
+    const SYSTEM_MIN_ORDER = Math.max(1.00, minUsdForMinShares);
     if (targetUsdSize < SYSTEM_MIN_ORDER) {
         if (yourUsdBalance >= SYSTEM_MIN_ORDER) {
             targetUsdSize = SYSTEM_MIN_ORDER;
-            reason = "floor_boost_min_1";
+            reason = "floor_boost_min_shares";
         }
         else {
-            // User has less than $1.00. 
-            // They cannot trade on CLOB.
-            targetUsdSize = 0;
-            reason = "insufficient_for_min_order";
+            // User cannot afford minimum shares
+            return {
+                targetUsdSize: 0,
+                targetShares: 0,
+                ratio,
+                reason: "insufficient_for_min_shares"
+            };
         }
     }
     // B. The Safety Ceiling (Max Cap)
-    // If user has $1M and sets max trade to $500, we clamp.
     if (maxTradeAmount && targetUsdSize > maxTradeAmount) {
         targetUsdSize = maxTradeAmount;
         reason = "capped_at_max";
@@ -38,16 +40,33 @@ export function computeProportionalSizing(input) {
         targetUsdSize = yourUsdBalance;
         reason = "capped_at_balance";
     }
-    // 4. Final Formatting
-    // Polymarket requires strict 2-decimal precision for USD amounts (FOK orders).
-    // We floor to avoid "Insufficient Balance" due to 0.00001 diffs.
-    targetUsdSize = Math.floor(targetUsdSize * 100) / 100;
-    // Double check post-floor: if it dropped below $1 but user has funds, bump it back up
-    if (targetUsdSize < SYSTEM_MIN_ORDER && targetUsdSize > 0) {
-        if (yourUsdBalance >= SYSTEM_MIN_ORDER)
-            targetUsdSize = SYSTEM_MIN_ORDER;
-        else
-            targetUsdSize = 0;
+    // 4. Final Formatting - ROUND UP to ensure we have enough for shares
+    // Using Math.ceil instead of Math.floor to avoid losing shares due to precision
+    targetUsdSize = Math.ceil(targetUsdSize * 100) / 100;
+    // 5. Calculate expected shares and validate
+    const expectedShares = Math.floor(targetUsdSize / price);
+    // 6. Final validation: If we still can't get minimum shares, reject or boost
+    if (expectedShares < minOrderSize) {
+        // Try to boost USD to exactly meet minimum shares
+        const boostUsd = Math.ceil((minOrderSize * price) * 100) / 100;
+        if (boostUsd <= yourUsdBalance && (!maxTradeAmount || boostUsd <= maxTradeAmount)) {
+            targetUsdSize = boostUsd;
+            reason = "boosted_for_min_shares";
+        }
+        else {
+            return {
+                targetUsdSize: 0,
+                targetShares: 0,
+                ratio,
+                reason: "cannot_meet_min_shares"
+            };
+        }
     }
-    return { targetUsdSize, ratio, reason };
+    const finalShares = Math.floor(targetUsdSize / price);
+    return {
+        targetUsdSize,
+        targetShares: finalShares,
+        ratio,
+        reason
+    };
 }

@@ -12,6 +12,10 @@ export interface MarketData {
 export interface OrderBook {
     bids: { price: number; size: number }[];
     asks: { price: number; size: number }[];
+    // NEW: Market metadata returned by getOrderBook()
+    min_order_size?: number;
+    tick_size?: number;
+    neg_risk?: boolean;
 }
 
 export interface PositionData {
@@ -20,8 +24,11 @@ export interface PositionData {
     outcome: string;
     balance: number; // Number of shares
     valueUsd: number;
+    investedValue?: number; // NEW: Total USD cost basis
     entryPrice: number;
     currentPrice: number;
+    unrealizedPnL?: number; // NEW: valueUsd - investedValue
+    unrealizedPnLPercent?: number; // NEW: PnL / investedValue
     // Rich Data Fields
     question?: string;
     image?: string;

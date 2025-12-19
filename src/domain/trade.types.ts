@@ -50,9 +50,12 @@ export interface ActivePosition {
   entryPrice: number;
   shares: number; // Exact number of shares held (Critical for selling)
   sizeUsd: number; // Initial invested amount
+  investedValue?: number; // NEW: Current shares * entryPrice
   timestamp: number;
   // Rich Data (Synced from Chain)
   currentPrice?: number;
+  unrealizedPnL?: number; // NEW
+  unrealizedPnLPercent?: number; // NEW
   question?: string;
   image?: string;
   endDate?: string;

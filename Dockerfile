@@ -36,6 +36,9 @@ COPY --from=builder /app/dist-node ./dist-node
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/wallets.txt ./wallets.txt
+COPY --from=builder /app/.env ./.env
+COPY --from=builder /app/.env.local ./.env.local
 
 # Expose the port the app runs on
 EXPOSE 3000

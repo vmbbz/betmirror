@@ -1,4 +1,3 @@
-
 import { Wallet, Interface, Contract, ethers, JsonRpcProvider } from 'ethers';
 import { RelayClient, SafeTransaction, OperationType } from '@polymarket/builder-relayer-client';
 import { deriveSafe } from '@polymarket/builder-relayer-client/dist/builder/derive.js';
@@ -22,6 +21,7 @@ const NEG_RISK_ADAPTER_ADDRESS = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296";
 const POLYMARKET_SAFE_FACTORY = "0xaacfeea03eb1561c4e67d661e40682bd20e3541b"; 
 const STANDARD_SAFE_FACTORY = "0xa6b71e26c5e0845f74c812102ca7114b6a896ab2"; // Legacy/Standard Gnosis
 
+// Use Polymarket as default for new deployments, but check both
 const SAFE_SINGLETON_ADDRESS = "0x3e5c63644e683549055b9be8653de26e0b4cd36e";
 const FALLBACK_HANDLER_ADDRESS = "0xf48f2b2d2a534e40247ecb36350021948091179d";
 
@@ -41,6 +41,7 @@ const PROXY_FACTORY_ABI = [
 
 const MAX_UINT256 = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
 
+// ABIs
 const ERC20_ABI = [
     "function approve(address spender, uint256 amount) returns (bool)",
     "function transfer(address to, uint256 amount) returns (bool)",
@@ -53,11 +54,11 @@ const ERC1155_ABI = [
 
 export class SafeManagerService {
     private relayClient: RelayClient;
-    private safeAddress: string;
+    private safeAddress: string; // Source of Truth
     private viemPublicClient: any;
 
     constructor(
-        private signer: Wallet,
+        private signer: Wallet, // Ethers V6 Wallet
         private builderApiKey: string | undefined,
         private builderApiSecret: string | undefined,
         private builderApiPassphrase: string | undefined,
@@ -69,15 +70,24 @@ export class SafeManagerService {
         }
         this.safeAddress = knownSafeAddress;
         
+        this.logger.info(`ℹ️ Active Safe: ${knownSafeAddress}`);
+
         let builderConfig: BuilderConfig | undefined = undefined;
-        if (builderApiKey && builderApiSecret && builderApiPassphrase) {
-            builderConfig = new BuilderConfig({
-                localBuilderCreds: {
-                    key: builderApiKey,
-                    secret: builderApiSecret,
-                    passphrase: builderApiPassphrase
-                }
-            });
+
+        if (!builderApiKey || !builderApiSecret || !builderApiPassphrase) {
+            this.logger.warn(`⚠️ Builder Creds Missing. Safe Relayer functionality limited.`);
+        } else {
+            try {
+                builderConfig = new BuilderConfig({
+                    localBuilderCreds: {
+                        key: builderApiKey,
+                        secret: builderApiSecret,
+                        passphrase: builderApiPassphrase
+                    }
+                });
+            } catch (e) {
+                this.logger.warn("⚠️ Failed to initialize BuilderConfig.");
+            }
         }
 
         const account = privateKeyToAccount(signer.privateKey as `0x${string}`);
@@ -110,26 +120,40 @@ export class SafeManagerService {
 
         try {
             const provider = new JsonRpcProvider('https://polygon-rpc.com');
+            
             const stdCode = await provider.getCode(stdSafe);
-            if (stdCode && stdCode !== '0x') return stdSafe;
+            if (stdCode && stdCode !== '0x') {
+                console.log(`[SafeManager] Found existing Legacy Safe at ${stdSafe}`);
+                return stdSafe;
+            }
 
             const polyCode = await provider.getCode(polySafe);
-            if (polyCode && polyCode !== '0x') return polySafe;
+            if (polyCode && polyCode !== '0x') {
+                console.log(`[SafeManager] Found existing Polymarket Safe at ${polySafe}`);
+                return polySafe;
+            }
         } catch (e) {
-            console.warn("[SafeManager] Code check failed.");
+            console.warn("[SafeManager] Failed to check code on-chain, defaulting to Polymarket factory derivation.");
         }
+
         return polySafe;
     }
 
     public async isDeployed(): Promise<boolean> {
         try {
-            const code = await this.viemPublicClient.getBytecode({ address: this.safeAddress });
-            return (code && code !== '0x');
-        } catch(e) { return false; }
+            const code = await this.signer.provider?.getCode(this.safeAddress);
+            return code !== undefined && code !== '0x';
+        } catch(rpcErr) { 
+             try {
+                const code = await this.viemPublicClient.getBytecode({ address: this.safeAddress });
+                return (code && code !== '0x');
+             } catch(e) { return false; }
+        }
     }
 
     public async deploySafe(): Promise<string> {
         if (await this.isDeployed()) {
+            this.logger.info(`   Safe ${this.safeAddress.slice(0,8)}... is active.`);
             return this.safeAddress;
         }
 
@@ -139,10 +163,20 @@ export class SafeManagerService {
             const task = await this.relayClient.deploy();
             await task.wait(); 
             const realAddress = (task as any).proxyAddress;
+            
+            if (realAddress && realAddress.toLowerCase() !== this.safeAddress.toLowerCase()) {
+                this.logger.warn(`⚠️ Relayer deployed to ${realAddress}, but DB expected ${this.safeAddress}. Updating DB...`);
+                return realAddress;
+            }
             this.logger.success(`✅ Safe Deployed via Relayer`);
             return realAddress || this.safeAddress;
         } catch (e: any) {
-            if (e.message?.toLowerCase().includes("already deployed")) return this.safeAddress;
+            const msg = (e.message || "").toLowerCase();
+            if (msg.includes("already deployed")) {
+                this.logger.success(`   Safe active (confirmed by Relayer).`);
+                return this.safeAddress;
+            }
+            this.logger.warn(`   Relayer deploy failed (${msg}). Switching to Rescue Deploy...`);
             return await this.deploySafeOnChain();
         }
     }
@@ -153,7 +187,7 @@ export class SafeManagerService {
 
         this.logger.info(`   Checking permissions for ${this.safeAddress.slice(0,8)}...`);
 
-        // FIX: Wait for Safe deployment confirmation indexing to prevent BAD_DATA nonce errors
+        // FIX: Wait for Safe deployment confirmation indexing before requesting nonce or executing
         let retries = 10;
         while (retries > 0 && !(await this.isDeployed())) {
             this.logger.info(`   Waiting for Safe deployment indexing...`);
@@ -187,7 +221,6 @@ export class SafeManagerService {
                         data: data as `0x${string}`, 
                         operation: OperationType.Call 
                     };
-                    // FIX: Use RelayClient.execute instead of manual axios POST
                     const task = await this.relayClient.execute([tx]);
                     await task.wait();
                     this.logger.success(`     ✅ Approved ${spender.name}`);
@@ -241,9 +274,14 @@ export class SafeManagerService {
             data: data as `0x${string}`, 
             operation: OperationType.Call 
         };
-        const task = await this.relayClient.execute([tx]);
-        const result = await task.wait();
-        return (result as any).transactionHash || "0x...";
+        
+        try {
+            const task = await this.relayClient.execute([tx]);
+            const result = await task.wait();
+            return (result as any).transactionHash || "0x...";
+        } catch (e: any) {
+            throw e;
+        }
     }
 
     public async withdrawNative(to: string, amount: string): Promise<string> {
@@ -253,32 +291,33 @@ export class SafeManagerService {
             data: "0x", 
             operation: OperationType.Call 
         };
-        const task = await this.relayClient.execute([tx]);
-        const result = await task.wait();
-        return (result as any).transactionHash || "0x...";
+        try {
+            const task = await this.relayClient.execute([tx]);
+            const result = await task.wait();
+            return (result as any).transactionHash || "0x...";
+        } catch (e: any) {
+            throw e;
+        }
     }
 
     public async addOwner(newOwnerAddress: string): Promise<string> {
-        this.logger.info(`🛡️ Adding Recovery Owner: ${newOwnerAddress}`);
-        
-        // Check if already owner
+        this.logger.info(`🛡️ Adding Recovery Owner: ${newOwnerAddress} to Safe ${this.safeAddress}`);
+
         const isOwner = await this.viemPublicClient.readContract({
             address: this.safeAddress as `0x${string}`,
             abi: parseAbi(SAFE_ABI),
             functionName: 'isOwner',
             args: [newOwnerAddress]
         }) as boolean;
-        
+
         if (isOwner) {
-            this.logger.info(`   Address is already an owner.`);
+            this.logger.info("   Address is already an owner.");
             return "ALREADY_OWNER";
         }
-        
-        // Build the addOwner transaction
+
         const safeInterface = new Interface(SAFE_ABI);
         const data = safeInterface.encodeFunctionData("addOwnerWithThreshold", [newOwnerAddress, 1]);
         
-        // Execute via Relayer (GASLESS!)
         const tx: SafeTransaction = { 
             to: this.safeAddress as `0x${string}`, 
             value: "0", 
@@ -289,97 +328,131 @@ export class SafeManagerService {
         const task = await this.relayClient.execute([tx]);
         const result = await task.wait();
         
-        this.logger.success(`✅ Owner Added! Tx: ${(result as any).transactionHash}`);
+        this.logger.success(`   ✅ Owner Added! Tx: ${(result as any).transactionHash}`);
         return (result as any).transactionHash;
     }
 
     public async deploySafeOnChain(): Promise<string> {
-        this.logger.warn(`🏗️ ON-CHAIN DEPLOYMENT...`);
+        this.logger.warn(`🏗️ STARTING ON-CHAIN RESCUE DEPLOYMENT...`);
+        
+        if (!this.signer.provider) throw new Error("No provider for deployment");
 
-        // Provider check
-        if (!this.signer.provider) {
-            throw new Error("Signer has no provider. Cannot deploy on-chain.");
-        }
-
-        // Gas balance check
         const gasBal = await this.signer.provider.getBalance(this.signer.address);
         if (gasBal < 100000000000000000n) { // 0.1 POL
-            throw new Error(`Insufficient POL in signer wallet. Need ~0.2 POL. Address: ${this.signer.address}`);
+            throw new Error("Insufficient POL (Matic) in Signer wallet to deploy Safe. Please send ~0.2 POL to " + this.signer.address);
         }
+
         const safeInterface = new Interface(SAFE_ABI);
         const owners = [this.signer.address];
+        const threshold = 1;
+        const to = "0x0000000000000000000000000000000000000000";
+        const data = "0x";
+        const fallbackHandler = FALLBACK_HANDLER_ADDRESS;
+        const paymentToken = "0x0000000000000000000000000000000000000000";
+        const payment = 0;
+        const paymentReceiver = "0x0000000000000000000000000000000000000000";
+
         const initializer = safeInterface.encodeFunctionData("setup", [
-            owners, 1, "0x0000000000000000000000000000000000000000", "0x", FALLBACK_HANDLER_ADDRESS, "0x0000000000000000000000000000000000000000", 0, "0x0000000000000000000000000000000000000000"
+            owners, threshold, to, data, fallbackHandler, paymentToken, payment, paymentReceiver
         ]);
+
         const factory = new Contract(POLYMARKET_SAFE_FACTORY, PROXY_FACTORY_ABI, this.signer);
-        const tx = await factory.createProxyWithNonce(SAFE_SINGLETON_ADDRESS, initializer, 0);
+        const saltNonce = 0; 
+
+        this.logger.info(`   🚀 Sending Deployment Transaction...`);
+        const tx = await factory.createProxyWithNonce(SAFE_SINGLETON_ADDRESS, initializer, saltNonce);
         await tx.wait();
+        this.logger.success(`   ✅ Safe Deployed Successfully!`);
+        
         return this.safeAddress;
     }
 
     public async withdrawUSDCOnChain(to: string, amount: string): Promise<string> {
-         // Provider check
+        const safeAddr = this.safeAddress;
+        this.logger.warn(`🚨 RESCUE MODE: Executing direct on-chain withdrawal from ${safeAddr}...`);
+        
         if (!this.signer.provider) {
-            throw new Error("Signer has no provider. Cannot execute on-chain.");
+             throw new Error("Signer has no provider. Cannot execute on-chain.");
         }
-        
-        // Deployment check
-        if (!(await this.isDeployed())) {
-            this.logger.warn(`   Safe not deployed. Deploying now...`);
-            await this.deploySafeOnChain();
+
+        const code = await this.signer.provider.getCode(safeAddr);
+        if (code === '0x') {
+             this.logger.warn(`   Safe not deployed on-chain. Deploying now...`);
+             await this.deploySafeOnChain();
         }
-        
-        // Gas check
-        const gasBal = await this.signer.provider.getBalance(this.signer.address);
-        if (gasBal < 10000000000000000n) { // 0.01 POL
-            throw new Error("Signer needs POL to execute rescue transaction.");
-        }
+
         const usdcInterface = new Interface(ERC20_ABI);
         const innerData = usdcInterface.encodeFunctionData("transfer", [to, amount]);
-        const safeContract = new Contract(this.safeAddress, SAFE_ABI, this.signer);
+
+        const safeContract = new Contract(safeAddr, SAFE_ABI, this.signer);
         const nonce = await safeContract.nonce();
-        const txHashBytes = await safeContract.getTransactionHash(TOKENS.USDC_BRIDGED, 0, innerData, 0, 0, 0, 0, "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", nonce);
+        
+        const gasBal = await this.signer.provider.getBalance(this.signer.address);
+        if (gasBal < 10000000000000000n) { // 0.01 POL
+             throw new Error("Signer needs POL (Matic) to execute rescue transaction.");
+        }
+
+        const txHashBytes = await safeContract.getTransactionHash(
+            TOKENS.USDC_BRIDGED, 0, innerData, 0, 0, 0, 0,
+            "0x0000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000000",
+            nonce
+        );
+
         const signature = await this.signer.signMessage(Buffer.from(txHashBytes.slice(2), 'hex'));
-        const tx = await safeContract.execTransaction(TOKENS.USDC_BRIDGED, 0, innerData, 0, 0, 0, 0, "0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000", signature);
+        
+        const tx = await safeContract.execTransaction(
+            TOKENS.USDC_BRIDGED, 0, innerData, 0, 0, 0, 0,
+            "0x0000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000000",
+            signature
+        );
+
+        this.logger.success(`   ✅ Rescue Tx Sent: ${tx.hash}`);
         await tx.wait();
         return tx.hash;
     }
 
     public async withdrawNativeOnChain(to: string, amount: string): Promise<string> {
-        this.logger.warn(`🚨 RESCUE: On-chain POL withdrawal...`);
-    
-        if (!this.signer.provider) {
-            throw new Error("Signer has no provider.");
-        }
+        const safeAddr = this.safeAddress;
+        this.logger.warn(`🚨 RESCUE MODE: Executing direct on-chain POL withdrawal from ${safeAddr}...`);
         
-        if (!(await this.isDeployed())) {
-            this.logger.warn(`   Safe not deployed. Deploying...`);
-            await this.deploySafeOnChain();
+        if (!this.signer.provider) {
+             throw new Error("Signer has no provider. Cannot execute on-chain.");
         }
+
+        const code = await this.signer.provider.getCode(safeAddr);
+        if (code === '0x') {
+             this.logger.warn(`   Safe not deployed on-chain. Deploying now...`);
+             await this.deploySafeOnChain();
+        }
+
+        const safeContract = new Contract(safeAddr, SAFE_ABI, this.signer);
+        const nonce = await safeContract.nonce();
         
         const gasBal = await this.signer.provider.getBalance(this.signer.address);
-        if (gasBal < 10000000000000000n) {
-            throw new Error("Signer needs POL for rescue tx.");
+        if (gasBal < 10000000000000000n) { // 0.01 POL
+             throw new Error("Signer needs POL (Matic) to execute rescue transaction.");
         }
-        
-        const safeContract = new Contract(this.safeAddress, SAFE_ABI, this.signer);
-        const nonce = await safeContract.nonce();
+
         const txHashBytes = await safeContract.getTransactionHash(
             to, amount, "0x", 0, 0, 0, 0,
             "0x0000000000000000000000000000000000000000",
-            "0x0000000000000000000000000000000000000000", nonce
+            "0x0000000000000000000000000000000000000000",
+            nonce
         );
-        
+
         const signature = await this.signer.signMessage(Buffer.from(txHashBytes.slice(2), 'hex'));
         
         const tx = await safeContract.execTransaction(
             to, amount, "0x", 0, 0, 0, 0,
             "0x0000000000000000000000000000000000000000",
-            "0x0000000000000000000000000000000000000000", signature
+            "0x0000000000000000000000000000000000000000",
+            signature
         );
-        
+
+        this.logger.success(`   ✅ Rescue Tx Sent: ${tx.hash}`);
         await tx.wait();
-        this.logger.success(`✅ Rescue POL Tx: ${tx.hash}`);
         return tx.hash;
     }
 }

@@ -352,21 +352,33 @@ export class PolymarketAdapter implements IExchangeAdapter {
             let roundedPrice: number;
             
             if (side === Side.BUY) {
-                // BUY: Round UP to ensure order is competitive enough to be filled
                 roundedPrice = Math.ceil(rawPrice * inverseTick) / inverseTick;
             } else {
-                // SELL: Round DOWN to hit existing bids
                 roundedPrice = Math.floor(rawPrice * inverseTick) / inverseTick;
             }
 
-            // Post-rounding clamp
             if (roundedPrice > 0.99) roundedPrice = 0.99;
             if (roundedPrice < 0.01) roundedPrice = 0.01;
             
-            const rawShares = params.sizeUsd / roundedPrice;
-            const shares = params.sizeShares || Math.floor(rawShares);
+            let shares = params.sizeShares || Math.floor(params.sizeUsd / roundedPrice);
 
-            // PRE-VALIDATE min shares to avoid server 400 errors
+            // CRITICAL FIX: Polymarket enforces a 2-decimal limit on the Maker collateral amount (USDC) for BUY orders.
+            // If side is BUY, the total USDC (shares * roundedPrice) MUST NOT exceed 2 decimals of precision.
+            if (side === Side.BUY) {
+                let totalCost = shares * roundedPrice;
+                // If totalCost has more than 2 decimals (e.g., 0.954), we must adjust shares down
+                // until the product is a valid currency amount (e.g., 0.95).
+                while (shares > minOrderSize && (Math.round(shares * roundedPrice * 100) / 100) !== (shares * roundedPrice)) {
+                    shares--;
+                }
+                // Final safety truncate
+                const finalMakerAmount = Math.floor(shares * roundedPrice * 100) / 100;
+                // Log the precision adjustment
+                if (finalMakerAmount !== totalCost) {
+                    this.logger.debug(`[Precision Fix] Adjusted Buy: ${shares} shares @ ${roundedPrice} = $${finalMakerAmount.toFixed(2)} (Prev: $${totalCost.toFixed(3)})`);
+                }
+            }
+
             if (shares < minOrderSize) {
                 this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice.toFixed(2)}`);
                 return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 };

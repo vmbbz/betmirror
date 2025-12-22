@@ -1,4 +1,3 @@
-
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -226,14 +225,32 @@ export class BotEngine {
             const success = await this.executor.executeManualExit(position, currentPrice);
             
             if (success) {
+                const exitValue = position.shares * currentPrice;
+                const realizedPnl = exitValue - (position.shares * position.entryPrice);
+
+                if (this.callbacks?.onTradeComplete) {
+                    await this.callbacks.onTradeComplete({
+                        id: crypto.randomUUID(),
+                        timestamp: new Date().toISOString(),
+                        marketId: position.marketId,
+                        outcome: position.outcome,
+                        side: 'SELL',
+                        size: position.shares * position.entryPrice, 
+                        executedSize: exitValue, 
+                        price: currentPrice,
+                        pnl: realizedPnl,
+                        status: 'CLOSED',
+                        aiReasoning: 'Manual Exit',
+                        riskScore: 0,
+                        clobOrderId: position.clobOrderId
+                    });
+                }
+
                 if (position.tradeId && !position.tradeId.startsWith('imported')) {
                     try {
-                        const exitValue = position.shares * currentPrice;
-                        const pnl = exitValue - (position.shares * position.entryPrice); 
-                        
                         await Trade.findByIdAndUpdate(position.tradeId, {
                             status: 'CLOSED',
-                            pnl: pnl
+                            pnl: realizedPnl
                         });
                     } catch(e) {
                         console.error("Failed to update trade record", e);
@@ -245,25 +262,8 @@ export class BotEngine {
                 if (this.callbacks?.onPositionsUpdate) {
                     await this.callbacks.onPositionsUpdate(this.activePositions);
                 }
-
-                if (this.callbacks?.onTradeComplete) {
-                    await this.callbacks.onTradeComplete({
-                        id: crypto.randomUUID(),
-                        timestamp: new Date().toISOString(),
-                        marketId: position.marketId,
-                        outcome: position.outcome,
-                        side: 'SELL',
-                        size: position.shares * position.entryPrice, 
-                        executedSize: position.shares * currentPrice, 
-                        price: currentPrice,
-                        status: 'FILLED',
-                        aiReasoning: 'Manual Exit',
-                        riskScore: 0,
-                        clobOrderId: position.clobOrderId
-                    });
-                }
                 
-                this.addLog('success', `✅ Position Closed.`);
+                this.addLog('success', `✅ Position Closed (PnL: $${realizedPnl.toFixed(2)}).`);
                 setTimeout(() => this.syncStats(), 2000);
                 
                 return "sold";
@@ -542,9 +542,31 @@ export class BotEngine {
                             const idx = this.activePositions.findIndex(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
                             if (idx !== -1) {
                                 const closingPos = this.activePositions[idx];
+                                const exitValue = result.executedAmount;
+                                const pnl = exitValue - (closingPos.shares * closingPos.entryPrice);
+
                                 if (closingPos.tradeId) {
-                                    await Trade.findByIdAndUpdate(closingPos.tradeId, { status: 'CLOSED' });
+                                    await Trade.findByIdAndUpdate(closingPos.tradeId, { status: 'CLOSED', pnl: pnl });
                                 }
+
+                                if (this.callbacks?.onTradeComplete) {
+                                    await this.callbacks.onTradeComplete({
+                                        id: crypto.randomUUID(),
+                                        timestamp: new Date().toISOString(),
+                                        marketId: signal.marketId,
+                                        outcome: signal.outcome,
+                                        side: 'SELL',
+                                        size: closingPos.shares * closingPos.entryPrice,
+                                        executedSize: exitValue,
+                                        price: result.priceFilled || signal.price,
+                                        pnl: pnl,
+                                        status: 'CLOSED',
+                                        aiReasoning: aiResult.reasoning,
+                                        riskScore: aiResult.riskScore,
+                                        clobOrderId: closingPos.clobOrderId
+                                    });
+                                }
+
                                 this.activePositions.splice(idx, 1);
                             }
                         }

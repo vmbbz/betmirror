@@ -824,7 +824,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                         </div>
                         <div className="flex items-center gap-5 mb-6">
                             <div className="w-14 h-14 rounded-full bg-gray-200 dark:bg-gray-800 flex items-center justify-center font-bold text-gray-500 text-2xl">pb</div>
-                            <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">New Markets..</h3>
+                            <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Limitless</h3>
                         </div>
                         <p className="text-base text-gray-500 dark:text-gray-400 font-medium leading-relaxed">
                             Next-generation sports & crypto markets with high-frequency liquidity.

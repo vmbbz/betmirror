@@ -59,7 +59,7 @@ export class TradeMonitorService {
     
     await this.poll();
 
-    this.pollInterval = setInterval(() => this.poll(), 2000) as unknown as NodeJS.Timeout; 
+    this.pollInterval = setInterval(() => this.poll(), 10000) as unknown as NodeJS.Timeout; // 10 seconds 
   }
 
   stop(): void {

@@ -75,7 +75,7 @@ async function startUserBot(userId: string, config: BotConfig) {
                 const user = await User.findOne({ address: normId });
                 if (user) {
                     const stats = user.stats || { totalVolume: 0, tradesCount: 0, totalPnl: 0 };
-                    stats.totalVolume = (stats.totalVolume || 0) + (trade.executedSize || trade.size || 0);
+                    stats.totalVolume = (stats.totalVolume || 0) + (trade.executedSize || 0);
                     stats.tradesCount = (stats.tradesCount || 0) + 1;
                     if (trade.pnl !== undefined) {
                         stats.totalPnl = (stats.totalPnl || 0) + trade.pnl;
@@ -540,8 +540,8 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         // CLARIFICATION: This logs the payload for the current USER VIEWING THE DASHBOARD (normId),
         // but the positions themselves are fetched for the SAFE associated with that user.
         if (livePositions.length > 0) {
-            console.log(`\n📦 [DEBUG] Raw Positions Payload for User ${normId.slice(0, 6)}... (Safe: ${user?.tradingWallet?.safeAddress?.slice(0,6) || 'Unknown'}) :`);
-            console.dir(livePositions, { depth: null, colors: true });
+            //console.log(`\n📦 [DEBUG] Raw Positions Payload for User ${normId.slice(0, 6)}... (Safe: ${user?.tradingWallet?.safeAddress?.slice(0,6) || 'Unknown'}) :`);
+            //console.dir(livePositions, { depth: null, colors: true });
         }
         // -------------------------------
 

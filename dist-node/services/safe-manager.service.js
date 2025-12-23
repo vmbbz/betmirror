@@ -252,25 +252,6 @@ export class SafeManagerService {
             throw e;
         }
     }
-    /**
-     * Withdraw native token (POL) using the relayer client as per documentation.
-     */
-    async withdrawNative(to, amountInWei) {
-        const tx = {
-            to: to,
-            value: amountInWei, // Amount in wei string
-            data: "0x", // Must be "0x" for native transfers
-            operation: OperationType.Call
-        };
-        try {
-            const task = await this.relayClient.execute([tx]);
-            const result = await task.wait();
-            return result.transactionHash || "0x...";
-        }
-        catch (e) {
-            throw e;
-        }
-    }
     async addOwner(newOwnerAddress) {
         this.logger.info(`🛡️ Adding Recovery Owner: ${newOwnerAddress} to Safe ${this.safeAddress}`);
         const isOwner = await this.viemPublicClient.readContract({

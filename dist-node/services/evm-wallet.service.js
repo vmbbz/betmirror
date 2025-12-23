@@ -58,7 +58,7 @@ export class EvmWalletService {
         return new WalletV5(privateKey, provider);
     }
     /**
-     *  It's for EOA rescue only via server withdraw(). Withdraws funds from the Trading Wallet to the Owner Address.
+     * Withdraws funds from the Trading Wallet to the Owner Address.
      * Supports both Native (POL) and ERC20 (USDC).
      */
     async withdrawFunds(encryptedPrivateKey, toAddress, tokenAddress, amount // If undefined, withdraws max

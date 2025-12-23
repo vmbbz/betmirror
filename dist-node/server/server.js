@@ -712,13 +712,38 @@ app.post('/api/wallet/withdraw', async (req, res) => {
         console.error('Error details:', JSON.stringify(e, null, 2));
         console.error('Request body:', { userId, tokenType, toAddress, forceEoa, targetSafeAddress });
         console.error('=== END DEBUG ===');
+        // User-friendly error messages
+        let userMessage = 'Withdrawal failed. Please try again.';
+        if (e?.code === 'INSUFFICIENT_FUNDS') {
+            userMessage = 'Insufficient funds for withdrawal. Please ensure you have enough POL for gas fees.';
+        }
+        else if (e?.message?.includes('insufficient funds')) {
+            userMessage = 'Insufficient funds for withdrawal. Please ensure you have enough POL for gas fees.';
+        }
+        else if (e?.message?.includes('RelayerError')) {
+            userMessage = 'Withdrawal service temporarily unavailable. Please try again in a few minutes.';
+        }
+        else if (e?.message?.includes('invalid signature')) {
+            userMessage = 'Withdrawal signature validation failed. Please try again.';
+        }
+        else if (e?.message?.includes('nonce too low')) {
+            userMessage = 'Transaction conflict detected. Please try again.';
+        }
+        else if (e?.message?.includes('gas')) {
+            userMessage = 'Gas estimation failed. Please try again.';
+        }
+        else if (e?.message) {
+            userMessage = e?.message;
+        }
         res.status(500).json({
-            error: e?.message || 'Unknown withdrawal error',
+            error: userMessage,
             type: e?.name || 'Unknown',
             details: e?.stack || 'No stack trace available',
             debug: {
-                errorType: typeof e,
-                requestBody: { userId, tokenType, toAddress, forceEoa, targetSafeAddress }
+                originalError: e?.message || 'Unknown error',
+                code: e?.code || null,
+                tokenType,
+                requestTime: new Date().toISOString()
             }
         });
     }

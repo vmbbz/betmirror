@@ -1327,7 +1327,7 @@ useEffect(() => {
         } catch (e) {
             setPollError(true); 
         }
-    }, 2000);
+    }, 15000);
     
     // Poll Balances (Every 10s)
     const balanceInterval = setInterval(fetchBalances, 10000);
@@ -2310,7 +2310,7 @@ return (
                                                             </div>
                                                             <div className="flex-1 min-w-0">
                                                                 <a 
-                                                                    href={pos.marketSlug ? `https://polymarket.com/market/${pos.marketSlug}` : `https://polymarket.com/market/${pos.marketId}`}
+                                                                    href={pos.eventSlug && pos.marketSlug ? `https://polymarket.com/event/${pos.eventSlug}/${pos.marketSlug}` : `https://polymarket.com/market/${pos.marketId}`}
                                                                     target="_blank"
                                                                     rel="noreferrer"
                                                                     className="font-bold text-gray-900 dark:text-white line-clamp-2 leading-tight hover:text-blue-500 hover:underline transition-colors"

@@ -1,3 +1,4 @@
+
 import mongoose, { Schema, Document } from 'mongoose';
 import { TraderProfile } from '../domain/alpha.types.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
@@ -5,8 +6,6 @@ import { ActivePosition } from '../domain/trade.types.js';
 import { UserStats } from '../domain/user.types.js';
 import { BotConfig } from '../server/bot-engine.js';
 import { BridgeTransactionRecord } from '../services/lifi-bridge.service.js';
-
-// --- Interfaces ---
 
 export interface IUser extends Document {
   address: string;
@@ -21,7 +20,7 @@ export interface IUser extends Document {
 }
 
 export interface ITrade extends Document {
-  _id: any; // Manually managed string ID (UUID)
+  _id: any; 
   userId: string;
   marketId: string;
   clobOrderId?: string; 
@@ -37,6 +36,8 @@ export interface ITrade extends Document {
   aiReasoning?: string;
   riskScore?: number;
   timestamp: Date;
+  marketSlug?: string;
+  eventSlug?: string;
 }
 
 export interface IRegistry extends Document, TraderProfile {
@@ -79,10 +80,8 @@ export interface IBotLog extends Document {
   timestamp: Date;
 }
 
-// --- Schemas ---
-
-const ActivePositionSchema = new Schema({
-  tradeId: String, 
+const ActivePositionSchema = new Schema<ActivePosition>({
+  tradeId: String,
   clobOrderId: String,
   marketId: String,
   tokenId: String,
@@ -94,7 +93,26 @@ const ActivePositionSchema = new Schema({
   currentPrice: Number,
   question: String,
   image: String,
-  marketSlug: String 
+  marketSlug: { 
+    type: String, 
+    default: "",
+    validate: {
+        validator: function(v: string) {
+            return !v || /^[a-z0-9-]+$/.test(v);
+        },
+        message: 'marketSlug must be lowercase with hyphens only'
+    }
+},
+  eventSlug: { 
+    type: String, 
+    default: "",
+    validate: {
+        validator: function(v: string) {
+            return !v || /^[a-z0-9-]+$/.test(v);
+        },
+        message: 'eventSlug must be lowercase with hyphens only'
+    }
+}
 }, { _id: false });
 
 const TradingWalletSchema = new Schema({
@@ -150,7 +168,27 @@ const TradeSchema = new Schema<ITrade>({
   txHash: String,
   aiReasoning: String,
   riskScore: Number,
-  timestamp: { type: Date, default: Date.now }
+  timestamp: { type: Date, default: Date.now },
+  marketSlug: { 
+    type: String, 
+    default: "",
+    validate: {
+        validator: function(v: string) {
+            return !v || /^[a-z0-9-]+$/.test(v);
+        },
+        message: 'marketSlug must be lowercase with hyphens only'
+    }
+},
+  eventSlug: { 
+    type: String, 
+    default: "",
+    validate: {
+        validator: function(v: string) {
+            return !v || /^[a-z0-9-]+$/.test(v);
+        },
+        message: 'eventSlug must be lowercase with hyphens only'
+    }
+}
 });
 
 const RegistrySchema = new Schema<IRegistry>({

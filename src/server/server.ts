@@ -50,6 +50,7 @@ app.use(express.json({ limit: '10mb' }) as any);
 const distPath = path.join(__dirname, '../../dist');
 app.use(express.static(distPath) as any);
 
+
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId: string, config: BotConfig) {
     const normId = userId.toLowerCase();
@@ -70,29 +71,44 @@ async function startUserBot(userId: string, config: BotConfig) {
             await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
         },
         onTradeComplete: async (trade) => {
-            // NOTE: Trade creation is now handled inside BotEngine for BUYs.
-            // This callback is mainly for logs or extra handling.
-            // Only create if ID doesn't exist (avoid dups)
-            const exists = await Trade.findById(trade.id);
-            if (!exists) {
-                await Trade.create({
-                    _id: trade.id, // Use passed ID
-                    userId: normId,
-                    marketId: trade.marketId,
-                    outcome: trade.outcome,
-                    side: trade.side,
-                    size: trade.size,
-                    executedSize: (trade as any).executedSize || 0,
-                    price: trade.price,
-                    pnl: trade.pnl,
-                    status: trade.status,
-                    txHash: trade.txHash,
-                    clobOrderId: trade.clobOrderId, 
-                    assetId: trade.assetId,         
-                    aiReasoning: trade.aiReasoning,
-                    riskScore: trade.riskScore,
-                    timestamp: trade.timestamp
-                });
+            // Restore missing user stats update logic
+            try {
+                const user = await User.findOne({ address: normId });
+                if (user) {
+                    const stats = user.stats || { totalVolume: 0, tradesCount: 0, totalPnl: 0 };
+                    stats.totalVolume = (stats.totalVolume || 0) + (trade.executedSize || trade.size || 0);
+                    stats.tradesCount = (stats.tradesCount || 0) + 1;
+                    if (trade.pnl !== undefined) {
+                        stats.totalPnl = (stats.totalPnl || 0) + trade.pnl;
+                    }
+                    await User.updateOne({ address: normId }, { stats });
+                }
+
+                const exists = await Trade.findById(trade.id);
+                if (!exists) {
+                    await Trade.create({
+                        _id: trade.id,
+                        userId: normId,
+                        marketId: trade.marketId,
+                        outcome: trade.outcome,
+                        side: trade.side,
+                        size: trade.size,
+                        executedSize: trade.executedSize || 0,
+                        price: trade.price,
+                        pnl: trade.pnl,
+                        status: trade.status,
+                        txHash: trade.txHash,
+                        clobOrderId: trade.clobOrderId, 
+                        assetId: trade.assetId,         
+                        aiReasoning: trade.aiReasoning,
+                        riskScore: trade.riskScore,
+                        timestamp: trade.timestamp,
+                        marketSlug: trade.marketSlug,
+                        eventSlug: trade.eventSlug
+                    });
+                }
+            } catch (err: any) {
+                serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
             }
         },
         onStatsUpdate: async (stats) => {
@@ -109,7 +125,6 @@ async function startUserBot(userId: string, config: BotConfig) {
     });
 
     ACTIVE_BOTS.set(normId, engine);
-    // Non-blocking start
     engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
 }
 
@@ -534,33 +549,6 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
     } catch (e) {
         console.error("Status Error:", e);
         res.status(500).json({ error: 'DB Error' });
-    }
-});
-
-
-app.post('/api/trade/sync', async (req: any, res: any) => {
-    const { userId, force } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Bot not running" });
-    try {
-        await engine.syncPositions(force);
-        res.json({ success: true });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/trade/exit', async (req: any, res: any) => {
-    const { userId, marketId, outcome } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Bot not running" });
-    try {
-        const result = await engine.emergencySell(marketId, outcome);
-        res.json({ success: true, result });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
     }
 });
 

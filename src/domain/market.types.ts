@@ -33,5 +33,8 @@ export interface PositionData {
     question?: string;
     image?: string;
     endDate?: string;
-    marketSlug?: string; // ADDED
+    marketSlug?: string;
+    eventSlug?: string;
+    // FIX: Added clobOrderId to satisfy bot-engine requirements and internal tracking
+    clobOrderId?: string;
 }

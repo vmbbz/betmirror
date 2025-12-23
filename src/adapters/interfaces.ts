@@ -10,7 +10,7 @@ export interface OrderParams {
     side: OrderSide;
     sizeUsd: number;
     priceLimit?: number;
-    // New: Allow specifying raw share count for sells to ensure 100% closure
+    // New: Allow specifying raw share count for sells
     sizeShares?: number; 
 }
 
@@ -39,17 +39,12 @@ export interface IExchangeAdapter {
     
     // Market Data
     fetchBalance(address: string): Promise<number>;
-    getPortfolioValue(address: string): Promise<number>;
-    /**
-     * Fetches market price.
-     * @param side Optional. Use 'BUY' for Ask (execution cost) or 'SELL' for Bid (liquidation value).
-     */
-    getMarketPrice(marketId: string, tokenId: string, side?: OrderSide): Promise<number>;
+    getPortfolioValue(address: string): Promise<number>; 
+    getMarketPrice(marketId: string, tokenId: string): Promise<number>;
     getOrderBook(tokenId: string): Promise<OrderBook>;
-    getPositions(address: string): Promise<PositionData[]>; // Sync positions
+    getPositions(address: string): Promise<PositionData[]>; 
     
     // Monitoring
-    // Returns normalized TradeSignals for the monitoring loop
     fetchPublicTrades(address: string, limit?: number): Promise<TradeSignal[]>;
     
     // History Sync

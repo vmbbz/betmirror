@@ -1,4 +1,3 @@
-
 export type TradeSignal = {
   trader: string;
   marketId: string;
@@ -20,6 +19,7 @@ export type TradeEvent = {
   timestamp: number;
 };
 
+// Added marketSlug and eventSlug to TradeHistoryEntry for UI deep links
 export type TradeHistoryEntry = {
   id: string;
   timestamp: string;
@@ -38,6 +38,8 @@ export type TradeHistoryEntry = {
   // CLOB Tracking
   clobOrderId?: string;
   assetId?: string;
+  marketSlug?: string;
+  eventSlug?: string;
 };
 
 // Tracks open positions to calculate REAL PnL on sell
@@ -50,14 +52,15 @@ export interface ActivePosition {
   entryPrice: number;
   shares: number; // Exact number of shares held (Critical for selling)
   sizeUsd: number; // Initial invested amount
-  investedValue?: number; // NEW: Current shares * entryPrice
+  investedValue?: number;
   timestamp: number;
   // Rich Data (Synced from Chain)
   currentPrice?: number;
-  unrealizedPnL?: number; // NEW
-  unrealizedPnLPercent?: number; // NEW
+  unrealizedPnL?: number;
+  unrealizedPnLPercent?: number;
   question?: string;
   image?: string;
   endDate?: string;
-  marketSlug?: string; // ADDED
+  marketSlug?: string;
+  eventSlug?: string;
 }

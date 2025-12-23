@@ -1,5 +1,4 @@
 import mongoose, { Schema } from 'mongoose';
-// --- Schemas ---
 const ActivePositionSchema = new Schema({
     tradeId: String,
     clobOrderId: String,
@@ -13,7 +12,26 @@ const ActivePositionSchema = new Schema({
     currentPrice: Number,
     question: String,
     image: String,
-    marketSlug: String
+    marketSlug: {
+        type: String,
+        default: "",
+        validate: {
+            validator: function (v) {
+                return !v || /^[a-z0-9-]+$/.test(v);
+            },
+            message: 'marketSlug must be lowercase with hyphens only'
+        }
+    },
+    eventSlug: {
+        type: String,
+        default: "",
+        validate: {
+            validator: function (v) {
+                return !v || /^[a-z0-9-]+$/.test(v);
+            },
+            message: 'eventSlug must be lowercase with hyphens only'
+        }
+    }
 }, { _id: false });
 const TradingWalletSchema = new Schema({
     address: String,
@@ -66,7 +84,27 @@ const TradeSchema = new Schema({
     txHash: String,
     aiReasoning: String,
     riskScore: Number,
-    timestamp: { type: Date, default: Date.now }
+    timestamp: { type: Date, default: Date.now },
+    marketSlug: {
+        type: String,
+        default: "",
+        validate: {
+            validator: function (v) {
+                return !v || /^[a-z0-9-]+$/.test(v);
+            },
+            message: 'marketSlug must be lowercase with hyphens only'
+        }
+    },
+    eventSlug: {
+        type: String,
+        default: "",
+        validate: {
+            validator: function (v) {
+                return !v || /^[a-z0-9-]+$/.test(v);
+            },
+            message: 'eventSlug must be lowercase with hyphens only'
+        }
+    }
 });
 const RegistrySchema = new Schema({
     address: { type: String, required: true, unique: true },

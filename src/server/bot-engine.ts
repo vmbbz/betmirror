@@ -66,9 +66,8 @@ export class BotEngine {
         cashBalance: 0
     };
 
-    // SYNC THROTTLING
     private lastPositionSync = 0;
-    private readonly POSITION_SYNC_INTERVAL = 30000; // 30 seconds
+    private readonly POSITION_SYNC_INTERVAL = 30000;
 
     constructor(
         private config: BotConfig,
@@ -101,6 +100,10 @@ export class BotEngine {
             if (this.runtimeEnv) this.runtimeEnv.maxTradeAmount = newConfig.maxTradeAmount;
         }
 
+        if (newConfig.geminiApiKey !== undefined) {
+            this.config.geminiApiKey = newConfig.geminiApiKey;
+        }
+
         if (newConfig.riskProfile !== undefined) this.config.riskProfile = newConfig.riskProfile;
         if (newConfig.autoTp !== undefined) this.config.autoTp = newConfig.autoTp;
         
@@ -113,39 +116,68 @@ export class BotEngine {
         if (!this.exchange) return;
         
         const now = Date.now();
-        // Skip if too soon and not a manual/forced action
         if (!forceChainSync && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
             return;
         }
-        this.lastPositionSync = now;
+        
+        if (forceChainSync || (now - this.lastPositionSync >= this.POSITION_SYNC_INTERVAL)) {
+            this.lastPositionSync = now;
+        }
 
         try {
             if (forceChainSync) {
-                this.addLog('info', '🔄 Syncing positions from chain...');
                 const address = this.exchange.getFunderAddress();
                 if(address) {
+                    // This call now handles getMarket enrichment internally using the CLOB SDK
                     const chainPositions = await this.exchange.getPositions(address);
                     
-                    this.activePositions = chainPositions.map(p => {
-                         return {
-                             tradeId: 'imported_' + Date.now() + Math.random().toString(36).substring(7),
-                             clobOrderId: p.marketId,
-                             marketId: p.marketId,
-                             tokenId: p.tokenId,
-                             outcome: (p.outcome || 'YES').toUpperCase() as 'YES' | 'NO',
-                             entryPrice: p.entryPrice || 0.5,
-                             shares: p.balance || 0,
-                             sizeUsd: p.valueUsd,
-                             investedValue: p.investedValue,
-                             timestamp: Date.now(),
-                             currentPrice: p.currentPrice,
-                             unrealizedPnL: p.unrealizedPnL,
-                             unrealizedPnLPercent: p.unrealizedPnLPercent,
-                             question: p.question || p.marketId,
-                             image: p.image || '',
-                             marketSlug: p.marketSlug || ''
-                         };
-                    });
+                    const enrichedPositions: ActivePosition[] = [];
+
+                    for (const p of chainPositions) {
+                        const marketSlug = p.marketSlug || "";
+                        const eventSlug = p.eventSlug || "";
+                        const question = p.question || p.marketId;
+                        const image = p.image || "";
+
+                        const realId = p.clobOrderId || p.marketId;
+
+                        // ROBUST SYNC: Always update if we have any new slug data
+                        const shouldUpdate = marketSlug || eventSlug;
+                        if (shouldUpdate) {
+                            const updateData: any = {};
+                            if (marketSlug) updateData.marketSlug = marketSlug;
+                            if (eventSlug) updateData.eventSlug = eventSlug;
+                            
+                            await Trade.updateMany(
+                                { userId: this.config.userId, marketId: p.marketId },
+                                { $set: updateData }
+                            );
+                            
+                            console.log(`[SYNC] Updated trade slugs for ${p.marketId}: market="${marketSlug}", event="${eventSlug}"`);
+                        }
+
+                        enrichedPositions.push({
+                            tradeId: realId, 
+                            clobOrderId: realId,
+                            marketId: p.marketId,
+                            tokenId: p.tokenId,
+                            outcome: (p.outcome || 'YES').toUpperCase() as 'YES' | 'NO',
+                            entryPrice: p.entryPrice || 0.5,
+                            shares: p.balance || 0,
+                            sizeUsd: p.valueUsd,
+                            investedValue: p.investedValue,
+                            timestamp: Date.now(),
+                            currentPrice: p.currentPrice,
+                            unrealizedPnL: p.unrealizedPnL,
+                            unrealizedPnLPercent: p.unrealizedPnLPercent,
+                            question: question,
+                            image: image,
+                            marketSlug: marketSlug,
+                            eventSlug: eventSlug
+                        });
+                    }
+
+                    this.activePositions = enrichedPositions;
                 }
             } else {
                 for (const pos of this.activePositions) {
@@ -214,7 +246,7 @@ export class BotEngine {
         }
 
         const position = this.activePositions[positionIndex];
-        this.addLog('warn', `📉 Selling Position: ${position.shares} shares of ${position.outcome} (${position.question || position.marketId})...`);
+        this.addLog('warn', `Selling Position: ${position.shares} shares of ${position.outcome} (${position.question || position.marketId})...`);
 
         try {
             let currentPrice = 0.5;
@@ -242,7 +274,9 @@ export class BotEngine {
                         status: 'CLOSED',
                         aiReasoning: 'Manual Exit',
                         riskScore: 0,
-                        clobOrderId: position.clobOrderId
+                        clobOrderId: position.clobOrderId,
+                        marketSlug: position.marketSlug,
+                        eventSlug: position.eventSlug
                     });
                 }
 
@@ -263,7 +297,7 @@ export class BotEngine {
                     await this.callbacks.onPositionsUpdate(this.activePositions);
                 }
                 
-                this.addLog('success', `✅ Position Closed (PnL: $${realizedPnl.toFixed(2)}).`);
+                this.addLog('success', `Position Closed (PnL: ${realizedPnl.toFixed(2)}).`);
                 setTimeout(() => this.syncStats(), 2000);
                 
                 return "sold";
@@ -281,14 +315,14 @@ export class BotEngine {
         this.isRunning = true;
 
         try {
-            await this.addLog('info', '🚀 Starting Engine...');
+            await this.addLog('info', 'Starting Engine...');
 
             const engineLogger: Logger = {
                 info: (m: string) => { console.log(m); this.addLog('info', m); },
                 warn: (m: string) => { console.warn(m); this.addLog('warn', m); },
                 error: (m: string, e?: any) => { console.error(m, e); this.addLog('error', m); },
                 debug: () => {},
-                success: (m: string) => { console.log(`✅ ${m}`); this.addLog('success', m); }
+                success: (m: string) => { console.log(`${m}`); this.addLog('success', m); }
             };
 
             this.exchange = new PolymarketAdapter({
@@ -307,7 +341,7 @@ export class BotEngine {
             const isFunded = await this.checkFunding();
             
             if (!isFunded) {
-                await this.addLog('warn', '💰 Safe Empty. Engine standby. Waiting for deposit to Safe (Min $1.00)...');
+                await this.addLog('warn', 'Safe Empty. Engine standby. Waiting for deposit to Safe (Min 1.00)...');
                 this.startFundWatcher();
                 return; 
             }
@@ -330,7 +364,7 @@ export class BotEngine {
             clearInterval(this.fundWatcher);
             this.fundWatcher = undefined;
         }
-        this.addLog('warn', '🛑 Engine Stopped.').catch(console.error);
+        this.addLog('warn', 'Engine Stopped.').catch(console.error);
     }
 
     private async checkFunding(): Promise<boolean> {
@@ -358,7 +392,7 @@ export class BotEngine {
             if (funded) {
                 clearInterval(this.fundWatcher);
                 this.fundWatcher = undefined;
-                await this.addLog('success', '💰 Funds detected. Initializing...');
+                await this.addLog('success', 'Funds detected. Initializing...');
                 const engineLogger: Logger = {
                     info: (m: string) => { console.log(m); this.addLog('info', m); },
                     warn: (m: string) => { console.warn(m); this.addLog('warn', m); },
@@ -461,12 +495,11 @@ export class BotEngine {
                     signal.outcome,
                     signal.sizeUsd,
                     signal.price,
-                    this.config.riskProfile,
-                    this.config.geminiApiKey
+                    this.config.riskProfile
                 );
 
                 if (!aiResult.shouldCopy) {
-                    await this.addLog('info', `✋ AI Skipped: ${aiResult.reasoning} (Score: ${aiResult.riskScore})`);
+                    await this.addLog('info', `AI Skipped: ${aiResult.reasoning} (Score: ${aiResult.riskScore})`);
                     
                     if (this.callbacks?.onTradeComplete) {
                         await this.callbacks.onTradeComplete({
@@ -486,17 +519,68 @@ export class BotEngine {
                     return;
                 }
 
-                await this.addLog('info', `🤖 AI Approved: ${aiResult.reasoning} (Score: ${aiResult.riskScore}). Executing...`);
+                await this.addLog('info', `AI Approved: ${aiResult.reasoning} (Score: ${aiResult.riskScore}). Executing...`);
 
                 if (this.executor) {
                     const result: ExecutionResult = await this.executor.copyTrade(signal);
                     
                     if (result.status === 'FILLED') {
-                        await this.addLog('success', `✅ Trade Executed! Order: ${result.txHash || result.reason} ($${result.executedAmount.toFixed(2)})`);
+                        await this.addLog('success', `Trade Executed! Order: ${result.txHash || result.reason} (${result.executedAmount.toFixed(2)})`);
                         
                         if (signal.side === 'BUY') {
                             const tradeId = crypto.randomUUID();
-                            // 1. Create Trade Record in DB
+                            
+                            // Get Official Slugs via CLOB + Gamma APIs with robust error handling
+                            const marketData = await this.exchange?.getRawClient()?.getMarket(signal.marketId);
+                            
+                            let marketSlug = "";
+                            let question = "Syncing...";
+                            let image = "";
+                            
+                            // CLOB API data
+                            if (marketData) {
+                                marketSlug = marketData.market_slug || "";
+                                question = marketData.question || question;
+                                image = marketData.image || "";
+                            } else {
+                                console.log(`[WARN] CLOB API returned no data for ${signal.marketId}`);
+                            }
+                            
+                            // Gamma API for event slug
+                            let eventSlug = "";
+                            try {
+                                const gammaUrl = `https://gamma-api.polymarket.com/markets?condition_id=${signal.marketId}`;
+                                const controller = new AbortController();
+                                const timeoutId = setTimeout(() => controller.abort(), 5000);
+                                
+                                const gammaResponse = await fetch(gammaUrl, { 
+                                    signal: controller.signal,
+                                    headers: { 'Accept': 'application/json' }
+                                });
+                                clearTimeout(timeoutId);
+                                
+                                if (gammaResponse.ok) {
+                                    const gammaData = await gammaResponse.json();
+                                    // Gamma API should return filtered results when using condition_id parameter
+                                    if (gammaData && gammaData.length > 0 && gammaData[0].events && gammaData[0].events.length > 0) {
+                                        eventSlug = gammaData[0].events[0]?.slug || "";
+                                        console.log(`[DEBUG] Gamma API success for trade ${signal.marketId}: event="${eventSlug}"`);
+                                    } else {
+                                        console.log(`[WARN] Gamma API no event data for trade ${signal.marketId}`);
+                                    }
+                                } else {
+                                    console.log(`[WARN] Gamma API HTTP ${gammaResponse.status} for trade ${signal.marketId}`);
+                                }
+                            } catch (gammaError) {
+                                if (gammaError instanceof Error && gammaError.name === 'AbortError') {
+                                    console.log(`[WARN] Gamma API timeout for trade ${signal.marketId}`);
+                                } else {
+                                    console.log(`[WARN] Gamma API failed for trade ${signal.marketId}:`, gammaError instanceof Error ? gammaError.message : String(gammaError));
+                                }
+                            }
+                            
+                            console.log(`[DEBUG] Final slugs for trade ${signal.marketId}: market="${marketSlug}", event="${eventSlug}"`);
+
                             await Trade.create({
                                 _id: tradeId,
                                 userId: this.config.userId,
@@ -513,10 +597,11 @@ export class BotEngine {
                                 assetId: signal.tokenId,
                                 aiReasoning: aiResult.reasoning,
                                 riskScore: aiResult.riskScore,
-                                timestamp: new Date()
+                                timestamp: new Date(),
+                                marketSlug: marketSlug,
+                                eventSlug: eventSlug
                             });
 
-                            // 2. Add to Local Active Positions
                             const investedValue = result.executedAmount;
                             this.activePositions.push({
                                 tradeId: tradeId, 
@@ -532,11 +617,13 @@ export class BotEngine {
                                 currentPrice: result.priceFilled || signal.price,
                                 unrealizedPnL: 0,
                                 unrealizedPnLPercent: 0,
-                                question: "Syncing...",
-                                image: ""
+                                question: question,
+                                image: image,
+                                marketSlug: marketSlug,
+                                eventSlug: eventSlug
                             });
                             
-                            this.syncPositions(true);
+                            this.syncPositions(false);
 
                         } else if (signal.side === 'SELL') {
                             const idx = this.activePositions.findIndex(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
@@ -553,8 +640,8 @@ export class BotEngine {
                                     await this.callbacks.onTradeComplete({
                                         id: crypto.randomUUID(),
                                         timestamp: new Date().toISOString(),
-                                        marketId: signal.marketId,
-                                        outcome: signal.outcome,
+                                        marketId: closingPos.marketId,
+                                        outcome: closingPos.outcome,
                                         side: 'SELL',
                                         size: closingPos.shares * closingPos.entryPrice,
                                         executedSize: exitValue,
@@ -563,7 +650,9 @@ export class BotEngine {
                                         status: 'CLOSED',
                                         aiReasoning: aiResult.reasoning,
                                         riskScore: aiResult.riskScore,
-                                        clobOrderId: closingPos.clobOrderId
+                                        clobOrderId: closingPos.clobOrderId,
+                                        marketSlug: closingPos.marketSlug,
+                                        eventSlug: closingPos.eventSlug
                                     });
                                 }
 

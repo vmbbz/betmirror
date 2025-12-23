@@ -4,9 +4,10 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import 'dotenv/config';
 import mongoose from 'mongoose';
+import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog } from '../database/index.js';
-import { loadEnv } from '../config/env.js';
+import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
@@ -54,29 +55,44 @@ async function startUserBot(userId, config) {
             await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
         },
         onTradeComplete: async (trade) => {
-            // NOTE: Trade creation is now handled inside BotEngine for BUYs.
-            // This callback is mainly for logs or extra handling.
-            // Only create if ID doesn't exist (avoid dups)
-            const exists = await Trade.findById(trade.id);
-            if (!exists) {
-                await Trade.create({
-                    _id: trade.id, // Use passed ID
-                    userId: normId,
-                    marketId: trade.marketId,
-                    outcome: trade.outcome,
-                    side: trade.side,
-                    size: trade.size,
-                    executedSize: trade.executedSize || 0,
-                    price: trade.price,
-                    pnl: trade.pnl,
-                    status: trade.status,
-                    txHash: trade.txHash,
-                    clobOrderId: trade.clobOrderId,
-                    assetId: trade.assetId,
-                    aiReasoning: trade.aiReasoning,
-                    riskScore: trade.riskScore,
-                    timestamp: trade.timestamp
-                });
+            // Restore missing user stats update logic
+            try {
+                const user = await User.findOne({ address: normId });
+                if (user) {
+                    const stats = user.stats || { totalVolume: 0, tradesCount: 0, totalPnl: 0 };
+                    stats.totalVolume = (stats.totalVolume || 0) + (trade.executedSize || trade.size || 0);
+                    stats.tradesCount = (stats.tradesCount || 0) + 1;
+                    if (trade.pnl !== undefined) {
+                        stats.totalPnl = (stats.totalPnl || 0) + trade.pnl;
+                    }
+                    await User.updateOne({ address: normId }, { stats });
+                }
+                const exists = await Trade.findById(trade.id);
+                if (!exists) {
+                    await Trade.create({
+                        _id: trade.id,
+                        userId: normId,
+                        marketId: trade.marketId,
+                        outcome: trade.outcome,
+                        side: trade.side,
+                        size: trade.size,
+                        executedSize: trade.executedSize || 0,
+                        price: trade.price,
+                        pnl: trade.pnl,
+                        status: trade.status,
+                        txHash: trade.txHash,
+                        clobOrderId: trade.clobOrderId,
+                        assetId: trade.assetId,
+                        aiReasoning: trade.aiReasoning,
+                        riskScore: trade.riskScore,
+                        timestamp: trade.timestamp,
+                        marketSlug: trade.marketSlug,
+                        eventSlug: trade.eventSlug
+                    });
+                }
+            }
+            catch (err) {
+                serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
             }
         },
         onStatsUpdate: async (stats) => {
@@ -92,7 +108,6 @@ async function startUserBot(userId, config) {
         }
     });
     ACTIVE_BOTS.set(normId, engine);
-    // Non-blocking start
     engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
 }
 // 0. Health Check
@@ -486,34 +501,6 @@ app.get('/api/bot/status/:userId', async (req, res) => {
         res.status(500).json({ error: 'DB Error' });
     }
 });
-app.post('/api/trade/sync', async (req, res) => {
-    const { userId, force } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine)
-        return res.status(404).json({ error: "Bot not running" });
-    try {
-        await engine.syncPositions(force);
-        res.json({ success: true });
-    }
-    catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-app.post('/api/trade/exit', async (req, res) => {
-    const { userId, marketId, outcome } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine)
-        return res.status(404).json({ error: "Bot not running" });
-    try {
-        const result = await engine.emergencySell(marketId, outcome);
-        res.json({ success: true, result });
-    }
-    catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
 // 8. Registry Routes
 app.get('/api/registry', async (req, res) => {
     try {
@@ -615,67 +602,87 @@ app.post('/api/deposit/record', async (req, res) => {
         res.json({ success: true, exists: true });
     }
 });
-app.post('/api/wallet/status', async (req, res) => {
-    const { userId } = req.body;
-    if (!userId)
-        return res.status(400).json({ error: 'User Address required' });
+app.post('/api/wallet/withdraw', async (req, res) => {
+    const { userId, tokenType, toAddress, forceEoa, targetSafeAddress } = req.body;
     const normId = userId.toLowerCase();
     try {
-        const user = await User.findOne({ address: normId }).lean();
-        if (!user || !user.tradingWallet)
-            return res.json({ status: 'NEEDS_ACTIVATION' });
-        let stats = user.stats;
-        let positions = user.activePositions || [];
-        let isStale = false;
-        const engine = ACTIVE_BOTS.get(normId);
-        const adapter = engine?.exchange;
-        if (adapter) {
-            try {
-                const livePositions = await adapter.getPositions(adapter.getFunderAddress());
-                const cashBalance = await adapter.fetchBalance(adapter.getFunderAddress());
-                let unrealizedPnL = 0;
-                let positionValue = 0;
-                livePositions.forEach((p) => {
-                    unrealizedPnL += (p.unrealizedPnL || 0);
-                    positionValue += (p.valueUsd || 0);
-                });
-                const pnlAgg = await Trade.aggregate([
-                    { $match: { userId: normId, status: 'CLOSED' } },
-                    { $group: { _id: null, totalPnl: { $sum: "$pnl" } } }
-                ]);
-                const realizedPnl = pnlAgg[0]?.totalPnl || 0;
-                stats = {
-                    ...stats,
-                    cashBalance,
-                    portfolioValue: cashBalance + positionValue,
-                    totalPnl: realizedPnl + unrealizedPnL
-                };
-                positions = livePositions;
+        const user = await User.findOne({ address: normId });
+        if (!user || !user.tradingWallet || !user.tradingWallet.encryptedPrivateKey) {
+            res.status(400).json({ error: 'Wallet not configured' });
+            return;
+        }
+        const walletConfig = user.tradingWallet;
+        let txHash = '';
+        const provider = new JsonRpcProvider(ENV.rpcUrl);
+        const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
+        const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, USDC_ABI, provider);
+        let safeAddr = targetSafeAddress || walletConfig.safeAddress;
+        if (!safeAddr) {
+            safeAddr = await SafeManagerService.computeAddress(walletConfig.address);
+        }
+        if (!forceEoa) {
+            let balanceToWithdraw = 0n;
+            if (tokenType === 'POL') {
+                balanceToWithdraw = await provider.getBalance(safeAddr);
             }
-            catch (e) {
-                isStale = true;
+            else {
+                try {
+                    balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
+                }
+                catch (e) { }
+            }
+            let eoaBalance = 0n;
+            if (!targetSafeAddress) {
+                try {
+                    if (tokenType === 'POL') {
+                        eoaBalance = await provider.getBalance(walletConfig.address);
+                    }
+                    else {
+                        eoaBalance = await usdcContract.balanceOf(walletConfig.address);
+                    }
+                }
+                catch (e) { }
+            }
+            if (balanceToWithdraw > 0n) {
+                const signer = await evmWalletService.getWalletInstance(walletConfig.encryptedPrivateKey);
+                const safeManager = new SafeManagerService(signer, ENV.builderApiKey, ENV.builderApiSecret, ENV.builderApiPassphrase, serverLogger, safeAddr);
+                if (tokenType === 'POL') {
+                    txHash = await safeManager.withdrawNative(toAddress || normId, balanceToWithdraw.toString());
+                }
+                else {
+                    txHash = await safeManager.withdrawUSDC(toAddress || normId, balanceToWithdraw.toString());
+                }
+            }
+            else if (eoaBalance > 0n && !targetSafeAddress) {
+                let tokenAddr = TOKENS.USDC_BRIDGED;
+                if (tokenType === 'POL')
+                    tokenAddr = TOKENS.POL;
+                let amountStr = undefined;
+                if (tokenType === 'POL') {
+                    const reserve = ethers.parseEther("0.05");
+                    if (eoaBalance > reserve) {
+                        amountStr = ethers.formatEther(eoaBalance - reserve);
+                    }
+                    else {
+                        throw new Error("Insufficient POL in EOA to cover gas for rescue.");
+                    }
+                }
+                txHash = await evmWalletService.withdrawFunds(walletConfig.encryptedPrivateKey, toAddress || normId, tokenAddr, amountStr);
+            }
+            else {
+                return res.status(400).json({ error: `Insufficient ${tokenType || 'USDC'} funds.` });
             }
         }
         else {
-            isStale = true;
+            let tokenAddress = TOKENS.USDC_BRIDGED;
+            if (tokenType === 'POL')
+                tokenAddress = TOKENS.POL;
+            txHash = await evmWalletService.withdrawFunds(walletConfig.encryptedPrivateKey, toAddress || normId, tokenAddress);
         }
-        const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
-        const formattedLogs = dbLogs.map(l => ({ id: l._id.toString(), time: l.timestamp.toLocaleTimeString(), type: l.type, message: l.message }));
-        const tradeHistory = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
-        res.json({
-            status: 'ACTIVE',
-            isRunning: engine ? engine.isRunning : (user.isBotRunning || false),
-            address: user.tradingWallet.address,
-            safeAddress: user.tradingWallet.safeAddress,
-            stats,
-            positions,
-            logs: formattedLogs,
-            history: tradeHistory,
-            isStale
-        });
+        res.json({ success: true, txHash });
     }
     catch (e) {
-        res.status(500).json({ error: 'DB Error: ' + e.message });
+        res.status(500).json({ error: e.message });
     }
 });
 app.post('/api/wallet/add-recovery', async (req, res) => {

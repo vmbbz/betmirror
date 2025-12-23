@@ -1,4 +1,3 @@
-
 import { 
     IExchangeAdapter, 
     OrderParams,
@@ -52,6 +51,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private provider?: JsonRpcProvider;
     private safeAddress?: string;
 
+    // Internal cache for market metadata to prevent rate limiting getMarket(id) calls
+    private marketMetadataCache: Map<string, any> = new Map();
+
     constructor(
         private config: {
             rpcUrl: string;
@@ -84,7 +86,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
         let safeAddressToUse = this.config.walletConfig.safeAddress;
         
         if (!safeAddressToUse) {
-            this.logger.warn(`   ⚠️ Safe address missing in config. Computing...`);
+            this.logger.warn(`   Warning: Safe address missing in config. Computing...`);
             safeAddressToUse = await SafeManagerService.computeAddress(this.config.walletConfig.address);
         }
 
@@ -124,11 +126,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
         // 3. L2 Auth (API Keys)
         let apiCreds = this.config.l2ApiCredentials;
         if (!apiCreds || !apiCreds.key) {
-            this.logger.info('🤝 Deriving L2 API Keys...');
+            this.logger.info('Handshake: Deriving L2 API Keys...');
             await this.deriveAndSaveKeys();
             apiCreds = this.config.l2ApiCredentials; 
         } else {
-             this.logger.info('🔌 Using existing CLOB Credentials');
+             this.logger.info('Using existing CLOB Credentials');
         }
 
         // 4. Initialize Clob Client
@@ -152,8 +154,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
             Chain.POLYGON,
             this.walletV5 as any, 
             apiCreds,
-            SignatureType.POLY_GNOSIS_SAFE, // Funder is Safe
-            this.safeAddress, // Explicitly set funder (Maker)
+            SignatureType.POLY_GNOSIS_SAFE,
+            this.safeAddress,
             undefined, 
             undefined,
             builderConfig
@@ -186,7 +188,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 { "tradingWallet.l2ApiCredentials": apiCreds }
             );
             this.config.l2ApiCredentials = apiCreds;
-            this.logger.success('✅ API Keys Derived & Saved');
+            this.logger.success('API Keys Derived and Saved');
         } catch (e: any) {
             this.logger.error(`Handshake Failed: ${e.message}`);
             throw e;
@@ -240,7 +242,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 const size = parseFloat(p.size) || 0;
                 if (size <= 0) continue;
 
-                // FIX: Get real-time price from CLOB if Data API returns 0 or null
                 let currentPrice = parseFloat(p.price) || 0;
                 if (currentPrice === 0 && this.client && p.asset) {
                     try {
@@ -251,12 +252,63 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     }
                 }
 
-                // Proper accounting logic
                 const entryPrice = parseFloat(p.avgPrice) || currentPrice || 0.5;
                 const currentValueUsd = size * currentPrice;
                 const investedValueUsd = size * entryPrice;
                 const unrealizedPnL = currentValueUsd - investedValueUsd;
                 const unrealizedPnLPercent = investedValueUsd > 0 ? (unrealizedPnL / investedValueUsd) * 100 : 0;
+
+                let marketSlug = "";
+                let eventSlug = "";
+                let question = p.title || p.conditionId || p.market;
+                let image = p.icon || "";
+
+                if (p.conditionId) {
+                    // Step 1: Get market_slug from CLOB API
+                    if (this.client) {
+                        try {
+                            let marketData = this.marketMetadataCache.get(p.conditionId);
+                            if (!marketData) {
+                                marketData = await this.client.getMarket(p.conditionId);
+                                this.marketMetadataCache.set(p.conditionId, marketData || {});
+                            }
+                            if (marketData) {
+                                marketSlug = marketData.market_slug || "";
+                                question = marketData.question || question;
+                                image = marketData.image || image;
+                            }
+                        } catch (clobError) {
+                            console.log(`[WARN] CLOB API failed for ${p.conditionId}`);
+                        }
+                    }
+
+                    // Step 2: Get event_slug from Gamma API using market slug
+                    if (marketSlug) {
+                        try {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
+                            
+                            // Use /markets/slug/{slug} endpoint - returns full market with event info
+                            const response = await fetch(
+                                `https://gamma-api.polymarket.com/markets/slug/${marketSlug}`,
+                                { signal: controller.signal, headers: { 'Accept': 'application/json' } }
+                            );
+                            clearTimeout(timeoutId);
+                            
+                            if (response.ok) {
+                                const marketData = await response.json();
+                                // Event slug is in the events array
+                                if (marketData?.events?.length > 0) {
+                                    eventSlug = marketData.events[0]?.slug || "";
+                                }
+                            }
+                        } catch (gammaError) {
+                            console.log(`[WARN] Gamma API failed for slug ${marketSlug}`);
+                        }
+                    }
+                    
+                    console.log(`[DEBUG] Slugs for ${p.conditionId}: market="${marketSlug}", event="${eventSlug}"`);
+                }
 
                 positions.push({
                     marketId: p.conditionId || p.market,
@@ -269,9 +321,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     currentPrice: currentPrice,
                     unrealizedPnL: unrealizedPnL,
                     unrealizedPnLPercent: unrealizedPnLPercent,
-                    question: p.title,
-                    image: p.icon,
-                    marketSlug: p.market_slug
+                    question: question,
+                    image: image,
+                    marketSlug: marketSlug,
+                    eventSlug: eventSlug,
+                    clobOrderId: p.asset 
                 });
             }
             return positions;
@@ -323,7 +377,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     if (book.tick_size) tickSize = book.tick_size;
                     if (book.neg_risk !== undefined) negRisk = book.neg_risk;
                 } catch(e2) {
-                    this.logger.debug(`[Order] Market info fetch fallback for ${params.marketId}`);
+                    this.logger.debug(`Order: Market info fetch fallback for ${params.marketId}`);
                 }
             }
 
@@ -365,7 +419,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             // CRITICAL FIX: Polymarket enforces a 2-decimal limit on the Maker collateral amount (USDC) for BUY orders.
             // Additionally, marketable orders (FOK) must be AT LEAST $1.00 USDC in total value.
             if (side === Side.BUY) {
-                const MIN_ORDER_VALUE = 1.01; // $1.01 buffer to avoid being right on the edge
+                const MIN_ORDER_VALUE = 1.01;
                 
                 // 1. Ensure total value >= $1.00
                 if (shares * roundedPrice < MIN_ORDER_VALUE) {
@@ -377,20 +431,20 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 let totalCost = shares * roundedPrice;
                 let attempts = 0;
                 while (attempts < 10 && (Math.round(shares * roundedPrice * 100) / 100) !== (shares * roundedPrice)) {
-                    shares++; // Incrementing is safer as it keeps us above the $1 floor
+                    shares++;
                     attempts++;
                 }
                 
                 // Final safety truncate/rounding
                 const finalMakerAmount = Math.floor(shares * roundedPrice * 100) / 100;
                 if (finalMakerAmount < 1.00) {
-                     this.logger.warn(`⚠️ Cannot meet $1.00 minimum at price $${roundedPrice}. Skipping.`);
+                     this.logger.warn(`Warning: Cannot meet 1.00 minimum at price ${roundedPrice}. Skipping.`);
                      return { success: false, error: "skipped_min_value_limit", sharesFilled: 0, priceFilled: 0 };
                 }
             }
 
             if (shares < minOrderSize) {
-                this.logger.warn(`⚠️ Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: $${params.sizeUsd.toFixed(2)} @ ${roundedPrice.toFixed(2)}`);
+                this.logger.warn(`Warning: Order Rejected: Size (${shares}) < Minimum (${minOrderSize} shares). Req: ${params.sizeUsd.toFixed(2)} @ ${roundedPrice.toFixed(2)}`);
                 return { success: false, error: "skipped_min_size_limit", sharesFilled: 0, priceFilled: 0 };
             }
 
@@ -403,7 +457,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 taker: "0x0000000000000000000000000000000000000000"
             };
 
-            this.logger.info(`📝 Placing Order (Safe): ${params.side} ${shares} shares @ $${roundedPrice.toFixed(2)}`);
+            this.logger.info(`Placing Order: ${params.side} ${shares} shares @ ${roundedPrice.toFixed(2)}`);
 
             const res = await this.client.createAndPostOrder(
                 order, 
@@ -412,7 +466,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             );
 
             if (res && res.success) {
-                this.logger.success(`✅ Order Accepted. Tx: ${res.transactionHash || res.orderID || 'OK'}`);
+                this.logger.success(`Order Accepted. Tx: ${res.transactionHash || res.orderID || 'OK'}`);
                 return { success: true, orderId: res.orderID, txHash: res.transactionHash, sharesFilled: shares, priceFilled: roundedPrice };
             }
             throw new Error(res.errorMsg || "Order failed response");
@@ -443,5 +497,13 @@ export class PolymarketAdapter implements IExchangeAdapter {
     
     getFunderAddress() {
         return this.safeAddress || this.config.walletConfig.address;
+    }
+
+    public getRawClient(): any {
+        return this.client;
+    }
+
+    public getSigner(): any {
+        return this.wallet;
     }
 }

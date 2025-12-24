@@ -372,6 +372,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 negRisk = market.neg_risk;
                 if (market.minimum_order_size) minOrderSize = Number(market.minimum_order_size);
                 if (market.minimum_tick_size) tickSize = Number(market.minimum_tick_size);
+
+                // For SELL orders, ensure outcome tokens are approved for CTF Exchange
+                if (params.side === Side.SELL) {
+                    await this.ensureOutcomeTokenApproval(market.neg_risk);
+                }
             } catch (e) {
                 try {
                     const book = await this.getOrderBook(params.tokenId);
@@ -493,7 +498,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                         const fakResult = await this.client.createAndPostMarketOrder(
                             {
                                 tokenID: params.tokenId,
-                                amount: Math.floor(roundedShares * 1e6), // Amount in 1e6 precision
+                                amount: Math.floor(roundedShares), // Raw shares
                                 side: Side.SELL,
                                 price: fakPrice, // Price limit
                             },
@@ -601,6 +606,35 @@ export class PolymarketAdapter implements IExchangeAdapter {
         if (!this.safeManager) throw new Error("Safe Manager not initialized");
         const amountStr = Math.floor(amount * 1000000).toString();
         return await this.safeManager.withdrawUSDC(destination, amountStr);
+    }
+
+    private async ensureOutcomeTokenApproval(isNegRisk: boolean): Promise<void> {
+        if (!this.safeManager) throw new Error("Safe Manager not initialized");
+
+        const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
+        const EXCHANGE = isNegRisk 
+            ? "0xC5d563A36AE78145C45a50134d48A1215220f80a"  // Neg Risk CTF Exchange
+            : "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"; // CTF Exchange
+
+        try {
+            // Check if already approved
+            const safeAddr = this.safeAddress;
+            if (!safeAddr) {
+                this.logger.warn(`Safe address not available, skipping outcome token approval`);
+                return;
+            }
+            
+            const isApproved = await this.safeManager.checkOutcomeTokenApproval(safeAddr, EXCHANGE);
+            
+            if (!isApproved) {
+                this.logger.info(`   + Approving CTF Exchange for outcome tokens`);
+                await this.safeManager.approveOutcomeTokens(EXCHANGE, isNegRisk);
+                this.logger.success(`   ✅ CTF Exchange approved for outcome tokens`);
+            }
+        } catch (e: any) {
+            this.logger.error(`Failed to approve outcome tokens: ${e.message}`);
+            throw e;
+        }
     }
     
     getFunderAddress() {

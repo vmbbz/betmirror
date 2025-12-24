@@ -418,9 +418,48 @@ export class SafeManagerService {
             gasLimit: 600000, // Higher limit for Safe exec
             gasPrice: feeData.gasPrice 
         });
-
+        
         this.logger.success(`   ✅ Rescue Tx Sent: ${tx.hash}`);
         await tx.wait();
         return tx.hash;
+    }
+
+    public async checkOutcomeTokenApproval(safeAddress: string, exchangeAddress: string): Promise<boolean> {
+        try {
+            const isApproved = await this.viemPublicClient.readContract({
+                address: CTF_CONTRACT_ADDRESS,
+                abi: parseAbi(ERC1155_ABI),
+                functionName: 'isApprovedForAll',
+                args: [safeAddress, exchangeAddress]
+            }) as boolean;
+            
+            return isApproved;
+        } catch (e: any) {
+            this.logger.error(`Failed to check outcome token approval: ${e.message}`);
+            return false;
+        }
+    }
+
+    public async approveOutcomeTokens(exchangeAddress: string, isNegRisk: boolean): Promise<void> {
+        try {
+            const ctfInterface = new Interface(ERC1155_ABI);
+            
+            const data = ctfInterface.encodeFunctionData("setApprovalForAll", [exchangeAddress, true]);
+            
+            const tx: SafeTransaction = { 
+                to: CTF_CONTRACT_ADDRESS as `0x${string}`, 
+                value: "0", 
+                data: data as `0x${string}`, 
+                operation: OperationType.Call 
+            };
+            
+            const task = await this.relayClient.execute([tx]);
+            await task.wait();
+            
+            this.logger.success(`   ✅ Approved ${isNegRisk ? 'Neg Risk' : 'CTF'} Exchange for outcome tokens`);
+        } catch (e: any) {
+            this.logger.error(`Failed to approve outcome tokens: ${e.message}`);
+            throw e;
+        }
     }
 }

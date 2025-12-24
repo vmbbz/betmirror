@@ -292,6 +292,10 @@ export class PolymarketAdapter {
                     minOrderSize = Number(market.minimum_order_size);
                 if (market.minimum_tick_size)
                     tickSize = Number(market.minimum_tick_size);
+                // For SELL orders, ensure outcome tokens are approved for CTF Exchange
+                if (params.side === Side.SELL) {
+                    await this.ensureOutcomeTokenApproval(market.neg_risk);
+                }
             }
             catch (e) {
                 try {
@@ -386,8 +390,8 @@ export class PolymarketAdapter {
                 const sellRoundedPrice = Math.floor(roundedPrice * inverseTick) / inverseTick; // Round DOWN for sells
                 // Clamp price to valid range
                 const finalPrice = sellRoundedPrice > 0.99 ? 0.99 : sellRoundedPrice < 0.01 ? 0.01 : sellRoundedPrice;
-                // Round shares to avoid decimal precision issues (1e6 precision)
-                const roundedShares = Math.floor(shares * 1e6) / 1e6;
+                // Round shares to avoid decimal precision issues
+                const roundedShares = Math.floor(shares);
                 // Validate minimum size
                 if (roundedShares < minOrderSize) {
                     this.logger.warn(`Order size ${roundedShares} below minimum ${minOrderSize}`);
@@ -402,7 +406,7 @@ export class PolymarketAdapter {
                         // Use createAndPostMarketOrder for FAK (immediate fill)
                         const fakResult = await this.client.createAndPostMarketOrder({
                             tokenID: params.tokenId,
-                            amount: Math.floor(roundedShares * 1e6), // Amount in 1e6 precision
+                            amount: Math.floor(roundedShares), // Raw shares
                             side: Side.SELL,
                             price: fakPrice, // Price limit
                         }, { negRisk, tickSize: tickSize }, OrderType.FAK // FAK for partial fills
@@ -429,7 +433,7 @@ export class PolymarketAdapter {
                         tokenID: params.tokenId,
                         price: gtcPrice,
                         side: Side.SELL,
-                        size: Math.floor(remainingShares * 1e6) // Size in 1e6 precision
+                        size: Math.floor(remainingShares) // Raw shares
                     }, { negRisk, tickSize: tickSize }, OrderType.GTC);
                     if (gtcResult && gtcResult.success) {
                         this.logger.success(`GTC placed: ${gtcResult.orderID} for ${remainingShares} @ ${gtcPrice}`);
@@ -499,6 +503,32 @@ export class PolymarketAdapter {
             throw new Error("Safe Manager not initialized");
         const amountStr = Math.floor(amount * 1000000).toString();
         return await this.safeManager.withdrawUSDC(destination, amountStr);
+    }
+    async ensureOutcomeTokenApproval(isNegRisk) {
+        if (!this.safeManager)
+            throw new Error("Safe Manager not initialized");
+        const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
+        const EXCHANGE = isNegRisk
+            ? "0xC5d563A36AE78145C45a50134d48A1215220f80a" // Neg Risk CTF Exchange
+            : "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"; // CTF Exchange
+        try {
+            // Check if already approved
+            const safeAddr = this.safeAddress;
+            if (!safeAddr) {
+                this.logger.warn(`Safe address not available, skipping outcome token approval`);
+                return;
+            }
+            const isApproved = await this.safeManager.checkOutcomeTokenApproval(safeAddr, EXCHANGE);
+            if (!isApproved) {
+                this.logger.info(`   + Approving CTF Exchange for outcome tokens`);
+                await this.safeManager.approveOutcomeTokens(EXCHANGE, isNegRisk);
+                this.logger.success(`   ✅ CTF Exchange approved for outcome tokens`);
+            }
+        }
+        catch (e) {
+            this.logger.error(`Failed to approve outcome tokens: ${e.message}`);
+            throw e;
+        }
     }
     getFunderAddress() {
         return this.safeAddress || this.config.walletConfig.address;

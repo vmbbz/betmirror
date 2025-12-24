@@ -225,7 +225,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     private async fetchMarketSlugs(marketId: string): Promise<{ marketSlug: string; eventSlug: string; question: string; image: string }> {
-        console.log(`[FETCH SLUGS] Starting fresh fetch for market: ${marketId}`);
         let marketSlug = "";
         let eventSlug = "";
         let question = marketId;
@@ -244,7 +243,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     marketSlug = marketData.market_slug || "";
                     question = marketData.question || question;
                     image = marketData.image || image;
-                    console.log(`[CLOB SUCCESS] Got marketSlug: "${marketSlug}" for ${marketId}`);
                 }
             } catch (e) {
                 this.logger.debug(`CLOB API fetch failed for ${marketId}`);
@@ -263,25 +261,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 
                 if (gammaResponse.ok) {
                     const marketData = await gammaResponse.json();
-                    console.log(`[GAMMA SLUG] Market data for ${marketSlug}:`, JSON.stringify(marketData, null, 2));
                     
                     // The event slug should be in the events array
                     if (marketData.events && marketData.events.length > 0) {
                         eventSlug = marketData.events[0]?.slug || "";
-                        console.log(`[GAMMA SUCCESS] Found eventSlug for ${marketSlug}: "${eventSlug}"`);
-                    } else {
-                        console.log(`[GAMMA ERROR] No events array in response for ${marketId}`);
                     }
-                } else {
-                    console.log(`[GAMMA ERROR] HTTP ${gammaResponse.status} for ${marketId}`);
                 }
             } catch (e) {
-                console.log(`[GAMMA ERROR] Fetch failed for ${marketSlug}:`, e);
                 this.logger.debug(`Gamma API fetch failed for slug ${marketSlug}`);
             }
         }
 
-        console.log(`[FINAL RESULT] marketSlug: "${marketSlug}", eventSlug: "${eventSlug}"`);
         return { marketSlug, eventSlug, question, image };
     }
 

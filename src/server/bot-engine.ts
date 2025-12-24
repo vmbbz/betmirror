@@ -281,6 +281,24 @@ export class BotEngine {
                     });
                 }
 
+                // Update user's P/L directly in User collection
+                try {
+                    const User = (await import('../database/index.js')).default.User;
+                    await User.updateOne(
+                        { address: this.config.userId },
+                        { 
+                            $inc: { 
+                                'stats.totalPnl': realizedPnl,
+                                'stats.tradesCount': 1,
+                                'stats.totalVolume': exitValue
+                            }
+                        }
+                    );
+                    console.log(`[DIRECT P/L UPDATE] Updated user ${this.config.userId}: PnL +${realizedPnl.toFixed(2)}, New Volume: ${exitValue.toFixed(2)}`);
+                } catch(e) {
+                    console.error("Failed to update user P/L directly:", e);
+                }
+
                 if (position.tradeId && !position.tradeId.startsWith('imported')) {
                     try {
                         await Trade.findByIdAndUpdate(position.tradeId, {

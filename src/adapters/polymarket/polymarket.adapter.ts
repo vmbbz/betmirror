@@ -472,8 +472,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 // Clamp price to valid range
                 const finalPrice = sellRoundedPrice > 0.99 ? 0.99 : sellRoundedPrice < 0.01 ? 0.01 : sellRoundedPrice;
                 
-                // Round shares to avoid decimal precision issues (1e6 precision)
-                const roundedShares = Math.floor(shares * 1e6) / 1e6;
+                // Round shares to avoid decimal precision issues
+                const roundedShares = Math.floor(shares);
                 
                 // Validate minimum size
                 if (roundedShares < minOrderSize) {
@@ -526,7 +526,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                             tokenID: params.tokenId, 
                             price: gtcPrice, 
                             side: Side.SELL, 
-                            size: Math.floor(remainingShares * 1e6) // Size in 1e6 precision
+                            size: Math.floor(remainingShares) // Raw shares
                         },
                         { negRisk, tickSize: tickSize as any },
                         OrderType.GTC

@@ -1,4 +1,3 @@
-
 # Bet Mirror | Pro Cloud Terminal
 
 ![Bet Mirror Header](./docs/assets/header.png)
@@ -13,7 +12,7 @@ Developed by **PolyCafe**.
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-green)
-![Encryption](https://img.shields.io/badge/Security-AES--256-red)
+![Encryption](https://img.shields.io/badge/Security-AES--256--GCM-red)
 
 ---
 
@@ -24,13 +23,14 @@ Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step proce
 ### 1. The Smart Onboarding
 - **Connect:** User connects their standard Main Wallet (Metamask, Phantom, Rainbow).
 - **Deploy:** The system automatically derives and deploys a dedicated **Gnosis Safe** on Polygon.
-- **Security:** An encrypted EOA key acts as the controller. It is stored using **AES-256**.
+- **Security:** An encrypted EOA key acts as the controller. It is stored using **AES-256-GCM** with authenticated encryption.
 - **Isolation:** Funds sit in the Safe, distinct from your main savings.
 
 ### 2. The Cloud Engine (Server-Side)
 - **Persistence:** Once the bot is started, it runs on our Node.js cloud cluster backed by **MongoDB**.
 - **Offline Trading:** The user can close their browser or turn off their computer. The bot continues to monitor markets and execute trades 24/7.
 - **AI Analysis:** Before every trade, the **Google Gemini 2.5** Agent analyzes the market question to ensure it aligns with the user's risk profile (Conservative, Balanced, or Degen).
+- **Liquidity Intelligence:** The bot uses an **Absolute Spread Approach** (measuring cents vs percentages). This is specifically optimized for binary prediction markets where traditional percentage spread metrics fail at extreme price points (e.g., a $0.01 gap at a price of $0.02 is a 50% spread, which most bots skip, but Bet Mirror Pro identifies as high liquidity).
 
 ### 3. The Marketplace & Profit
 - **Copy Trading:** Users browse the **Alpha Registry** to find whales with high win rates.
@@ -172,7 +172,7 @@ This allows for seamless integration of new prediction markets (e.g., **PredictB
 
 *   **Frontend:** React, Vite, TailwindCSS, Lucide Icons.
 *   **Backend:** Node.js, Express, TypeScript.
-*   **Database:** MongoDB (Mongoose ODM).
+*   **Database:** MongoDB (Mongoose ODM) with **Field-Level Encryption (FLE)**.
 *   **Web3:** Viem, Ethers.js, @polymarket/builder-relayer-client.
 *   **AI:** Google GenAI SDK (Gemini 2.5).
 
@@ -259,7 +259,12 @@ If you see `MongooseServerSelectionError` in your cloud logs (Sliplane, Railway,
 | **Main Wallet** | Held by User (Phantom/Metamask) | **Fund Source**. Used to deposit and receive profits. Safely isolated. |
 | **Gnosis Safe** | On-Chain Contract | **Funder**. Holds trading capital. Controlled by the Trading Key. |
 | **Trading Key** | Held by Server (Encrypted DB) | **Execution**. Used to sign orders and Relayer requests. |
-| **Database** | MongoDB Atlas | Stores Config, History, and Encrypted Keys. |
+| **Database** | MongoDB Atlas | Stores Config, History, and **AES-256-GCM** Encrypted Keys. |
+
+### Technical Security Specs
+- **Encryption Algorithm**: **AES-256-GCM** (Galois/Counter Mode). This provides authenticated encryption, ensuring that encrypted keys cannot be tampered with (bit-flipping protection) and remain confidential.
+- **Key Derivation**: We use a **Scrypt-based** key derivation function to generate a 32-byte master key from your environment secret. This process is Iterated for security but performed only once at server startup to ensure high trading performance.
+- **Field-Level Encryption (FLE)**: Our Mongoose middleware automatically intercepts sensitive fields (like Private Keys and API Credentials) before they reach the database, ensuring no plain-text data is ever stored at rest.
 
 ---
 

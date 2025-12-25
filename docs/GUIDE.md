@@ -1,4 +1,3 @@
-
 # 📘 Bet Mirror Pro | User & Technical Guide
 
 Welcome to the institutional-grade prediction market terminal. This guide covers everything from your first deposit to the technical architecture powering the bot.
@@ -37,42 +36,51 @@ Click the **START ENGINE** button in the header.
 
 ---
 
-## 🧠 Technical Deep Dive: Polymarket CLOB
+## 🧠 Technical Deep Dive: Execution & Liquidity
 
-Bet Mirror is not a derivative platform. We interact directly with the **Polymarket Central Limit Order Book (CLOB)** via their Relayer architecture.
+Bet Mirror is not a simple script; it is a high-performance execution engine designed to protect your capital while capturing the best possible prices on the **Polymarket Central Limit Order Book (CLOB)**.
 
-### How it works
-1.  **Signal Detection:** We monitor the `Activity` endpoints of target wallets in real-time.
-2.  **Order Construction:** When a target buys `YES` on "Bitcoin > 100k", your bot constructs an identical order.
-3.  **Attribution:** We inject specific **Builder Headers** (`POLY_BUILDER_API_KEY`) into the API request. This identifies your trade as coming from "Bet Mirror" infrastructure, allowing us to participate in the **Polymarket Builder Program**.
-4.  **Execution:** The order is cryptographically signed by your dedicated **EOA Signer** and submitted to the **Polymarket Relayer**.
-5.  **Settlement:** The trade is executed by your **Gnosis Safe** proxy on the CTF Exchange contract on Polygon.
+### Order Execution Logic
+Our engine handles **Buying** and **Selling** with distinct, optimized strategies:
 
-### Architecture Comparison
+#### 🟢 Buying (Entry)
+*   **Proportional Sizing**: The bot calculates your position size based on the whale's portfolio percentage, adjusted by your multiplier.
+*   **Slippage Protection**: We calculate a 5% buffer on the whale's entry price. If the market moves too fast and the price exceeds this buffer, the bot skips the trade to avoid overpaying.
+*   **Minimum Thresholds**: Every order must meet the exchange minimum of 5 shares and $1.00 value. The bot automatically "boosts" tiny whale signals to meet these requirements if you have the balance.
 
-We utilize a Hybrid Safe Model to ensure 100% compatibility with Polymarket's high-frequency trading requirements while maintaining security.
+#### 🔴 Selling (Exit)
+*   **Book Sweep Strategy**: When selling, the bot doesn't just place a static limit. It constructs a "Sweep" order targeting the best available bids. This ensures you liquidate your position instantly at the highest possible weighted average price.
+*   **FAK (Fill-And-Kill)**: We use FAK order types for exits. This means the bot captures all available liquidity at our floor price immediately, then "kills" the remainder to prevent stuck orders in a crashing market.
 
-| Feature | Standard EOA Bot | Bet Mirror Pro (Safe) | Why we chose this |
-| :--- | :--- | :--- | :--- |
-| **Wallet Type** | Standard EOA | **Gnosis Safe Proxy** | Safes are the industry standard for smart accounts. They hold the funds. |
-| **Signing** | Direct Key Sign | **EOA Owner Sign** | We generate an encrypted EOA that *owns* the Safe. This EOA signs instructions, but funds sit in the Safe. |
-| **Gas** | User Pays (POL) | **Relayer (Gasless)** | We use the Polymarket Relayer to submit transactions. This creates a gasless experience for the user. |
-| **Liquidity** | CLOB | **CLOB** | We access the exact same liquidity depth as the main site. No side pools. |
+### Liquidity Shields & Absolute Spreads
+Standard trading bots use **Percentage Spreads** to determine market health. However, in prediction markets, this metric is mathematically flawed at extreme prices. 
+*   **The Problem:** A 1-cent gap at a price of $0.02 is a 50% spread. Most bots would skip this, thinking it's illiquid.
+*   **Our Solution:** Bet Mirror Pro uses **Absolute Cents Gap**. If the gap is 1 or 2 cents, the bot considers it highly liquid, regardless of the percentage.
+*   **Health Ranks**:
+    *   **HIGH**: Spread <= 2 cents AND Depth >= $500 USD.
+    *   **MEDIUM**: Spread <= 5 cents AND Depth >= $100 USD.
+    *   **LOW**: Depth exists ($20+) but spread may be wider.
+*   *You can configure your "Liquidity Filter" in the Vault to ensure the bot only enters markets with deep order books.*
 
 ---
 
 ## 🛡️ Security & Recovery
 
+### Field-Level Encryption (FLE)
+To provide institutional-grade protection, Bet Mirror Pro implements **AES-256-GCM** field-level encryption for all sensitive database fields.
+*   **Scrypt Key Derivation**: The master encryption key is derived using the Scrypt algorithm with high iteration counts, performed once at server startup for performance.
+*   **Automatic Middleware**: Mongoose hooks automatically encrypt `encryptedPrivateKey` and `l2ApiCredentials` before they hit the database.
+*   **No Plain-Text Storage**: Even if a database dump is compromised, your private keys and API credentials remain encrypted and unusable without the server's environment key.
+
 ### Dedicated Wallet Model
 *   **Isolation:** We create a specific wallet configuration just for your bot. This limits risk. Even if the bot key were compromised, your Main Wallet (MetaMask) remains safe.
-*   **Encryption:** Your bot's private key (Signer) is encrypted in our database using **AES-256**. It is only decrypted in server memory for the split-second required to sign an order.
+*   **Encryption:** Your bot's private key (Signer) is encrypted in our database using **AES-256-GCM**. It is only decrypted in server memory for the split-second required to sign an order.
 
 ### Emergency Recovery
 To withdraw funds:
 1.  Use the **Withdraw** button on the Dashboard.
 2.  This triggers the server to instruct the Relayer to move funds from your Safe back to your Main Wallet.
 3.  **Manual Recovery (Trustless):** If you enabled **Multi-Sig Sovereignty** in the Vault, your Main Wallet is a co-owner of the Safe. You can interact directly with the Gnosis Safe contracts on Etherscan or the Gnosis UI to move funds, bypassing the Bet Mirror server entirely.
-4.  **Legacy Recovery:** If you haven't upgraded to Multi-Sig, recovery requires the encrypted Signer key (exportable via admin request or the CLI Rescue Tool).
 
 ---
 

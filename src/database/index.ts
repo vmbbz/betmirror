@@ -8,6 +8,9 @@ import { BotConfig } from '../server/bot-engine.js';
 import { BridgeTransactionRecord } from '../services/lifi-bridge.service.js';
 import { DatabaseEncryptionService } from '../services/database-encryption.service.js';
 
+// Initialize the encryption service immediately with the environment key
+DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
+
 export interface IUser extends Document {
   address: string;
   tradingWallet?: TradingWalletConfig; 
@@ -286,8 +289,10 @@ export const connectDB = async () => {
   
   // Validate database encryption key
   if (!DatabaseEncryptionService.validateEncryptionKey()) {
-    console.warn('Database encryption key is not properly configured. Please set DB_ENCRYPTION_KEY in your environment variables.');
+    console.warn('Database encryption key is not properly configured. Initializing now...');
+    DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
   }
+  
   try {
     mongoose.set('strictQuery', true);
     console.log(`🔌 Attempting to connect to MongoDB...`);

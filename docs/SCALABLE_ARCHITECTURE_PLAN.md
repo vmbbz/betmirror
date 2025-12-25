@@ -1,7 +1,6 @@
-
 # 🏛️ Scalable Trading Architecture Plan
 
-**Objective:** Upgrade the Bet Mirror backend to support multiple prediction markets (Polymarket, Kalshi, PredictBase) while maintaining robust authentication.
+**Objective:** Upgrade the Bet Mirror backend to support multiple prediction markets (Polymarket, Kalshi, PredictBase) while maintaining robust authentication and high-performance execution.
 
 ## 1. The Core Problem (RESOLVED)
 The previous architecture used simple EOAs which required users to manage GAS (MATIC) and limited our ability to perform advanced operations.
@@ -20,7 +19,12 @@ To handle high-frequency signals and ensure 24/7 reliability, we have applied th
 *   **Problem:** Fetching a whale's portfolio balance takes 300ms-800ms via HTTP. Doing this *before* every trade slows down execution.
 *   **Fix:** Implemented **WhaleBalanceCache**. We cache balance data for 5 minutes. Subsequent signals from the same whale execute instantly without waiting for the Data API.
 
-### C. RPC Rate Limit Protection (`FundManager`)
+### C. Execution Intelligence (Absolute Pricing)
+*   **Context**: Prediction markets often trade at extreme ends of the $0-$1 spectrum.
+*   **Optimization**: Switched from percentage-based slippage to **Absolute Cent Gap** monitoring. This allows the bot to trade in high-volume, low-price markets (like $0.02) where a 1-cent gap is mathematically a 50% spread but practically a high-liquidity environment.
+*   **Book Sweep**: Implemented a "Sweep" logic for SELL orders. The bot analyzes the bid-side depth and executes a Fill-And-Kill (FAK) order to capture the best possible weighted average price instantly.
+
+### D. RPC Rate Limit Protection (`FundManager`)
 *   **Problem:** Checking the blockchain balance every few seconds burns through RPC credits and can trigger IP bans.
 *   **Fix:** Implemented **Throttling**. The Auto-Cashout logic now only runs once per hour (or upon specific trigger events), reducing RPC load by 99%.
 
@@ -78,17 +82,4 @@ The architecture is fully ready for **PredictBase** (or Kalshi) integration. To 
     *   `createOrder()`: Use the PredictBase SDK to submit the order.
 3.  **Inject:** Simply change the import in `bot-engine.ts`.
 
-```typescript
-// Example PredictBase Adapter Stub
-export class PredictBaseAdapter implements IExchangeAdapter {
-    readonly exchangeName = 'PredictBase';
-    
-    async createOrder(params: OrderParams): Promise<OrderResult> {
-        // ... Call PredictBase Contract/API ...
-        return { success: true, txHash: '0x...' };
-    }
-    // ... implement other methods
-}
-```
-
-This ensures that the core bot logic (AI Risk Analysis, Notification Service, Database Sync) remains **100% reusable** across different markets.
+This ensures that the core bot logic (AI Risk Analysis, Notification Service, Database Sync, and **AES-256 Encryption**) remains **100% reusable** across different markets.

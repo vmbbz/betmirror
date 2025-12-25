@@ -1,136 +1,132 @@
 import crypto from 'crypto';
+import { Schema } from 'mongoose';
 
 /**
- * Database-level encryption service for sensitive fields
- * Provides field-level encryption for data at rest
+ * Service providing Field-Level Encryption (FLE) for MongoDB.
+ * Uses AES-256-GCM for authenticated encryption.
  */
 export class DatabaseEncryptionService {
-    private static readonly ENCRYPTION_ALGORITHM = 'aes-256-gcm';
-    private static readonly KEY_DERIVATION_ITERATIONS = 100000;
-    private static readonly ENCRYPTION_KEY = process.env.DB_ENCRYPTION_KEY || 'default-key-change-in-production';
+  private static masterKey: Buffer | null = null;
+  private static readonly ALGORITHM = 'aes-256-gcm';
+  private static readonly IV_LENGTH = 12;
+  private static readonly TAG_LENGTH = 16;
+  private static readonly SALT = 'bet-mirror-db-salt-2025';
 
-    /**
-     * Encrypts sensitive data for database storage
-     * Format: iv:authTag:encryptedData
-     */
-    static encrypt(plaintext: string): string {
-        try {
-            // Generate random IV
-            const iv = crypto.randomBytes(16);
-            
-            // Derive key using PBKDF2
-            const key = crypto.pbkdf2Sync(this.ENCRYPTION_KEY, 'database-salt', this.KEY_DERIVATION_ITERATIONS, 32, 'sha256');
-            
-            // Create cipher
-            const cipher = crypto.createCipheriv(this.ENCRYPTION_ALGORITHM, key, iv);
-            
-            // Encrypt data
-            let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-            encrypted += cipher.final('hex');
-            
-            // Get auth tag
-            const authTag = cipher.getAuthTag();
-            
-            // Return combined format: iv:authTag:encryptedData
-            return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
-        } catch (error) {
-            console.error('Encryption failed:', error);
-            throw new Error('Failed to encrypt sensitive data');
+  /**
+   * Initializes the encryption service by deriving the master key once.
+   * This prevents expensive PBKDF2/Scrypt operations on every database access.
+   */
+  static init(envKey: string) {
+    if (!envKey) {
+      console.error("❌ DatabaseEncryptionService: MONGO_ENCRYPTION_KEY is missing from environment!");
+      return;
+    }
+    
+    try {
+      // Derive a 32-byte key using Scrypt (secure and better performance for initialization)
+      this.masterKey = crypto.scryptSync(envKey, this.SALT, 32);
+      console.log("🔐 Database Encryption Service Initialized (AES-256-GCM)");
+    } catch (error) {
+      console.error("❌ DatabaseEncryptionService: Failed to derive master key", error);
+    }
+  }
+
+  /**
+   * Encrypts a string using AES-256-GCM.
+   * Returns a format: iv:authTag:encryptedData
+   */
+  static encrypt(text: string): string {
+    if (!this.masterKey) {
+      throw new Error("DatabaseEncryptionService: Not initialized. Call init() first.");
+    }
+    
+    const iv = crypto.randomBytes(this.IV_LENGTH);
+    const cipher = crypto.createCipheriv(this.ALGORITHM, this.masterKey, iv);
+    
+    let encrypted = cipher.update(text, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    
+    const authTag = cipher.getAuthTag();
+    
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  }
+
+  /**
+   * Decrypts an AES-256-GCM encrypted string.
+   */
+  static decrypt(encryptedData: string): string {
+    if (!this.masterKey) {
+      throw new Error("DatabaseEncryptionService: Not initialized. Call init() first.");
+    }
+    
+    const parts = encryptedData.split(':');
+    if (parts.length !== 3) {
+      // Data is not in the expected encrypted format, return as is
+      return encryptedData;
+    }
+
+    try {
+      const iv = Buffer.from(parts[0], 'hex');
+      const authTag = Buffer.from(parts[1], 'hex');
+      const encryptedText = parts[2];
+
+      const decipher = crypto.createDecipheriv(this.ALGORITHM, this.masterKey, iv);
+      decipher.setAuthTag(authTag);
+      
+      let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+      
+      return decrypted;
+    } catch (error) {
+      console.error("❌ Decryption failed. Possible key mismatch or data corruption.");
+      throw error;
+    }
+  }
+
+  /**
+   * Attaches encryption middleware to a Mongoose schema for a specific field.
+   * Handles both 'save' (pre) and 'init' (post-fetch) hooks.
+   */
+  static createEncryptionMiddleware(schema: Schema, fieldPath: string) {
+    // Helper to get nested values (e.g., 'credentials.apiKey')
+    const getNestedValue = (obj: any, path: string) => {
+        return path.split('.').reduce((prev, curr) => prev && prev[curr], obj);
+    };
+
+    // Helper to set nested values
+    const setNestedValue = (obj: any, path: string, value: any) => {
+        const parts = path.split('.');
+        const last = parts.pop();
+        const target = parts.reduce((prev, curr) => prev && prev[curr], obj);
+        if (target && last) target[last] = value;
+    };
+
+    // Hook for when a document is being saved to the database
+    // Fix: Removing the 'next' parameter and using a synchronous signature to prevent TypeScript from incorrectly
+    // inferring the first parameter as 'SaveOptions', which caused "This expression is not callable" error.
+    schema.pre('save', function(this: any) {
+        const value = getNestedValue(this, fieldPath);
+        // Only encrypt if it's a string and doesn't look already encrypted
+        if (value && typeof value === 'string' && !value.includes(':')) {
+            setNestedValue(this, fieldPath, DatabaseEncryptionService.encrypt(value));
         }
-    }
+    });
 
-    /**
-     * Decrypts sensitive data from database storage
-     */
-    static decrypt(encryptedData: string): string {
-        try {
-            // Parse combined format
-            const parts = encryptedData.split(':');
-            if (parts.length !== 3) {
-                throw new Error('Invalid encrypted data format');
+    // Hook for when a document is initialized from database data
+    schema.post('init', function(doc) {
+        const value = getNestedValue(doc, fieldPath);
+        if (value && typeof value === 'string' && value.includes(':')) {
+            try {
+                setNestedValue(doc, fieldPath, DatabaseEncryptionService.decrypt(value));
+            } catch (e) {
+                // If decryption fails, we leave the encrypted string (or handle as needed)
+                console.error(`Failed to decrypt field ${fieldPath} for document ${doc._id}`);
             }
-            
-            const iv = Buffer.from(parts[0], 'hex');
-            const authTag = Buffer.from(parts[1], 'hex');
-            const encrypted = parts[2];
-            
-            // Derive key using same parameters
-            const key = crypto.pbkdf2Sync(this.ENCRYPTION_KEY, 'database-salt', this.KEY_DERIVATION_ITERATIONS, 32, 'sha256');
-            
-            // Create decipher
-            const decipher = crypto.createDecipheriv(this.ENCRYPTION_ALGORITHM, key, iv);
-            decipher.setAuthTag(authTag);
-            
-            // Decrypt data
-            let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-            decrypted += decipher.final('utf8');
-            
-            return decrypted;
-        } catch (error) {
-            console.error('Decryption failed:', error);
-            throw new Error('Failed to decrypt sensitive data');
         }
-    }
+    });
+  }
 
-    /**
-     * Mongoose schema middleware for automatic encryption/decryption
-     */
-    static createEncryptionMiddleware(schema: any, fieldName: string) {
-        // Encrypt before saving
-        schema.pre('save', function(this: any, next: any) {
-            if (this.isModified(fieldName) && this[fieldName]) {
-                try {
-                    // Only encrypt if not already encrypted (check format)
-                    if (!this[fieldName].includes(':') || this[fieldName].split(':').length !== 3) {
-                        this[fieldName] = DatabaseEncryptionService.encrypt(this[fieldName]);
-                    }
-                } catch (error) {
-                    console.error(`Failed to encrypt field ${fieldName}:`, error);
-                    return next(error);
-                }
-            }
-            next();
-        });
-
-        // Decrypt after finding
-        schema.post(['find', 'findOne'], function(this: any, result: any) {
-            if (result) {
-                const decryptField = (doc: any) => {
-                    if (doc && doc[fieldName]) {
-                        try {
-                            // Only decrypt if in encrypted format
-                            if (doc[fieldName].includes(':') && doc[fieldName].split(':').length === 3) {
-                                doc[fieldName] = DatabaseEncryptionService.decrypt(doc[fieldName]);
-                            }
-                        } catch (error) {
-                            console.error(`Failed to decrypt field ${fieldName}:`, error);
-                            // Keep original value if decryption fails
-                        }
-                    }
-                };
-
-                if (Array.isArray(result)) {
-                    result.forEach(decryptField);
-                } else {
-                    decryptField(result);
-                }
-            }
-            return result;
-        });
-    }
-
-    /**
-     * Validate encryption key strength
-     */
-    static validateEncryptionKey(): boolean {
-        const key = this.ENCRYPTION_KEY;
-        return key.length >= 32 && key !== 'default-key-change-in-production';
-    }
-
-    /**
-     * Generate secure encryption key
-     */
-    static generateEncryptionKey(): string {
-        return crypto.randomBytes(32).toString('hex');
-    }
+  static validateEncryptionKey(): boolean {
+    return !!this.masterKey;
+  }
 }

@@ -1,7 +1,7 @@
 
 import { Wallet, JsonRpcProvider, Contract, parseEther, parseUnits } from 'ethers';
 import { Wallet as WalletV5, providers as providersV5 } from 'ethers-v5';
-import crypto from 'crypto';
+import { DatabaseEncryptionService } from './database-encryption.service.js';
 
 // Basic standard ABI for ERC20
 const USDC_ABI = [
@@ -14,14 +14,17 @@ const USDC_ABI = [
  * Includes Shim for Ethers v6 compatibility with Polymarket SDK (v5).
  */
 export class EvmWalletService {
-  private encryptionKey: string;
   private provider: JsonRpcProvider;
   private rpcUrl: string;
 
   constructor(rpcUrl: string, encryptionKey: string) {
     this.rpcUrl = rpcUrl;
     this.provider = new JsonRpcProvider(rpcUrl);
-    this.encryptionKey = encryptionKey;
+    
+    // Ensure centralized encryption service is initialized
+    if (!DatabaseEncryptionService.validateEncryptionKey()) {
+      DatabaseEncryptionService.init(encryptionKey);
+    }
   }
 
   /**
@@ -29,7 +32,8 @@ export class EvmWalletService {
    */
   async createTradingWallet(ownerAddress: string) {
     const wallet = Wallet.createRandom();
-    const encryptedKey = this.encrypt(wallet.privateKey);
+    // Centralized GCM encryption
+    const encryptedKey = DatabaseEncryptionService.encrypt(wallet.privateKey);
 
     return {
       address: wallet.address,
@@ -43,7 +47,7 @@ export class EvmWalletService {
    * Decrypts the private key and returns a connected Wallet instance (Ethers V6).
    */
   async getWalletInstance(encryptedPrivateKey: string): Promise<Wallet> {
-    const privateKey = this.decrypt(encryptedPrivateKey);
+    const privateKey = DatabaseEncryptionService.decrypt(encryptedPrivateKey);
     const wallet = new Wallet(privateKey, this.provider);
 
     // --- COMPATIBILITY SHIM START (Legacy Support) ---
@@ -63,7 +67,7 @@ export class EvmWalletService {
    * REQUIRED for Polymarket SDKs to function correctly without hacks.
    */
   async getWalletInstanceV5(encryptedPrivateKey: string): Promise<WalletV5> {
-      const privateKey = this.decrypt(encryptedPrivateKey);
+      const privateKey = DatabaseEncryptionService.decrypt(encryptedPrivateKey);
       const provider = new providersV5.JsonRpcProvider(this.rpcUrl);
       return new WalletV5(privateKey, provider);
   }
@@ -117,27 +121,5 @@ export class EvmWalletService {
           await tx.wait();
           return tx.hash;
       }
-  }
-
-  // --- Encryption Helpers (AES-256-CBC) ---
-  
-  private encrypt(text: string): string {
-    const iv = crypto.randomBytes(16);
-    const key = crypto.scryptSync(this.encryptionKey, 'salt', 32);
-    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-    let encrypted = cipher.update(text);
-    encrypted = Buffer.concat([encrypted, cipher.final()]);
-    return iv.toString('hex') + ':' + encrypted.toString('hex');
-  }
-
-  private decrypt(text: string): string {
-    const textParts = text.split(':');
-    const iv = Buffer.from(textParts.shift()!, 'hex');
-    const encryptedText = Buffer.from(textParts.join(':'), 'hex');
-    const key = crypto.scryptSync(this.encryptionKey, 'salt', 32);
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    let decrypted = decipher.update(encryptedText);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    return decrypted.toString();
   }
 }

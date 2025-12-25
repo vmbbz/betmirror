@@ -445,10 +445,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     : Math.floor(params.sizeUsd / finalPrice)
             );
             
-            // DUST PROTECTION: Exchange floor for total order value is $1.00
+            // DUST PROTECTION: 
+            // 1. Exchange floor for total order value is $1.00
             if (params.side === 'BUY' && (shares * finalPrice) < 1.00) {
                 shares = Math.ceil(1.00 / finalPrice);
                 this.logger.info(`   + Dust Protection: Boosting shares to ${shares} to meet $1.00 floor`);
+            }
+
+            // 2. Exchange floor for share count is usually 5 shares
+            if (params.side === 'BUY' && shares < minOrderSize) {
+                shares = minOrderSize;
+                this.logger.info(`   + Dust Protection: Boosting shares to ${shares} to meet 5-share minimum`);
             }
 
             if (shares < minOrderSize) {

@@ -1,12 +1,13 @@
-
 export type CopyInputs = {
   yourUsdBalance: number;
+  yourShareBalance: number; // Added to track current holdings for sell logic
   traderUsdBalance: number;
   traderTradeUsd: number;
   multiplier: number; // e.g., 1.0, 2.0
   currentPrice: number; // The price of the outcome (0.01 - 0.99)
   maxTradeAmount?: number; // User defined safety cap (e.g. $100)
   minOrderSize?: number; // Market's minimum share requirement (default 5)
+  side: 'BUY' | 'SELL';
 };
 
 export type SizingResult = {
@@ -19,88 +20,92 @@ export type SizingResult = {
 export function computeProportionalSizing(input: CopyInputs): SizingResult {
   const { 
     yourUsdBalance, 
+    yourShareBalance,
     traderUsdBalance, 
     traderTradeUsd, 
     multiplier, 
     currentPrice, 
     maxTradeAmount,
-    minOrderSize = 5 
+    minOrderSize = 5,
+    side
   } = input;
   
-  // 0. Safety: Valid Price
   const price = Math.max(0.01, Math.min(0.99, currentPrice));
+  const MIN_VALUE_USDC = 1.00;
 
-  // 1. Calculate raw ratio
-  const denom = Math.max(1, traderUsdBalance + Math.max(0, traderTradeUsd));
+  // 1. Calculate raw ratio and target
+  const denom = Math.max(1, traderUsdBalance + (side === 'BUY' ? Math.max(0, traderTradeUsd) : 0));
   const ratio = Math.max(0, yourUsdBalance / denom);
-  
-  // 2. Calculate raw target size based on proportion
   const base = Math.max(0, traderTradeUsd * ratio);
   let targetUsdSize = Math.max(0, base * Math.max(0, multiplier));
   let reason = "proportional";
 
-  // 3. THE "SMART MATCH" LOGIC
-  
-  // Minimum USD needed for this order (Exchange floor is $1.00)
-  const MIN_VALUE_USDC = 1.00;
-  
-  if (targetUsdSize < MIN_VALUE_USDC) {
-      if (yourUsdBalance >= MIN_VALUE_USDC) {
-          // Instead of just setting size to 1.00, we calculate shares required to cross 1.00
-          const sharesNeeded = Math.ceil(MIN_VALUE_USDC / price);
-          targetUsdSize = sharesNeeded * price;
-          reason = "floor_boost_min_value";
-      } else {
-          return { 
-            targetUsdSize: 0, 
-            targetShares: 0, 
-            ratio, 
-            reason: "insufficient_for_min_value" 
-          };
-      }
-  }
+  // 2. Handle BUY Logic
+  if (side === 'BUY') {
+    if (targetUsdSize < MIN_VALUE_USDC) {
+      const sharesNeeded = Math.ceil(MIN_VALUE_USDC / price);
+      targetUsdSize = sharesNeeded * price;
+      reason = "floor_boost_min_value";
+    }
 
-  // B. The Safety Ceiling (Max Cap)
-  if (maxTradeAmount && targetUsdSize > maxTradeAmount) {
+    if (maxTradeAmount && targetUsdSize > maxTradeAmount) {
       targetUsdSize = maxTradeAmount;
       reason = "capped_at_max";
-  }
+    }
 
-  // C. The Wallet Cap
-  if (targetUsdSize > yourUsdBalance) {
+    if (targetUsdSize > yourUsdBalance) {
       targetUsdSize = yourUsdBalance;
       reason = "capped_at_balance";
-  }
+    }
 
-  // 4. Calculate shares - use CEIL if we are near the floor
-  let targetShares = Math.floor(targetUsdSize / price);
-  if (targetShares * price < MIN_VALUE_USDC) {
-      targetShares = Math.ceil(MIN_VALUE_USDC / price);
+    let targetShares = Math.floor(targetUsdSize / price);
+    if (targetShares < minOrderSize) {
+      targetShares = minOrderSize;
       targetUsdSize = targetShares * price;
-  }
-  
-  // 5. Final validation: If we still can't get minimum shares, reject
-  if (targetShares < minOrderSize) {
-      const boostShares = minOrderSize;
-      const boostUsd = boostShares * price;
-      if (boostUsd <= yourUsdBalance && (!maxTradeAmount || boostUsd <= maxTradeAmount)) {
-          targetShares = boostShares;
-          targetUsdSize = boostUsd;
-          reason = "boosted_for_min_shares";
-      } else {
-          return { 
-            targetUsdSize: 0, 
-            targetShares: 0, 
-            ratio, 
-            reason: "cannot_meet_min_shares" 
-          };
-      }
+      reason = "boosted_for_min_shares";
+    }
+
+    return { targetUsdSize, targetShares, ratio, reason };
   }
 
-  return { 
-    targetUsdSize: Math.round(targetUsdSize * 100) / 100, 
-    targetShares,
-    ratio, 
-    reason 
-  };
+  // 3. Handle SELL Logic (Dust Prevention)
+  if (side === 'SELL') {
+    let targetShares = Math.floor(targetUsdSize / price);
+    
+    // If we have less than the minimum shares in total, we are in a 'Dust Trap'
+    if (yourShareBalance < minOrderSize) {
+        return { 
+          targetUsdSize: 0, 
+          targetShares: 0, 
+          ratio, 
+          reason: `dust_trap_detected: held_${yourShareBalance.toFixed(2)}_below_min_${minOrderSize}` 
+        };
+    }
+
+    // If the proportional sell is too small, but we have enough to sell the minimum
+    if (targetShares < minOrderSize) {
+        targetShares = minOrderSize;
+        reason = "sell_boost_to_min_shares";
+    }
+
+    // CRITICAL: If this sell would leave us with 'dust' ( < 5 shares), just sell everything
+    const remaining = yourShareBalance - targetShares;
+    if (remaining > 0 && remaining < minOrderSize) {
+        targetShares = yourShareBalance;
+        reason = "full_liquidation_to_prevent_dust";
+    }
+
+    // Ensure we don't try to sell more than we have
+    targetShares = Math.min(targetShares, yourShareBalance);
+    targetUsdSize = targetShares * price;
+
+    return { 
+        targetUsdSize: Math.round(targetUsdSize * 100) / 100, 
+        targetShares: Math.floor(targetShares), 
+        ratio, 
+        reason 
+    };
+  }
+
+  return { targetUsdSize: 0, targetShares: 0, ratio: 0, reason: "invalid_side" };
 }

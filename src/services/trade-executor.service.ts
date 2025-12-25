@@ -16,6 +16,7 @@ interface Position {
   conditionId: string;
   initialValue: number;
   currentValue: number;
+  balance: string; // share balance
 }
 
 export interface ExecutionResult {
@@ -44,6 +45,12 @@ export class TradeExecutorService {
       let remainingShares = position.shares;
       
       try {
+          // Hard check for exchange minimums before even trying
+          if (remainingShares < 5) {
+              logger.error(`🚨 Cannot Exit: Your balance (${remainingShares.toFixed(2)}) is below the exchange minimum of 5 shares. You must buy more of this asset to liquidate it.`);
+              return false;
+          }
+
           logger.info(`📉 Executing Market Exit: Offloading ${remainingShares} shares of ${position.tokenId}...`);
           
           const result = await adapter.createOrder({
@@ -62,9 +69,6 @@ export class TradeExecutorService {
               
               if (diff > 0.01) {
                   logger.warn(`⚠️ Partial Fill: Only liquidated ${filled}/${position.shares} shares. ${diff.toFixed(2)} shares remain stuck due to book depth.`);
-                  if (diff < 5) {
-                      logger.error(`🚨 Residual Dust: Remaining ${diff.toFixed(2)} shares are below exchange minimum (5). These cannot be sold until you buy more.`);
-                  }
               }
               
               logger.success(`Exit summary: Liquidated ${filled.toFixed(2)} shares @ avg best possible price.`);
@@ -92,10 +96,6 @@ export class TradeExecutorService {
     });
 
     try {
-      // UPDATED LIQUIDITY GUARD:
-      // Binary prediction markets use absolute spreads. 
-      // This filter now correctly accepts 1-cent gaps even if the percentage is high.
-      // PRE-FLIGHT LIQUIDITY GUARD
       if (this.deps.adapter.getLiquidityMetrics) {
           const metrics = await this.deps.adapter.getLiquidityMetrics(signal.tokenId, signal.side);
           const minRequired = (this.deps.env as any).minLiquidityFilter || 'LOW';
@@ -108,24 +108,26 @@ export class TradeExecutorService {
           };
           
           if (ranks[metrics.health] < ranks[minRequired]) {
-              // Log ABSOLUTE spread in cents, not percentage
               const msg = `[Liquidity Filter] Health: ${metrics.health} (Min: ${minRequired}) | Spread: ${(metrics.spread * 100).toFixed(1)}¢ | Depth: $${metrics.availableDepthUsd.toFixed(0)} -> SKIPPING`;
               logger.warn(msg);
               return failResult("insufficient_liquidity", "ILLIQUID");
           }
-          
-          // Log successful pass for transparency
           logger.info(`[Liquidity OK] Health: ${metrics.health} | Spread: ${(metrics.spread * 100).toFixed(1)}¢ | Depth: $${metrics.availableDepthUsd.toFixed(0)}`);
       }
 
       let usableBalanceForTrade = 0;
+      let currentShareBalance = 0;
+
+      const positions = await adapter.getPositions(proxyWallet);
+      const myPosition = positions.find(p => p.tokenId === signal.tokenId);
+      if (myPosition) {
+          currentShareBalance = myPosition.balance;
+      }
 
       if (signal.side === 'BUY') {
           const chainBalance = await adapter.fetchBalance(proxyWallet);
           usableBalanceForTrade = Math.max(0, chainBalance - this.pendingSpend);
       } else {
-          const positions = await adapter.getPositions(proxyWallet);
-          const myPosition = positions.find(p => p.tokenId === signal.tokenId);
           if (!myPosition || myPosition.balance <= 0) return failResult("no_position_to_sell");
           usableBalanceForTrade = myPosition.valueUsd;
       }
@@ -140,17 +142,18 @@ export class TradeExecutorService {
 
       const sizing = computeProportionalSizing({
         yourUsdBalance: usableBalanceForTrade,
+        yourShareBalance: currentShareBalance,
         traderUsdBalance: traderBalance,
         traderTradeUsd: signal.sizeUsd,
         multiplier: env.tradeMultiplier,
         currentPrice: signal.price,
         maxTradeAmount: env.maxTradeAmount,
-        minOrderSize: minOrderSize 
+        minOrderSize: minOrderSize,
+        side: signal.side
       });
 
-      if (sizing.targetUsdSize < 1.00 || sizing.targetShares < minOrderSize) {
-          if (usableBalanceForTrade < 1.00) return failResult("skipped_insufficient_balance_min_1");
-          return failResult(sizing.reason || "skipped_size_too_small");
+      if (sizing.targetShares <= 0) {
+          return failResult(sizing.reason || "skipped_by_sizing_engine");
       }
 
       let priceLimit: number | undefined = undefined;
@@ -160,7 +163,7 @@ export class TradeExecutorService {
           priceLimit = Math.max(0.001, signal.price * 0.90);
       }
 
-      logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.targetShares} shares)`);
+      logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.targetShares} shares) | Reason: ${sizing.reason}`);
 
       const result = await adapter.createOrder({
         marketId: signal.marketId,
@@ -168,6 +171,7 @@ export class TradeExecutorService {
         outcome: signal.outcome,
         side: signal.side,
         sizeUsd: sizing.targetUsdSize,
+        sizeShares: signal.side === 'SELL' ? sizing.targetShares : undefined,
         priceLimit: priceLimit
       });
 
@@ -189,7 +193,7 @@ export class TradeExecutorService {
           executedAmount: result.sharesFilled * result.priceFilled,
           executedShares: result.sharesFilled,
           priceFilled: result.priceFilled,
-          reason: 'executed'
+          reason: sizing.reason
       };
 
     } catch (err) {

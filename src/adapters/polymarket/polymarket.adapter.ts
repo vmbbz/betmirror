@@ -21,7 +21,7 @@ import { TOKENS } from '../../config/env.js';
 import axios from 'axios';
 
 const HOST_URL = 'https://clob.polymarket.com';
-const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
+const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)', 'function allowance(address owner, address spender) view returns (uint256)'];
 
 enum SignatureType {
     EOA = 0,
@@ -408,7 +408,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
             const tickSize = Number(market.minimum_tick_size) || 0.01;
             const minOrderSize = Number(market.minimum_order_size) || 5;
 
-            if (params.side === 'SELL') {
+            // JIT PROTECTION: Ensure rights and allowances just before trade
+            if (params.side === 'BUY') {
+                await this.ensureUsdcAllowance(market.neg_risk);
+            } else {
                 await this.ensureOutcomeTokenApproval(market.neg_risk);
             }
 
@@ -434,15 +437,15 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 : Math.floor(rawPrice * inverseTick) / inverseTick;
             const finalPrice = Math.max(0.001, Math.min(0.999, roundedPrice));
 
-            // FIX: Use Math.ceil for BUY orders to stay above $1.00 minimum
-            // Use Math.floor for SELL orders to avoid selling more than owned
+            // DIRECTIONAL MATH: 
+            // BUY orders use ceil to hit floor. SELL orders use floor to avoid overselling.
             let shares = params.sizeShares || (
                 params.side === 'BUY' 
                     ? Math.ceil(params.sizeUsd / finalPrice) 
                     : Math.floor(params.sizeUsd / finalPrice)
             );
             
-            // Dusty check: Exchange floor for total order value is $1.00
+            // DUST PROTECTION: Exchange floor for total order value is $1.00
             if (params.side === 'BUY' && (shares * finalPrice) < 1.00) {
                 shares = Math.ceil(1.00 / finalPrice);
                 this.logger.info(`   + Dust Protection: Boosting shares to ${shares} to meet $1.00 floor`);
@@ -509,6 +512,16 @@ export class PolymarketAdapter implements IExchangeAdapter {
         if (!this.safeManager) throw new Error("Safe Manager not initialized");
         const amountStr = Math.floor(amount * 1000000).toString();
         return await this.safeManager.withdrawUSDC(destination, amountStr);
+    }
+
+    async ensureUsdcAllowance(isNegRisk: boolean): Promise<void> {
+        if (!this.safeManager) throw new Error("Safe Manager not initialized");
+        const EXCHANGE = isNegRisk ? "0xC5d563A36AE78145C45a50134d48A1215220f80a" : "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
+        const allowance = await this.usdcContract!.allowance(this.safeAddress, EXCHANGE);
+        if (allowance < 10000000n) { // JIT threshold: $10
+            this.logger.info(`   + JIT: Granting USDC allowance to exchange...`);
+            await this.safeManager.enableApprovals();
+        }
     }
 
     async ensureOutcomeTokenApproval(isNegRisk: boolean): Promise<void> {

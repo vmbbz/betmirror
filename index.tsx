@@ -1387,6 +1387,7 @@ const [isAddingRecovery, setIsAddingRecovery] = useState(false);
 
 // --- REFS for Audio Logic ---
 const lastTradeIdRef = useRef<string | null>(null); // ADDED
+const lastLogTimestampRef = useRef<number>(0); // Track last log timestamp for failed trades
 
 const [config, setConfig] = useState<AppConfig>({
     targets: [],
@@ -1558,6 +1559,12 @@ useEffect(() => {
             setIsRunning(res.data.isRunning);
             setPollError(false); 
             
+            if (res.data.logs) setLogs(res.data.logs); // Now fetches from DB
+            if (res.data.history) setTradeHistory(res.data.history);
+            if (res.data.stats) setStats(res.data.stats);
+            // Sync Active Positions
+            if (res.data.positions) setActivePositions(res.data.positions);
+
             // FIX: Track latest ID instead of length
             const latestHistory = res.data.history || [];
             if (latestHistory.length > 0) {
@@ -1569,11 +1576,25 @@ useEffect(() => {
                 lastTradeIdRef.current = latestId;
             }
 
-            if (res.data.logs) setLogs(res.data.logs); // Now fetches from DB
-            if (res.data.history) setTradeHistory(res.data.history);
-            if (res.data.stats) setStats(res.data.stats);
-            // Sync Active Positions
-            if (res.data.positions) setActivePositions(res.data.positions);
+            // ALSO check for failed trades in logs
+            if (res.data.logs && config.enableSounds) {
+                const latestLog = res.data.logs[0];
+                if (latestLog) {
+                    const logTimestamp = new Date(latestLog.timestamp).getTime();
+                    // Play error sound for failed trades (check if message contains trade failure indicators)
+                    if (lastLogTimestampRef.current !== 0 && logTimestamp > lastLogTimestampRef.current) {
+                        const message = latestLog.message.toLowerCase();
+                        if (message.includes('insufficient_funds') || 
+                            message.includes('insufficient_balance') || 
+                            message.includes('insufficient_allowance') ||
+                            message.includes('dust_boost_exceeds_balance') ||
+                            message.includes('failed') && message.includes('trade')) {
+                            playSound('error');
+                        }
+                    }
+                    lastLogTimestampRef.current = logTimestamp;
+                }
+            }
 
             // Sync Config from Server ONLY IF RUNNING (Source of Truth)
             // If stopped, local state is king (allows editing without overwrite)

@@ -38,6 +38,19 @@ export class TradeExecutorService {
                 return true;
             }
             else {
+                // Check if this is a resolved market that needs redemption
+                if (result.error?.includes("No orderbook") || result.error?.includes("404")) {
+                    logger.info(`Market resolved. Attempting to redeem...`);
+                    const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                    if (redeemResult.success) {
+                        logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                        return true;
+                    }
+                    else {
+                        logger.error(`Redemption failed: ${redeemResult.error}`);
+                        return false;
+                    }
+                }
                 logger.error(`Exit attempt failed: ${result.error || "Unknown Error"}`);
                 return false;
             }
@@ -57,6 +70,63 @@ export class TradeExecutorService {
             reason
         });
         try {
+            // MARKET VALIDATION - Check if market is still tradeable
+            try {
+                const market = await adapter.getRawClient().getMarket(signal.marketId);
+                if (!market) {
+                    logger.warn(`[Market Not Found] ${signal.marketId} - Skipping`);
+                    return failResult("market_not_found");
+                }
+                if (market.closed) {
+                    logger.warn(`[Market Closed] ${signal.marketId} - Skipping`);
+                    return failResult("market_closed");
+                }
+                if (!market.active || !market.accepting_orders) {
+                    logger.warn(`[Market Inactive] ${signal.marketId} - Skipping`);
+                    return failResult("market_not_accepting_orders");
+                }
+                if (market.archived) {
+                    logger.warn(`[Market Archived] ${signal.marketId} - Skipping`);
+                    return failResult("market_archived");
+                }
+            }
+            catch (e) {
+                if (e.message?.includes("404") || e.message?.includes("No orderbook") || String(e).includes("404")) {
+                    logger.warn(`[Market Resolved] ${signal.marketId} - Attempting to redeem existing position`);
+                    // Try to redeem existing position if market is resolved
+                    try {
+                        const positions = await adapter.getPositions(proxyWallet);
+                        const existingPosition = positions.find(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
+                        if (existingPosition) {
+                            logger.info(`[Auto-Redeem] Found position: ${existingPosition.balance} shares of ${signal.outcome}`);
+                            const redeemResult = await adapter.redeemPosition(signal.marketId, existingPosition.tokenId);
+                            if (redeemResult.success) {
+                                logger.success(`[Auto-Redeem] Successfully redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                                return {
+                                    status: 'FILLED',
+                                    executedAmount: redeemResult.amountUsd || 0,
+                                    executedShares: existingPosition.balance,
+                                    priceFilled: 1.0,
+                                    reason: 'Auto-redeemed resolved market position'
+                                };
+                            }
+                            else {
+                                logger.error(`[Auto-Redeem] Failed: ${redeemResult.error}`);
+                                return failResult("redemption_failed", 'FAILED');
+                            }
+                        }
+                        else {
+                            logger.warn(`[Auto-Redeem] No existing position found for ${signal.marketId}`);
+                            return failResult("orderbook_not_found");
+                        }
+                    }
+                    catch (redeemError) {
+                        logger.error(`[Auto-Redeem] Error during redemption: ${redeemError.message}`);
+                        return failResult("redemption_error", 'FAILED');
+                    }
+                }
+                throw e;
+            }
             if (this.deps.adapter.getLiquidityMetrics) {
                 const metrics = await this.deps.adapter.getLiquidityMetrics(signal.tokenId, signal.side);
                 const minRequired = this.deps.env.minLiquidityFilter || 'LOW';
@@ -90,6 +160,11 @@ export class TradeExecutorService {
                 usableBalanceForTrade = myPosition.valueUsd;
             }
             const traderBalance = await this.getTraderBalance(signal.trader);
+            // Check for insufficient funds BEFORE sizing computation
+            if (signal.side === 'BUY' && usableBalanceForTrade < 1) {
+                const chainBalance = await adapter.fetchBalance(proxyWallet);
+                return failResult(`insufficient_funds (balance: $${chainBalance.toFixed(2)}, pending: $${this.pendingSpend.toFixed(2)}, available: $${usableBalanceForTrade.toFixed(2)})`, "FAILED");
+            }
             let minOrderSize = 5;
             try {
                 const book = await adapter.getOrderBook(signal.tokenId);

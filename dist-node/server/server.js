@@ -900,8 +900,66 @@ app.post('/api/redeem', async (req, res) => {
         if (!engine)
             return res.status(404).json({ error: 'Bot not running' });
         const adapter = engine.getAdapter();
-        // For now, return success - actual redemption implementation would go here
-        res.json({ success: true, message: 'Redemption functionality coming soon' });
+        if (!adapter)
+            return res.status(500).json({ error: 'Adapter not initialized' });
+        // Get the position to find the tokenId and calculate PnL
+        const positions = await adapter.getPositions(adapter.getFunderAddress());
+        const position = positions.find(p => p.marketId === marketId && p.outcome === outcome);
+        if (!position) {
+            return res.status(404).json({ error: 'Position not found' });
+        }
+        // Call the actual redeem method
+        const result = await adapter.redeemPosition(marketId, position.tokenId);
+        if (result.success) {
+            const costBasis = position.investedValue || (position.balance * position.entryPrice);
+            const realizedPnl = (result.amountUsd || 0) - costBasis;
+            const Trade = (await import('../database/index.js')).Trade;
+            const activePositions = engine.getActivePositions();
+            const activePosition = activePositions.find(p => p.marketId === marketId && p.outcome === outcome);
+            if (activePosition?.tradeId && !activePosition.tradeId.startsWith('imported')) {
+                await Trade.findByIdAndUpdate(activePosition.tradeId, {
+                    status: 'CLOSED',
+                    pnl: realizedPnl
+                });
+            }
+            // Remove from active positions
+            const positionIndex = activePositions.findIndex(p => p.marketId === marketId && p.outcome === outcome);
+            if (positionIndex !== -1) {
+                activePositions.splice(positionIndex, 1);
+                const callbacks = engine.getCallbacks();
+                if (callbacks?.onPositionsUpdate) {
+                    await callbacks.onPositionsUpdate(activePositions);
+                }
+            }
+            // Trigger callbacks
+            const callbacks = engine.getCallbacks();
+            if (callbacks?.onTradeComplete && activePosition) {
+                await callbacks.onTradeComplete({
+                    id: crypto.randomUUID(),
+                    timestamp: new Date().toISOString(),
+                    marketId: activePosition.marketId,
+                    outcome: activePosition.outcome,
+                    side: 'SELL',
+                    size: costBasis,
+                    executedSize: result.amountUsd || 0,
+                    price: 1.0,
+                    pnl: realizedPnl,
+                    status: 'CLOSED',
+                    aiReasoning: 'Market Resolved - Redemption',
+                    riskScore: 0
+                });
+            }
+            res.json({
+                success: true,
+                amountUsd: result.amountUsd,
+                realizedPnl: realizedPnl,
+                txHash: result.txHash,
+                message: `Successfully redeemed $${result.amountUsd?.toFixed(2)} USDC (PnL: $${realizedPnl.toFixed(2)})`
+            });
+        }
+        else {
+            res.status(500).json({ error: result.error || 'Redemption failed' });
+        }
     }
     catch (e) {
         res.status(500).json({ error: e.message });

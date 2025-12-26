@@ -167,6 +167,13 @@ async function main() {
         },
         cancelOrder: async () => true,
         cashout: async () => "",
+        redeemPosition: async (marketId, tokenId) => {
+            // Mock implementation for headless mode - not actually supported
+            return {
+                success: false,
+                error: "Redeem position not supported in headless mode"
+            };
+        },
     };
     const notifier = new NotificationService(env, logger);
     const fundManagerConfig = {

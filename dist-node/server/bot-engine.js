@@ -547,4 +547,10 @@ export class BotEngine {
         await this.monitor.start(this.config.startCursor || Math.floor(Date.now() / 1000));
         this.addLog('success', `Engine Active. Monitoring ${this.config.userAddresses.length} targets.`);
     }
+    getActivePositions() {
+        return this.activePositions;
+    }
+    getCallbacks() {
+        return this.callbacks;
+    }
 }

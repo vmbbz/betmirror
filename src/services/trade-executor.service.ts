@@ -74,6 +74,19 @@ export class TradeExecutorService {
               logger.success(`Exit summary: Liquidated ${filled.toFixed(2)} shares @ avg best possible price.`);
               return true;
           } else {
+              // Check if this is a resolved market that needs redemption
+              if (result.error?.includes("No orderbook") || result.error?.includes("404")) {
+                  logger.info(`Market resolved. Attempting to redeem...`);
+                  const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                  if (redeemResult.success) {
+                      logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                      return true;
+                  } else {
+                      logger.error(`Redemption failed: ${redeemResult.error}`);
+                      return false;
+                  }
+              }
+              
               logger.error(`Exit attempt failed: ${result.error || "Unknown Error"}`);
               return false;
           }
@@ -118,8 +131,38 @@ export class TradeExecutorService {
         }
       } catch (e: any) {
         if (e.message?.includes("404") || e.message?.includes("No orderbook") || String(e).includes("404")) {
-          logger.warn(`[Market Unavailable] ${signal.marketId} - Order book doesn't exist`);
-          return failResult("orderbook_not_found");
+          logger.warn(`[Market Resolved] ${signal.marketId} - Attempting to redeem existing position`);
+          
+          // Try to redeem existing position if market is resolved
+          try {
+            const positions = await adapter.getPositions(proxyWallet);
+            const existingPosition = positions.find(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
+            
+            if (existingPosition) {
+              logger.info(`[Auto-Redeem] Found position: ${existingPosition.balance} shares of ${signal.outcome}`);
+              const redeemResult = await adapter.redeemPosition(signal.marketId, existingPosition.tokenId);
+              
+              if (redeemResult.success) {
+                logger.success(`[Auto-Redeem] Successfully redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                return {
+                  status: 'FILLED',
+                  executedAmount: redeemResult.amountUsd || 0,
+                  executedShares: existingPosition.balance,
+                  priceFilled: 1.0,
+                  reason: 'Auto-redeemed resolved market position'
+                };
+              } else {
+                logger.error(`[Auto-Redeem] Failed: ${redeemResult.error}`);
+                return failResult("redemption_failed", 'FAILED');
+              }
+            } else {
+              logger.warn(`[Auto-Redeem] No existing position found for ${signal.marketId}`);
+              return failResult("orderbook_not_found");
+            }
+          } catch (redeemError: any) {
+            logger.error(`[Auto-Redeem] Error during redemption: ${redeemError.message}`);
+            return failResult("redemption_error", 'FAILED');
+          }
         }
         throw e;
       }

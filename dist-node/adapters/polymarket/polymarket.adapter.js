@@ -1,6 +1,6 @@
 import { LiquidityHealth } from '../interfaces.js';
 import { ClobClient, Chain, OrderType, Side } from '@polymarket/clob-client';
-import { JsonRpcProvider, Contract, formatUnits } from 'ethers';
+import { JsonRpcProvider, Contract, formatUnits, Interface } from 'ethers';
 import { EvmWalletService } from '../../services/evm-wallet.service.js';
 import { SafeManagerService } from '../../services/safe-manager.service.js';
 import { User } from '../../database/index.js';
@@ -140,21 +140,31 @@ export class PolymarketAdapter {
     async getOrderBook(tokenId) {
         if (!this.client)
             throw new Error("Not auth");
-        const book = await this.client.getOrderBook(tokenId);
-        // MUST sort and parse - API may return strings in any order
-        const sortedBids = book.bids
-            .map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
-            .sort((a, b) => b.price - a.price); // Highest bid first
-        const sortedAsks = book.asks
-            .map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
-            .sort((a, b) => a.price - b.price); // Lowest ask first
-        return {
-            bids: sortedBids,
-            asks: sortedAsks,
-            min_order_size: Number(book.min_order_size) || 5,
-            tick_size: Number(book.tick_size) || 0.01,
-            neg_risk: book.neg_risk
-        };
+        try {
+            const book = await this.client.getOrderBook(tokenId);
+            // MUST sort and parse - API may return strings in any order
+            const sortedBids = book.bids
+                .map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
+                .sort((a, b) => b.price - a.price); // Highest bid first
+            const sortedAsks = book.asks
+                .map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
+                .sort((a, b) => a.price - b.price); // Lowest ask first
+            return {
+                bids: sortedBids,
+                asks: sortedAsks,
+                min_order_size: Number(book.min_order_size) || 5,
+                tick_size: Number(book.tick_size) || 0.01,
+                neg_risk: book.neg_risk
+            };
+        }
+        catch (e) {
+            if (String(e).includes("404") || String(e).includes("No orderbook")) {
+                // Return empty book for closed markets
+                this.logger.warn(`[OrderBook] Market closed or not found for token ${tokenId.slice(0, 10)}...`);
+                return { bids: [], asks: [], min_order_size: 5, tick_size: 0.01, neg_risk: false };
+            }
+            throw e;
+        }
     }
     /**
      * UPDATED LIQUIDITY MATH:
@@ -368,8 +378,14 @@ export class PolymarketAdapter {
             }
             // 2. Exchange floor for share count is usually 5 shares
             if (params.side === 'BUY' && shares < minOrderSize) {
-                shares = minOrderSize;
-                this.logger.info(`   + Dust Protection: Boosting shares to ${shares} to meet 5-share minimum`);
+                const boostedShares = minOrderSize;
+                const boostedCost = boostedShares * finalPrice;
+                const balance = await this.fetchBalance(this.safeAddress);
+                if (boostedCost > balance) {
+                    return { success: false, error: `DUST_BOOST_EXCEEDS_BALANCE: Need $${boostedCost.toFixed(2)} but only have $${balance.toFixed(2)}`, sharesFilled: 0, priceFilled: 0 };
+                }
+                shares = boostedShares;
+                this.logger.info(`   + Dust Protection: Boosted to ${shares} shares ($${boostedCost.toFixed(2)})`);
             }
             if (shares < minOrderSize) {
                 const errorMsg = `EXCHANGE_LIMIT: Size (${shares.toFixed(2)} shares) is below exchange minimum of ${minOrderSize}.`;
@@ -388,11 +404,16 @@ export class PolymarketAdapter {
             const orderType = side === Side.SELL ? OrderType.FAK : OrderType.GTC;
             const res = await this.client.postOrder(signedOrder, orderType);
             if (res && res.success) {
+                // For FAK, partial fills are possible - use actual filled amount
+                // For GTC, order is "live" not necessarily filled - return requested shares
+                const actualFilled = orderType === OrderType.FAK
+                    ? (parseFloat(res.takingAmount || '0') / 1e6) / finalPrice
+                    : shares; // GTC assumes full placement
                 return {
                     success: true,
                     orderId: res.orderID,
                     txHash: res.transactionHash,
-                    sharesFilled: shares,
+                    sharesFilled: actualFilled,
                     priceFilled: finalPrice
                 };
             }
@@ -404,7 +425,26 @@ export class PolymarketAdapter {
                 this.initClobClient(this.config.l2ApiCredentials);
                 return this.createOrder(params, retryCount + 1);
             }
-            return { success: false, error: error.message || "Unknown Error", sharesFilled: 0, priceFilled: 0 };
+            // Improve error messaging for balance vs allowance issues
+            let errorMessage = error.message || "Unknown Error";
+            if (errorMessage.includes("not enough balance / allowance")) {
+                // Check if it's specifically an allowance issue by checking current allowance
+                try {
+                    const market = await this.client.getMarket(params.marketId);
+                    const allowance = await this.checkUsdcAllowance(market.neg_risk);
+                    const balance = await this.fetchBalance(this.safeAddress);
+                    if (allowance < (params.sizeUsd || 0)) {
+                        errorMessage = `INSUFFICIENT_ALLOWANCE (allowance: $${allowance.toFixed(2)}, needed: $${params.sizeUsd?.toFixed(2) || '0'}) - Please approve allowance`;
+                    }
+                    else {
+                        errorMessage = `INSUFFICIENT_BALANCE (balance: $${balance.toFixed(2)}, needed: $${params.sizeUsd?.toFixed(2) || '0'})`;
+                    }
+                }
+                catch (e) {
+                    errorMessage = "BALANCE_OR_ALLOWANCE_ISSUE - Check wallet balance and token allowance";
+                }
+            }
+            return { success: false, error: errorMessage, sharesFilled: 0, priceFilled: 0 };
         }
     }
     async cancelOrder(orderId) {
@@ -436,7 +476,7 @@ export class PolymarketAdapter {
         return await this.safeManager.withdrawUSDC(destination, amountStr);
     }
     async ensureUsdcAllowance(isNegRisk, tradeAmountUsd = 0) {
-        if (!this.safeManager)
+        if (!this.safeManager || !this.safeAddress)
             throw new Error("Safe Manager not initialized");
         const EXCHANGE = isNegRisk ? "0xC5d563A36AE78145C45a50134d48A1215220f80a" : "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
         const allowance = await this.usdcContract.allowance(this.safeAddress, EXCHANGE);
@@ -449,6 +489,13 @@ export class PolymarketAdapter {
             this.logger.info(`   + Waiting for CLOB indexing grace period (5s)...`);
             await new Promise(r => setTimeout(r, 5000));
         }
+    }
+    async checkUsdcAllowance(isNegRisk = false) {
+        if (!this.safeManager)
+            throw new Error("Safe Manager not initialized");
+        const EXCHANGE = isNegRisk ? "0xC5d563A36AE78145C45a50134d48A1215220f80a" : "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
+        const allowance = await this.usdcContract.allowance(this.safeAddress, EXCHANGE);
+        return Number(allowance) / 1000000; // Convert from wei to USDC
     }
     async ensureOutcomeTokenApproval(isNegRisk) {
         if (!this.safeManager)
@@ -480,5 +527,45 @@ export class PolymarketAdapter {
     }
     getSigner() {
         return this.wallet;
+    }
+    async redeemPosition(marketId, tokenId) {
+        if (!this.safeManager || !this.safeAddress) {
+            return { success: false, error: "Adapter not initialized" };
+        }
+        const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
+        const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC.e on Polygon
+        try {
+            const balanceBefore = await this.fetchBalance(this.safeAddress);
+            const redeemTx = {
+                to: CTF_ADDRESS,
+                data: this.encodeRedeemPositions(USDC_ADDRESS, "0x0000000000000000000000000000000000000000000000000000000000000000", marketId, [1, 2]),
+                value: "0"
+            };
+            this.logger.info(`Submitting redeem tx for condition ${marketId.slice(0, 10)}...`);
+            const txHash = await this.safeManager.executeTransaction(redeemTx);
+            await new Promise(r => setTimeout(r, 5000));
+            const balanceAfter = await this.fetchBalance(this.safeAddress);
+            const amountRedeemed = balanceAfter - balanceBefore;
+            this.logger.success(`Redeem complete. Received: $${amountRedeemed.toFixed(2)} USDC`);
+            return {
+                success: true,
+                amountUsd: amountRedeemed,
+                txHash
+            };
+        }
+        catch (e) {
+            return { success: false, error: e.message };
+        }
+    }
+    encodeRedeemPositions(collateralToken, parentCollectionId, conditionId, indexSets) {
+        const iface = new Interface([
+            "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)"
+        ]);
+        return iface.encodeFunctionData("redeemPositions", [
+            collateralToken,
+            parentCollectionId,
+            conditionId,
+            indexSets
+        ]);
     }
 }

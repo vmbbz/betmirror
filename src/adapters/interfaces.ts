@@ -58,6 +58,9 @@ export interface IExchangeAdapter {
     getOrderBook(tokenId: string): Promise<OrderBook>;
     getPositions(address: string): Promise<PositionData[]>; 
     
+    // Redeem Winnings
+    redeemPosition(marketId: string, tokenId: string): Promise<{ success: boolean; amountUsd?: number; txHash?: string; error?: string }>;
+
     // Liquidity Analysis
     getLiquidityMetrics?(tokenId: string, side: 'BUY' | 'SELL'): Promise<LiquidityMetrics>;
 

@@ -403,4 +403,20 @@ export class SafeManagerService {
             throw e;
         }
     }
+    async executeTransaction(tx) {
+        const safeTx = {
+            to: tx.to,
+            value: tx.value,
+            data: tx.data,
+            operation: OperationType.Call
+        };
+        try {
+            const task = await this.relayClient.execute([safeTx]);
+            const result = await task.wait();
+            return result.transactionHash || "0x...";
+        }
+        catch (e) {
+            throw e;
+        }
+    }
 }

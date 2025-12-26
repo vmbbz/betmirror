@@ -454,8 +454,15 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
             // 2. Exchange floor for share count is usually 5 shares
             if (params.side === 'BUY' && shares < minOrderSize) {
-                shares = minOrderSize;
-                this.logger.info(`   + Dust Protection: Boosting shares to ${shares} to meet 5-share minimum`);
+                const boostedShares = minOrderSize;
+                const boostedCost = boostedShares * finalPrice;
+                const balance = await this.fetchBalance(this.safeAddress!);
+                
+                if (boostedCost > balance) {
+                    return { success: false, error: `DUST_BOOST_EXCEEDS_BALANCE: Need $${boostedCost.toFixed(2)} but only have $${balance.toFixed(2)}`, sharesFilled: 0, priceFilled: 0 };
+                }
+                shares = boostedShares;
+                this.logger.info(`   + Dust Protection: Boosted to ${shares} shares ($${boostedCost.toFixed(2)})`);
             }
 
             if (shares < minOrderSize) {
@@ -479,11 +486,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
             const res = await this.client.postOrder(signedOrder, orderType);
 
             if (res && res.success) {
+                // For FAK, partial fills are possible - use actual filled amount
+                // For GTC, order is "live" not necessarily filled - return requested shares
+                const actualFilled = orderType === OrderType.FAK 
+                    ? (parseFloat(res.takingAmount || '0') / 1e6) / finalPrice
+                    : shares; // GTC assumes full placement
+                
                 return { 
                     success: true, 
                     orderId: res.orderID, 
                     txHash: res.transactionHash, 
-                    sharesFilled: shares, 
+                    sharesFilled: actualFilled, 
                     priceFilled: finalPrice 
                 };
             }
@@ -541,8 +554,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
         return await this.safeManager.withdrawUSDC(destination, amountStr);
     }
 
-        async ensureUsdcAllowance(isNegRisk: boolean, tradeAmountUsd: number = 0): Promise<void> {
-        if (!this.safeManager) throw new Error("Safe Manager not initialized");
+    async ensureUsdcAllowance(isNegRisk: boolean, tradeAmountUsd: number = 0): Promise<void> {
+        if (!this.safeManager || !this.safeAddress) throw new Error("Safe Manager not initialized");
         const EXCHANGE = isNegRisk ? "0xC5d563A36AE78145C45a50134d48A1215220f80a" : "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
         
         const allowance = await this.usdcContract!.allowance(this.safeAddress, EXCHANGE);

@@ -10,9 +10,9 @@ TrendingUp, History, Copy, ExternalLink, AlertTriangle, Smartphone, Coins, PlusC
 CheckCircle2, ArrowDownCircle, ArrowUpCircle, Brain, AlertCircle, Trophy, Globe, Zap, LogOut,
 Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLeft, LifeBuoy,
 Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
-Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle, AreaChart,
+Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle,
 Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown, Sliders, Bell, ShieldAlert,
-Wrench, Fingerprint, ShieldCheck
+Wrench, Fingerprint, ShieldCheck, Clock
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_BRIDGED_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -20,6 +20,7 @@ import { TradeHistoryEntry, ActivePosition } from './src/domain/trade.types';
 import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/alpha.types';
 import { UserStats } from './src/domain/user.types';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
 // Constants & Assets
 const CHAIN_ICONS: Record<number, string> = {
@@ -38,6 +39,118 @@ const CHAIN_NAMES: Record<number, string> = {
     42161: "Arbitrum One",
     56: "BNB Chain",
     1151111081099710: "Solana"
+};
+
+// --- Performance Chart Component ---
+const PerformanceChart = ({ userId, selectedRange }: { 
+    userId: string;
+    selectedRange: '1W' | '30D' | 'ALL';
+}) => {
+    const [portfolioData, setPortfolioData] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchPortfolioData = async () => {
+            if (!userId) return;
+            
+            try {
+                setLoading(true);
+                const response = await axios.get(`/api/portfolio/snapshots/${userId}?period=${selectedRange}`);
+                setPortfolioData(response.data);
+            } catch (error: any) {
+                console.error('Failed to fetch portfolio data:', error);
+                setPortfolioData([]);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchPortfolioData();
+    }, [userId, selectedRange]);
+
+    if (loading) {
+        return (
+            <div className="h-32 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-500 mx-auto mb-2"></div>
+                    <p className="text-xs">Loading...</p>
+                </div>
+            </div>
+        );
+    }
+
+    if (portfolioData.length === 0) {
+        return (
+            <div className="h-32 flex items-center justify-center text-gray-400 dark:text-gray-600">
+                <div className="text-center">
+                    <TrendingUp size={24} className="opacity-50" />
+                    <p className="text-xs mt-2">No performance data yet</p>
+                </div>
+            </div>
+        );
+    }
+
+    // Transform data for chart
+    const chartData = portfolioData.map(snapshot => ({
+        timestamp: new Date(snapshot.timestamp).getTime(),
+        date: new Date(snapshot.timestamp).toLocaleDateString(),
+        portfolioValue: snapshot.totalValue,
+        cash: snapshot.cashBalance,
+        positionsValue: snapshot.positionsValue,
+        pnl: snapshot.totalPnL,
+        pnlPercent: snapshot.totalPnLPercent,
+        trades: snapshot.positionsCount
+    }));
+
+    return (
+        <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                    <defs>
+                        <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
+                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.1}/>
+                        </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.1} />
+                    <XAxis 
+                        dataKey="date" 
+                        tick={{ fontSize: 10, fill: '#6b7280' }}
+                        axisLine={{ stroke: '#374151', opacity: 0.2 }}
+                    />
+                    <YAxis 
+                        tick={{ fontSize: 10, fill: '#6b7280' }}
+                        axisLine={{ stroke: '#374151', opacity: 0.2 }}
+                        tickFormatter={(value) => `$${value}`}
+                    />
+                    <RechartsTooltip 
+                        contentStyle={{ 
+                            backgroundColor: '#1f2937', 
+                            border: '1px solid #374151',
+                            borderRadius: '8px',
+                            fontSize: '12px'
+                        }}
+                        labelStyle={{ color: '#f3f4f6' }}
+                        formatter={(value: number | undefined, name: string | undefined) => [
+                            `$${(value || 0).toFixed(2)}`, 
+                            name === 'portfolioValue' ? 'Portfolio' : 
+                            name === 'pnl' ? 'P&L' : 
+                            name === 'cash' ? 'Cash' : 
+                            name === 'positionsValue' ? 'Positions' : value
+                        ]}
+                        labelFormatter={(label: string) => `Date: ${label}`}
+                    />
+                    <Area 
+                        type="monotone" 
+                        dataKey="portfolioValue" 
+                        stroke="#3b82f6"
+                        fill="url(#colorPortfolio)"
+                        strokeWidth={2}
+                    />
+                </AreaChart>
+            </ResponsiveContainer>
+        </div>
+    );
 };
 
 // --- Types ---
@@ -566,9 +679,71 @@ const OrderManagementModal = ({
     onClose: () => void; 
     position: ActivePosition | null;
     orders: any[];
+ 
     onCancelOrder: (orderId: string) => void;
     onRedeemWinnings: (position: ActivePosition) => void;
 }) => {
+    const [marketResolution, setMarketResolution] = useState<{
+        resolved: boolean;
+        winningOutcome?: string;
+        userWon?: boolean;
+        loading: boolean;
+    }>({ resolved: false, loading: true });
+
+    // Check market resolution when modal opens
+    useEffect(() => {
+        if (!isOpen || !position) {
+            setMarketResolution({ resolved: false, loading: false });
+            return;
+        }
+
+        const checkResolution = async () => {
+            try {
+                setMarketResolution({ resolved: false, loading: true });
+                
+                // Fetch market data to check resolution
+                const response = await axios.get(`/api/market/${position.marketId}`);
+                const market = response.data;
+                
+                if (market) {
+                    const isResolved = market.closed || !market.active || !market.accepting_orders || market.archived;
+                    let winningOutcome: string | undefined;
+                    let userWon = false;
+
+                    if (market.tokens && Array.isArray(market.tokens)) {
+                        const winningToken = market.tokens.find((token: any) => token.winner === true);
+                        
+                        if (winningToken) {
+                            winningOutcome = winningToken.outcome;
+                            userWon = winningOutcome ? 
+                                (winningOutcome.toLowerCase() === position.outcome.toLowerCase() ||
+                                 (position.outcome === 'YES' && winningOutcome.includes('YES')) ||
+                                 (position.outcome === 'NO' && winningOutcome.includes('NO'))) : false;
+                        }
+                    }
+
+                    setMarketResolution({ 
+                        resolved: isResolved, 
+                        winningOutcome, 
+                        userWon, 
+                        loading: false 
+                    });
+                } else {
+                    setMarketResolution({ resolved: false, loading: false });
+                }
+            } catch (e: any) {
+                // If we get a 404, market is likely resolved
+                if (String(e).includes("404") || String(e).includes("Not Found")) {
+                    setMarketResolution({ resolved: true, loading: false });
+                } else {
+                    setMarketResolution({ resolved: false, loading: false });
+                }
+            }
+        };
+
+        checkResolution();
+    }, [isOpen, position]);
+
     if (!isOpen || !position) return null;
 
     return (
@@ -666,24 +841,82 @@ const OrderManagementModal = ({
                         )}
                     </div>
 
-                    {/* Redemption Section (for resolved markets) */}
+                    {/* Market Resolution Section */}
                     <div className="border-t border-gray-200 dark:border-white/10 pt-6">
                         <h4 className="font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                             <Trophy size={16} className="text-yellow-500"/>
                             Market Resolution
                         </h4>
-                        <div className="bg-yellow-50 dark:bg-yellow-900/10 rounded-lg p-4 border border-yellow-200 dark:border-yellow-900/30">
-                            <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">
-                                If this market has resolved in your favor, you can redeem your winnings here.
-                            </p>
-                            <button 
-                                onClick={() => onRedeemWinnings(position)}
-                                className="w-full px-4 py-3 bg-yellow-500 hover:bg-yellow-600 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
-                            >
-                                <Trophy size={16}/>
-                                Redeem Winnings
-                            </button>
-                        </div>
+                        
+                        {marketResolution.loading ? (
+                            <div className="flex items-center justify-center py-6 text-gray-400">
+                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-500 mr-3"></div>
+                                <span className="text-sm">Checking market resolution...</span>
+                            </div>
+                        ) : marketResolution.resolved ? (
+                            <div className={`rounded-lg p-4 border ${
+                                marketResolution.userWon 
+                                    ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-900/30' 
+                                    : 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-900/30'
+                            }`}>
+                                <div className="flex items-start gap-3">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                                        marketResolution.userWon 
+                                            ? 'bg-green-500 text-white' 
+                                            : 'bg-red-500 text-white'
+                                    }`}>
+                                        {marketResolution.userWon ? <Trophy size={16}/> : <X size={16}/>}
+                                    </div>
+                                    <div className="flex-1">
+                                        <h5 className={`font-bold text-sm mb-2 ${
+                                            marketResolution.userWon 
+                                            ? 'text-green-800 dark:text-green-400' 
+                                            : 'text-red-600 dark:text-red-400'
+                                        }`}>
+                                            {marketResolution.userWon 
+                                                ? `You Won!` : `Market Resolved - You Did Not Win`}
+                                        </h5>
+                                        <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1">
+                                            <p>
+                                                <span className="font-medium">Winning outcome:</span> {marketResolution.winningOutcome || 'Unknown'}
+                                            </p>
+                                            <p>
+                                                <span className="font-medium">Your position:</span> {position.outcome}
+                                            </p>
+                                            {marketResolution.userWon ? (
+                                                <p className="text-green-700 dark:text-green-300 font-medium">
+                                                    Congratulations! You can redeem your winnings below.
+                                                </p>
+                                            ) : (
+                                                <p className="text-red-700 dark:text-red-300">
+                                                    This position has expired worthless. No redemption possible.
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {marketResolution.userWon && (
+                                    <button 
+                                        onClick={() => onRedeemWinnings(position)}
+                                        className="w-full mt-4 px-4 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <Trophy size={16}/>
+                                        Redeem Winnings
+                                    </button>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="bg-gray-50 dark:bg-white/5 rounded-lg p-4 border border-gray-200 dark:border-white/10">
+                                <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                                    <Clock size={16} className="text-gray-400"/>
+                                    <div>
+                                        <p className="text-sm font-medium">Market Still Active</p>
+                                        <p className="text-xs mt-1">This market has not resolved yet. Check back later.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1337,6 +1570,7 @@ const [registry, setRegistry] = useState<TraderProfile[]>([]);
 const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
 const [bridgeHistory, setBridgeHistory] = useState<BridgeTransactionRecord[]>([]);
 const [theme, setTheme] = useState<'light' | 'dark'>('light');
+const [performanceRange, setPerformanceRange] = useState<'1W' | '30D' | 'ALL'>('ALL');
 const [systemView, setSystemView] = useState<'attribution' | 'global'>('attribution');
 // -- MOBILE MENU STATE --
 const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -2577,7 +2811,7 @@ return (
                             </div>
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-2 gap-4 mb-4">
                             <div>
                                 <div className="text-[10px] text-gray-500">Total PnL</div>
                                 <div className={`text-xl font-mono font-bold ${stats?.totalPnl && stats.totalPnl >= 0 ? 'text-green-600 dark:text-terminal-success' : 'text-red-600 dark:text-terminal-danger'}`}>
@@ -2588,14 +2822,32 @@ return (
                                 <div className="text-[10px] text-gray-500">Volume</div>
                                 <div className="text-xl font-mono font-bold text-gray-900 dark:text-white">${stats?.totalVolume?.toFixed(0) || '0'}</div>
                             </div>
-                            <div className="flex justify-between text-xs p-2 bg-gray-50 dark:bg-white/5 rounded border border-gray-200 dark:border-white/5">
-                                <span className="text-gray-500 dark:text-gray-400">Multiplier</span>
-                                <span className="font-mono text-gray-900 dark:text-white">x{config.multiplier}</span>
+                        </div>
+                        
+                        {/* Performance Chart */}
+                        <div className="border-t border-gray-200 dark:border-white/5 pt-4">
+                            <div className="flex justify-between items-center mb-2">
+                                <div className="text-[10px] text-gray-500">Performance Overview</div>
+                                <div className="flex gap-1">
+                                    {(['1W', '30D', 'ALL'] as const).map(range => (
+                                        <button
+                                            key={range}
+                                            onClick={() => setPerformanceRange(range)}
+                                            className={`px-2 py-1 text-[9px] font-bold rounded transition-colors ${
+                                                performanceRange === range 
+                                                    ? 'bg-blue-500 text-white' 
+                                                    : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                            }`}
+                                        >
+                                            {range}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
-                            <div className="flex justify-between text-xs p-2 bg-gray-50 dark:bg-white/5 rounded border border-gray-200 dark:border-white/5">
-                                <span className="text-gray-500 dark:text-gray-400">Targets</span>
-                                <span className="font-mono text-gray-900 dark:text-white">{config.targets.length}</span>
-                            </div>
+                            <PerformanceChart 
+                                userId={userAddress}
+                                selectedRange={performanceRange}
+                            />
                         </div>
                     </div>
                     {/* Strategy Preview */}

@@ -9,6 +9,7 @@ import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning } from '../database/index.js';
+import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
@@ -1108,6 +1109,111 @@ async function seedRegistry() {
     
     await registryAnalytics.updateAllRegistryStats();
 }
+
+// --- MARKET DATA ENDPOINTS ---
+app.get('/api/market/:marketId', async (req: any, res: any) => {
+    const { marketId } = req.params;
+    
+    try {
+        // Find a running bot to get the market data
+        const engines = Array.from(ACTIVE_BOTS.values());
+        if (engines.length === 0) {
+            return res.status(404).json({ error: 'No active bot found' });
+        }
+        
+        const engine = engines[0];
+        const adapter = engine.getAdapter();
+        if (!adapter) {
+            return res.status(404).json({ error: 'No adapter found' });
+        }
+        
+        const client = (adapter as any).getRawClient?.();
+        if (!client) {
+            return res.status(404).json({ error: 'No client found' });
+        }
+        
+        const market = await client.getMarket(marketId);
+        if (!market) {
+            return res.status(404).json({ error: 'Market not found' });
+        }
+        
+        res.json(market);
+    } catch (e: any) {
+        serverLogger.error(`Market data error: ${e.message}`);
+        if (String(e).includes("404") || String(e).includes("Not Found")) {
+            res.status(404).json({ error: 'Market not found or resolved' });
+        } else {
+            res.status(500).json({ error: e.message });
+        }
+    }
+});
+
+// --- PORTFOLIO ANALYTICS ENDPOINTS ---
+app.get('/api/portfolio/snapshots/:userId', async (req: any, res: any) => {
+    const { userId } = req.params;
+    const { period = 'ALL' } = req.query;
+    const normId = userId.toLowerCase();
+    
+    try {
+        const now = new Date();
+        let startDate: Date;
+        
+        switch (period) {
+            case '1D':
+                startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                break;
+            case '1W':
+                startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                break;
+            case '30D':
+                startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                break;
+            case 'ALL':
+            default:
+                startDate = new Date(0);
+                break;
+        }
+        
+        const snapshots = await PortfolioSnapshotModel.find({
+            userId: normId,
+            timestamp: { $gte: startDate }
+        }).sort({ timestamp: 1 });
+        
+        res.json(snapshots);
+    } catch (e: any) {
+        serverLogger.error(`Portfolio snapshots error: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/portfolio/analytics/:userId', async (req: any, res: any) => {
+    const { userId } = req.params;
+    const { period = 'ALL' } = req.query;
+    const normId = userId.toLowerCase();
+    
+    try {
+        const analytics = await PortfolioSnapshotModel.getAnalytics(normId, period as '1D' | '1W' | '30D' | 'ALL');
+        res.json(analytics);
+    } catch (e: any) {
+        serverLogger.error(`Portfolio analytics error: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/portfolio/latest/:userId', async (req: any, res: any) => {
+    const { userId } = req.params;
+    const normId = userId.toLowerCase();
+    
+    try {
+        const snapshot = await PortfolioSnapshotModel
+            .findOne({ userId: normId })
+            .sort({ timestamp: -1 });
+        res.json(snapshot);
+    } catch (e: any) {
+        serverLogger.error(`Portfolio latest error: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // --- BOOTSTRAP ---
 const server = app.listen(Number(PORT), '0.0.0.0', () => {

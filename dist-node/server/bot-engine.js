@@ -3,6 +3,7 @@ import { TradeExecutorService } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
 import { NotificationService } from '../services/notification.service.js';
 import { FundManagerService } from '../services/fund-manager.service.js';
+import { PortfolioService } from '../services/portfolio.service.js';
 import { BotLog, Trade } from '../database/index.js';
 import { PolymarketAdapter } from '../adapters/polymarket/polymarket.adapter.js';
 import { FeeDistributorService } from '../services/fee-distributor.service.js';
@@ -17,6 +18,7 @@ export class BotEngine {
     monitor;
     executor;
     exchange;
+    portfolioService;
     runtimeEnv;
     fundWatcher;
     activePositions = [];
@@ -85,6 +87,57 @@ export class BotEngine {
             this.config.autoCashout = newConfig.autoCashout;
         }
     }
+    async updateMarketState(position) {
+        if (!this.exchange)
+            return;
+        try {
+            // Try to get market info from Polymarket API
+            const client = this.exchange.getRawClient?.();
+            if (client) {
+                const market = await client.getMarket(position.marketId);
+                if (market) {
+                    // Update market state based on market data
+                    position.marketClosed = market.closed || false;
+                    position.marketActive = market.active || false;
+                    position.marketAcceptingOrders = market.accepting_orders || false;
+                    position.marketArchived = market.archived || false;
+                    // Determine overall market state
+                    if (market.closed) {
+                        position.marketState = 'CLOSED';
+                    }
+                    else if (market.archived) {
+                        position.marketState = 'ARCHIVED';
+                    }
+                    else if (!market.active || !market.accepting_orders) {
+                        position.marketState = 'RESOLVED'; // Likely resolved if not accepting orders
+                    }
+                    else {
+                        position.marketState = 'ACTIVE';
+                    }
+                }
+                else {
+                    // If market not found, it's likely resolved/archived
+                    position.marketState = 'RESOLVED';
+                    position.marketClosed = true;
+                    position.marketActive = false;
+                    position.marketAcceptingOrders = false;
+                }
+            }
+        }
+        catch (e) {
+            // If we get a 404 or similar error, market is likely resolved
+            if (String(e).includes("404") || String(e).includes("Not Found")) {
+                position.marketState = 'RESOLVED';
+                position.marketClosed = true;
+                position.marketActive = false;
+                position.marketAcceptingOrders = false;
+            }
+            else {
+                // For other errors, keep as ACTIVE but log
+                this.addLog('warn', `Failed to check market state for ${position.marketId}: ${e.message}`);
+            }
+        }
+    }
     async syncPositions(forceChainSync = false) {
         if (!this.exchange)
             return;
@@ -133,8 +186,16 @@ export class BotEngine {
                             question: question,
                             image: image,
                             marketSlug: marketSlug,
-                            eventSlug: eventSlug
+                            eventSlug: eventSlug,
+                            // Add market state tracking
+                            marketState: 'ACTIVE',
+                            marketAcceptingOrders: true,
+                            marketActive: true,
+                            marketClosed: false,
+                            marketArchived: false
                         });
+                        // Check market state for each position
+                        await this.updateMarketState(enrichedPositions[enrichedPositions.length - 1]);
                     }
                     this.activePositions = enrichedPositions;
                 }
@@ -295,6 +356,8 @@ export class BotEngine {
         this.isRunning = false;
         if (this.monitor)
             this.monitor.stop();
+        if (this.portfolioService)
+            this.portfolioService.stopSnapshotService();
         if (this.fundWatcher) {
             clearInterval(this.fundWatcher);
             this.fundWatcher = undefined;
@@ -346,6 +409,18 @@ export class BotEngine {
             if (!this.exchange)
                 return;
             await this.exchange.authenticate();
+            // Initialize portfolio service
+            this.portfolioService = new PortfolioService(logger);
+            this.portfolioService.startSnapshotService(this.config.userId, async () => {
+                const totalValue = this.stats.portfolioValue || 0;
+                const cashBalance = this.stats.cashBalance || 0;
+                return {
+                    totalValue,
+                    cashBalance,
+                    positions: this.activePositions,
+                    totalPnL: this.stats.totalPnl || 0
+                };
+            });
             this.startServices(logger);
             await this.syncPositions(true);
             await this.syncStats();

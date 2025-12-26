@@ -3,6 +3,7 @@ import { TradeExecutorService, ExecutionResult } from '../services/trade-executo
 import { aiAgent } from '../services/ai-agent.service.js';
 import { NotificationService } from '../services/notification.service.js';
 import { FundManagerService } from '../services/fund-manager.service.js';
+import { PortfolioService } from '../services/portfolio.service.js';
 import { TradeHistoryEntry, ActivePosition, TradeSignal } from '../domain/trade.types.js';
 import { CashoutRecord, FeeDistributionEvent, IRegistryService } from '../domain/alpha.types.js';
 import { UserStats } from '../domain/user.types.js';
@@ -53,6 +54,7 @@ export class BotEngine {
     private monitor?: TradeMonitorService;
     private executor?: TradeExecutorService;
     private exchange?: PolymarketAdapter;
+    private portfolioService?: PortfolioService;
     private runtimeEnv: any;
     
     private fundWatcher?: NodeJS.Timeout;
@@ -416,6 +418,7 @@ export class BotEngine {
     public stop() {
         this.isRunning = false;
         if (this.monitor) this.monitor.stop();
+        if (this.portfolioService) this.portfolioService.stopSnapshotService();
         if (this.fundWatcher) {
             clearInterval(this.fundWatcher);
             this.fundWatcher = undefined;
@@ -462,6 +465,23 @@ export class BotEngine {
         try {
             if(!this.exchange) return;
             await this.exchange.authenticate();
+            
+            // Initialize portfolio service
+            this.portfolioService = new PortfolioService(logger);
+            this.portfolioService.startSnapshotService(
+                this.config.userId,
+                async () => {
+                    const totalValue = this.stats.portfolioValue || 0;
+                    const cashBalance = this.stats.cashBalance || 0;
+                    return {
+                        totalValue,
+                        cashBalance,
+                        positions: this.activePositions,
+                        totalPnL: this.stats.totalPnl || 0
+                    };
+                }
+            );
+            
             this.startServices(logger);
             await this.syncPositions(true); 
             await this.syncStats();

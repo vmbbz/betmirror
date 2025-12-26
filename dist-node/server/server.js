@@ -7,6 +7,7 @@ import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning } from '../database/index.js';
+import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
@@ -1078,6 +1079,67 @@ async function seedRegistry() {
     }
     await registryAnalytics.updateAllRegistryStats();
 }
+// --- PORTFOLIO ANALYTICS ENDPOINTS ---
+app.get('/api/portfolio/snapshots/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const { period = 'ALL' } = req.query;
+    const normId = userId.toLowerCase();
+    try {
+        const now = new Date();
+        let startDate;
+        switch (period) {
+            case '1D':
+                startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                break;
+            case '1W':
+                startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                break;
+            case '30D':
+                startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                break;
+            case 'ALL':
+            default:
+                startDate = new Date(0);
+                break;
+        }
+        const snapshots = await PortfolioSnapshotModel.find({
+            userId: normId,
+            timestamp: { $gte: startDate }
+        }).sort({ timestamp: 1 });
+        res.json(snapshots);
+    }
+    catch (e) {
+        serverLogger.error(`Portfolio snapshots error: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+app.get('/api/portfolio/analytics/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const { period = 'ALL' } = req.query;
+    const normId = userId.toLowerCase();
+    try {
+        const analytics = await PortfolioSnapshotModel.getAnalytics(normId, period);
+        res.json(analytics);
+    }
+    catch (e) {
+        serverLogger.error(`Portfolio analytics error: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+app.get('/api/portfolio/latest/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const normId = userId.toLowerCase();
+    try {
+        const snapshot = await PortfolioSnapshotModel
+            .findOne({ userId: normId })
+            .sort({ timestamp: -1 });
+        res.json(snapshot);
+    }
+    catch (e) {
+        serverLogger.error(`Portfolio latest error: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
 // --- BOOTSTRAP ---
 const server = app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`🌍 Bet Mirror Server running on port ${PORT}`);

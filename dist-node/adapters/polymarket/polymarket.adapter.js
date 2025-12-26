@@ -175,6 +175,10 @@ export class PolymarketAdapter {
         if (!this.client)
             throw new Error("Not auth");
         const book = await this.client.getOrderBook(tokenId);
+        // Check if market is resolved (empty order book)
+        if (book.bids.length === 0 && book.asks.length === 0) {
+            throw new Error("No orderbook exists for the requested token id");
+        }
         // Force sort to ensure best prices are at index 0
         const sortedBids = [...book.bids]
             .map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))

@@ -1,0 +1,192 @@
+import mongoose from 'mongoose';
+import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
+import { PortfolioSnapshot, PortfolioAnalytics } from '../domain/portfolio.types.js';
+import { ActivePosition } from '../domain/trade.types.js';
+import { Logger } from '../utils/logger.util.js';
+
+export class PortfolioService {
+  private logger: Logger;
+  private snapshotInterval: NodeJS.Timeout | null = null;
+  private readonly SNAPSHOT_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  // Start regular portfolio snapshots
+  startSnapshotService(userId: string, getPortfolioData: () => Promise<{
+    totalValue: number;
+    cashBalance: number;
+    positions: ActivePosition[];
+    totalPnL: number;
+  }>) {
+    // Stop existing interval if any
+    this.stopSnapshotService();
+
+    // Create initial snapshot
+    this.createSnapshot(userId, getPortfolioData);
+
+    // Set up regular snapshots
+    this.snapshotInterval = setInterval(async () => {
+      try {
+        await this.createSnapshot(userId, getPortfolioData);
+        this.logger.info(`[Portfolio] Snapshot created for ${userId}`);
+      } catch (error: any) {
+        this.logger.error(`[Portfolio] Failed to create snapshot: ${error.message}`);
+      }
+    }, this.SNAPSHOT_INTERVAL);
+
+    this.logger.info(`[Portfolio] Snapshot service started (every 6 hours)`);
+  }
+
+  // Stop regular snapshots
+  stopSnapshotService() {
+    if (this.snapshotInterval) {
+      clearInterval(this.snapshotInterval);
+      this.snapshotInterval = null;
+      this.logger.info(`[Portfolio] Snapshot service stopped`);
+    }
+  }
+
+  // Create a portfolio snapshot
+  async createSnapshot(
+    userId: string,
+    getPortfolioData: () => Promise<{
+      totalValue: number;
+      cashBalance: number;
+      positions: ActivePosition[];
+      totalPnL: number;
+    }>
+  ): Promise<void> {
+    try {
+      const portfolioData = await getPortfolioData();
+      
+      // Calculate positions breakdown
+      const positionsBreakdown = portfolioData.positions.map(pos => ({
+        marketId: pos.marketId,
+        outcome: pos.outcome,
+        shares: pos.shares,
+        entryPrice: pos.entryPrice,
+        currentPrice: pos.currentPrice || pos.entryPrice,
+        value: pos.shares * (pos.currentPrice || pos.entryPrice),
+        pnl: pos.unrealizedPnL || 0
+      }));
+
+      // Calculate starting value for P&L percentage
+      const investedValue = portfolioData.positions.reduce((sum, pos) => 
+        sum + (pos.shares * pos.entryPrice), 0
+      );
+      const totalPnLPercent = investedValue > 0 ? (portfolioData.totalPnL / investedValue) * 100 : 0;
+
+      await PortfolioSnapshotModel.createSnapshot(
+        userId,
+        portfolioData.totalValue,
+        portfolioData.cashBalance,
+        portfolioData.positions.reduce((sum, pos) => 
+          sum + (pos.shares * (pos.currentPrice || pos.entryPrice)), 0
+        ),
+        portfolioData.positions.length,
+        portfolioData.totalPnL,
+        totalPnLPercent,
+        positionsBreakdown
+      );
+
+      this.logger.debug(`[Portfolio] Snapshot created: $${portfolioData.totalValue.toFixed(2)}`);
+    } catch (error: any) {
+      this.logger.error(`[Portfolio] Failed to create snapshot: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Get portfolio analytics for a specific period
+  async getAnalytics(userId: string, period: '1D' | '1W' | '30D' | 'ALL'): Promise<PortfolioAnalytics | null> {
+    try {
+      const analytics = await PortfolioSnapshotModel.getAnalytics(userId, period);
+      return analytics;
+    } catch (error: any) {
+      this.logger.error(`[Portfolio] Failed to get analytics: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Get raw snapshots for chart rendering
+  async getSnapshots(
+    userId: string, 
+    period: '1D' | '1W' | '30D' | 'ALL'
+  ): Promise<PortfolioSnapshot[]> {
+    try {
+      const now = new Date();
+      let startDate: Date;
+      
+      switch (period) {
+        case '1D':
+          startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          break;
+        case '1W':
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case '30D':
+          startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          break;
+        case 'ALL':
+        default:
+          startDate = new Date(0);
+          break;
+      }
+      
+      const snapshots = await PortfolioSnapshotModel.find({
+        userId,
+        timestamp: { $gte: startDate }
+      }).sort({ timestamp: 1 });
+      
+      return snapshots;
+    } catch (error: any) {
+      this.logger.error(`[Portfolio] Failed to get snapshots: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Create snapshot on trade completion
+  async createTradeSnapshot(
+    userId: string,
+    portfolioData: {
+      totalValue: number;
+      cashBalance: number;
+      positions: ActivePosition[];
+      totalPnL: number;
+    }
+  ): Promise<void> {
+    try {
+      await this.createSnapshot(userId, async () => portfolioData);
+      this.logger.info(`[Portfolio] Trade snapshot created for ${userId}`);
+    } catch (error: any) {
+      this.logger.error(`[Portfolio] Failed to create trade snapshot: ${error.message}`);
+      // Don't throw - trade shouldn't fail if snapshot fails
+    }
+  }
+
+  // Cleanup old snapshots
+  async cleanupOldSnapshots(): Promise<void> {
+    try {
+      const result = await PortfolioSnapshotModel.cleanupOldSnapshots();
+      if (result.deletedCount > 0) {
+        this.logger.info(`[Portfolio] Cleaned up ${result.deletedCount} old snapshots`);
+      }
+    } catch (error: any) {
+      this.logger.error(`[Portfolio] Failed to cleanup snapshots: ${error.message}`);
+    }
+  }
+
+  // Get latest snapshot
+  async getLatestSnapshot(userId: string): Promise<PortfolioSnapshot | null> {
+    try {
+      const snapshot = await PortfolioSnapshotModel
+        .findOne({ userId })
+        .sort({ timestamp: -1 });
+      return snapshot;
+    } catch (error: any) {
+      this.logger.error(`[Portfolio] Failed to get latest snapshot: ${error.message}`);
+      throw error;
+    }
+  }
+}

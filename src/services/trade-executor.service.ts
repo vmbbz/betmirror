@@ -40,6 +40,67 @@ export class TradeExecutorService {
     this.deps = deps;
   }
 
+  // Check if market resolved and which outcome won
+  private async checkMarketResolution(position: ActivePosition): Promise<{
+    resolved: boolean;
+    winningOutcome?: string;
+    userWon?: boolean;
+    market?: any;
+  }> {
+    const { adapter } = this.deps;
+    
+    try {
+      const client = (adapter as any).getRawClient?.();
+      if (!client) {
+        return { resolved: false };
+      }
+
+      const market = await client.getMarket(position.marketId);
+      if (!market) {
+        return { resolved: false };
+      }
+
+      // Check if market is resolved using the correct API structure
+      const isResolved = market.closed || !market.active || !market.accepting_orders || market.archived;
+      
+      if (!isResolved) {
+        return { resolved: false, market };
+      }
+
+      // Use the correct API structure: tokens[].winner
+      let winningOutcome: string | undefined;
+      let userWon = false;
+
+      if (market.tokens && Array.isArray(market.tokens)) {
+        // Find the winning token
+        const winningToken = market.tokens.find((token: any) => token.winner === true);
+        
+        if (winningToken) {
+          winningOutcome = winningToken.outcome;
+          // Check if user's position matches the winning outcome
+          userWon = winningOutcome ? 
+            (winningOutcome.toLowerCase() === position.outcome.toLowerCase() ||
+             (position.outcome === 'YES' && winningOutcome.includes('YES')) ||
+             (position.outcome === 'NO' && winningOutcome.includes('NO'))) : false;
+        }
+      }
+
+      return { 
+        resolved: true, 
+        winningOutcome, 
+        userWon, 
+        market 
+      };
+
+    } catch (e: any) {
+      // If we get a 404 or similar error, market is likely resolved
+      if (String(e).includes("404") || String(e).includes("Not Found")) {
+        return { resolved: true };
+      }
+      return { resolved: false };
+    }
+  }
+
   async executeManualExit(position: ActivePosition, currentPrice: number): Promise<boolean> {
       const { logger, adapter } = this.deps;
       let remainingShares = position.shares;
@@ -74,16 +135,38 @@ export class TradeExecutorService {
               logger.success(`Exit summary: Liquidated ${filled.toFixed(2)} shares @ avg best possible price.`);
               return true;
           } else {
-              // Check if this is a resolved market that needs redemption
+              // Check if this is a resolved market that needs proper redemption logic
               if (result.error?.includes("No orderbook") || result.error?.includes("404")) {
-                  logger.info(`Market resolved. Attempting to redeem...`);
-                  const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
-                  if (redeemResult.success) {
-                      logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
-                      return true;
+                  logger.info(`Market appears resolved. Checking resolution status...`);
+                  
+                  const resolution = await this.checkMarketResolution(position);
+                  
+                  if (resolution.resolved) {
+                      if (resolution.userWon) {
+                          logger.success(`Market resolved in your favor! Winning outcome: ${resolution.winningOutcome}`);
+                          const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                          if (redeemResult.success) {
+                              logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                              return true;
+                          } else {
+                              logger.error(`Redemption failed: ${redeemResult.error}`);
+                              return false;
+                          }
+                      } else {
+                          logger.warn(`Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}, Your position: ${position.outcome}`);
+                          logger.warn(`No redemption possible - this position has expired worthless.`);
+                          return false;
+                      }
                   } else {
-                      logger.error(`Redemption failed: ${redeemResult.error}`);
-                      return false;
+                      logger.warn(`Market status unclear. Attempting redemption as fallback...`);
+                      const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                      if (redeemResult.success) {
+                          logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                          return true;
+                      } else {
+                          logger.error(`Redemption failed: ${redeemResult.error}`);
+                          return false;
+                      }
                   }
               }
               

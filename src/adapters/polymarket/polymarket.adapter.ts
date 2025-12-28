@@ -309,31 +309,24 @@ export class PolymarketAdapter implements IExchangeAdapter {
         let question = marketId;
         let image = "";
 
-        if (this.client && marketId) {
-            try {
-                this.marketMetadataCache.delete(marketId);
-                const marketData = await this.client.getMarket(marketId);
-                this.marketMetadataCache.set(marketId, marketData);
-
-                if (marketData) {
-                    marketSlug = marketData.market_slug || "";
-                    question = marketData.question || question;
-                    image = marketData.image || image;
-                }
-            } catch (e) {}
-        }
-
-        if (marketSlug) {
-            try {
-                const gammaUrl = `https://gamma-api.polymarket.com/markets/slug/${marketSlug}`;
-                const gammaResponse = await fetch(gammaUrl);
-                if (gammaResponse.ok) {
-                    const marketData = await gammaResponse.json();
-                    if (marketData.events && marketData.events.length > 0) {
-                        eventSlug = marketData.events[0]?.slug || "";
-                    }
-                }
-            } catch (e) {}
+        try {
+            // Use Gamma API with condition_id - this returns BOTH slugs
+            const gammaUrl = `https://gamma-api.polymarket.com/markets?condition_id=${marketId}`;
+            const gammaResponse = await axios.get(gammaUrl);
+            
+            if (gammaResponse.data && gammaResponse.data.length > 0) {
+            const market = gammaResponse.data[0];
+            marketSlug = market.slug || "";
+            question = market.question || question;
+            image = market.image || image;
+            
+            // Get event slug from nested events array
+            if (market.events && market.events.length > 0) {
+                eventSlug = market.events[0]?.slug || "";
+            }
+            }
+        } catch (e) {
+            this.logger.warn(`[fetchMarketSlugs] Failed for ${marketId}: ${e}`);
         }
 
         return { marketSlug, eventSlug, question, image };
@@ -343,46 +336,56 @@ export class PolymarketAdapter implements IExchangeAdapter {
         try {
             const url = `https://data-api.polymarket.com/positions?user=${address}`;
             const res = await axios.get(url);
-            if(!Array.isArray(res.data)) return [];
-            
-            const positions: PositionData[] = [];
-            for (const p of res.data) {
-                const size = parseFloat(p.size) || 0;
-                if (size <= 0.01) continue;
-                const marketId = p.conditionId || p.market;
-                const tokenId = p.asset;
-                let currentPrice = parseFloat(p.price) || 0;
-                if (currentPrice === 0 && this.client && tokenId) {
-                    try {
-                        const mid = await this.client.getMidpoint(tokenId);
-                        currentPrice = parseFloat(mid.mid) || 0;
-                    } catch (e) {
-                        currentPrice = parseFloat(p.avgPrice) || 0.5;
-                    }
-                }
-                const entryPrice = parseFloat(p.avgPrice) || currentPrice || 0.5;
-                const currentValueUsd = size * currentPrice;
-                const investedValueUsd = size * entryPrice;
-                const unrealizedPnL = currentValueUsd - investedValueUsd;
-                
-                const { marketSlug, eventSlug, question, image } = await this.fetchMarketSlugs(marketId);
+            if (!Array.isArray(res.data)) return [];
 
-                positions.push({
-                    marketId: marketId,
-                    tokenId: tokenId,
-                    outcome: p.outcome || 'UNK',
-                    balance: size,
-                    valueUsd: currentValueUsd,
-                    investedValue: investedValueUsd,
-                    entryPrice: entryPrice,
-                    currentPrice: currentPrice,
-                    unrealizedPnL: unrealizedPnL,
-                    question: question,
-                    image: image,
-                    marketSlug: marketSlug,
-                    eventSlug: eventSlug,
-                    clobOrderId: tokenId 
-                });
+            const positions: PositionData[] = [];
+
+            for (const p of res.data) {
+            const size = parseFloat(p.size) || 0;
+            if (size <= 0.01) continue;
+
+            const marketId = p.conditionId || p.market;
+            const tokenId = p.asset;
+
+            // Get current price from midpoint (most reliable)
+            let currentPrice = 0;
+            if (this.client && tokenId) {
+                try {
+                const mid = await this.client.getMidpoint(tokenId);
+                currentPrice = parseFloat(mid.mid) || 0;
+                } catch (e) {
+                // Fallback to API price if midpoint fails
+                currentPrice = parseFloat(p.price) || 0;
+                }
+            } else {
+                currentPrice = parseFloat(p.price) || 0;
+            }
+
+            // Entry price from avgPrice, fallback to current
+            const entryPrice = parseFloat(p.avgPrice) || currentPrice || 0.5;
+            
+            const currentValueUsd = size * currentPrice;
+            const investedValueUsd = size * entryPrice;
+            const unrealizedPnL = currentValueUsd - investedValueUsd;
+
+            const { marketSlug, eventSlug, question, image } = await this.fetchMarketSlugs(marketId);
+
+            positions.push({
+                marketId,
+                tokenId,
+                outcome: p.outcome || 'UNK',
+                balance: size,
+                valueUsd: currentValueUsd,
+                investedValue: investedValueUsd,
+                entryPrice,
+                currentPrice,
+                unrealizedPnL,
+                question,
+                image,
+                marketSlug,
+                eventSlug,
+                clobOrderId: tokenId
+            });
             }
             return positions;
         } catch (e) {

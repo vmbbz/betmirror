@@ -24,21 +24,24 @@ export class TradeExecutorService {
             // Check if market is resolved using the correct API structure
             const isResolved = market.closed || !market.active || !market.accepting_orders || market.archived;
             if (!isResolved) {
-                return { resolved: false, market };
+                return {
+                    resolved: false,
+                    market,
+                    conditionId: market.condition_id // Always return conditionId when available
+                };
             }
             // Use the correct API structure: tokens[].winner
             let winningOutcome;
             let userWon = false;
             if (market.tokens && Array.isArray(market.tokens)) {
-                // Find the winning token
+                // Find the winning token - use strict boolean check for winner
                 const winningToken = market.tokens.find((token) => token.winner === true);
                 if (winningToken) {
                     winningOutcome = winningToken.outcome;
-                    // Check if user's position matches the winning outcome
-                    userWon = winningOutcome ?
-                        (winningOutcome.toLowerCase() === position.outcome.toLowerCase() ||
-                            (position.outcome === 'YES' && winningOutcome.includes('YES')) ||
-                            (position.outcome === 'NO' && winningOutcome.includes('NO'))) : false;
+                    // Direct comparison - outcomes are case-sensitive strings like "Yes" or "No"
+                    userWon = winningOutcome && position.outcome
+                        ? winningOutcome === position.outcome
+                        : false;
                 }
             }
             return {
@@ -92,19 +95,45 @@ export class TradeExecutorService {
                     if (resolution.resolved) {
                         if (resolution.userWon) {
                             logger.success(`Market resolved in your favor! Winning outcome: ${resolution.winningOutcome}`);
-                            const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                            // Use the conditionId from the market resolution if available, fall back to position.marketId
+                            const conditionId = resolution.conditionId || position.marketId;
+                            logger.info(`Redeeming position with conditionId: ${conditionId}`);
+                            const redeemResult = await adapter.redeemPosition(conditionId, position.tokenId);
                             if (redeemResult.success) {
                                 logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
                                 return true;
                             }
                             else {
-                                logger.error(`Redemption failed: ${redeemResult.error}`);
+                                logger.error(`Redemption failed: ${redeemResult.error || 'Unknown error'}`);
+                                // Try with marketId as fallback if conditionId didn't work
+                                if (conditionId !== position.marketId) {
+                                    logger.warn(`Retrying redemption with marketId as conditionId...`);
+                                    const fallbackResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                                    if (fallbackResult.success) {
+                                        logger.success(`Successfully redeemed with fallback method: $${fallbackResult.amountUsd?.toFixed(2)} USDC`);
+                                        return true;
+                                    }
+                                }
                                 return false;
                             }
                         }
                         else {
-                            logger.warn(`Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}, Your position: ${position.outcome}`);
-                            logger.warn(`No redemption possible - this position has expired worthless.`);
+                            const message = `Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}, Your position: ${position.outcome}`;
+                            logger.warn(message);
+                            // Even if user didn't win, try to redeem as some markets might have partial payouts
+                            try {
+                                const conditionId = resolution.conditionId || position.marketId;
+                                logger.info(`Attempting to redeem losing position with conditionId: ${conditionId}`);
+                                const redeemResult = await adapter.redeemPosition(conditionId, position.tokenId);
+                                if (redeemResult.success) {
+                                    logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC from losing position`);
+                                    return true;
+                                }
+                            }
+                            catch (e) {
+                                logger.warn(`Could not redeem losing position: ${e.message}`);
+                            }
+                            logger.warn(`No further redemption possible - this position has expired worthless.`);
                             return false;
                         }
                     }

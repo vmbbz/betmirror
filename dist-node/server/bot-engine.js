@@ -343,6 +343,11 @@ export class BotEngine {
                     await this.executeArbitrage(opp);
                 }
             });
+            // Start the arbitrage scanner
+            if (this.arbScanner) {
+                await this.arbScanner.start();
+                engineLogger.info('🔄 Arbitrage scanner started');
+            }
             const isFunded = await this.checkFunding();
             if (!isFunded) {
                 await this.addLog('warn', 'Safe Empty. Engine standby. Waiting for deposit (Min 1.00)...');

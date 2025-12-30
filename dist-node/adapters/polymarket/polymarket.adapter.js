@@ -501,29 +501,48 @@ export class PolymarketAdapter {
     getSigner() {
         return this.wallet;
     }
-    async redeemPosition(marketId, tokenId) {
-        if (!this.safeManager || !this.safeAddress)
-            return { success: false, error: "Adapter not initialized" };
+    async redeemPosition(conditionId, tokenId) {
+        if (!this.safeManager || !this.safeAddress) {
+            throw new Error('Safe manager not initialized');
+        }
+        // Mainnet addresses
         const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
         const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
         try {
             const balanceBefore = await this.fetchBalance(this.safeAddress);
+            // Convert indexSets to BigInt as required by the contract
+            const indexSets = [1n, 2n];
             const redeemTx = {
                 to: CTF_ADDRESS,
-                data: this.encodeRedeemPositions(USDC_ADDRESS, "0x0000000000000000000000000000000000000000000000000000000000000000", marketId, [1, 2]),
+                data: this.encodeRedeemPositions(USDC_ADDRESS, "0x0000000000000000000000000000000000000000000000000000000000000000", conditionId, indexSets),
                 value: "0"
             };
             const txHash = await this.safeManager.executeTransaction(redeemTx);
+            // Wait for transaction to be mined
             await new Promise(r => setTimeout(r, 5000));
             const balanceAfter = await this.fetchBalance(this.safeAddress);
-            return { success: true, amountUsd: balanceAfter - balanceBefore, txHash };
+            return {
+                success: true,
+                amountUsd: Number((BigInt(balanceAfter) - BigInt(balanceBefore)) / BigInt(1e6)) / 1e6, // Convert from wei to USDC
+                txHash
+            };
         }
         catch (e) {
-            return { success: false, error: e.message };
+            return {
+                success: false,
+                error: e.message || 'Unknown error during redemption'
+            };
         }
     }
     encodeRedeemPositions(collateralToken, parentCollectionId, conditionId, indexSets) {
-        const iface = new Interface(["function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)"]);
-        return iface.encodeFunctionData("redeemPositions", [collateralToken, parentCollectionId, conditionId, indexSets]);
+        const iface = new Interface([
+            "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] calldata indexSets)"
+        ]);
+        return iface.encodeFunctionData("redeemPositions", [
+            collateralToken,
+            parentCollectionId,
+            conditionId,
+            indexSets
+        ]);
     }
 }

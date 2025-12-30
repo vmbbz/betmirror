@@ -2725,6 +2725,7 @@ return (
                     {[
                     { id: 'dashboard', icon: Activity },
                     { id: 'system', icon: Gauge },
+                    { id: 'arbitrage', icon: Scale },
                     { id: 'bridge', icon: Globe },
                     { id: 'marketplace', icon: Users },
                     { id: 'history', icon: History },
@@ -3218,16 +3219,28 @@ return (
         {/* --- Arbitrage Tab --- */}
         {activeTab === 'arbitrage' && (
             <div className="space-y-12 animate-in fade-in slide-in-from-right-4 duration-500">
-                <div className="relative p-12 rounded-[3rem] bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-800 text-white overflow-hidden shadow-2xl">
-                    <div className="absolute top-0 right-0 p-12 opacity-10 pointer-events-none -rotate-12"><Landmark size={350}/></div>
+                <div className="relative p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-lg">
                     <div className="relative z-10">
-                        <div className="inline-flex items-center gap-3 px-4 py-1.5 rounded-full bg-black/20 border border-white/20 text-[10px] font-black uppercase tracking-[0.2em] mb-8">
-                            <Sparkles size={14} className="text-yellow-400"/> Autonomous Risk Engine
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="p-2 bg-white/20 rounded-xl">
+                                <Scale size={20} className="text-white"/>
+                            </div>
+                            <h2 className="text-2xl sm:text-3xl font-bold">Real-time Arbitrage Scanner</h2>
                         </div>
-                        <h2 className="text-5xl font-black tracking-tighter mb-6">Arbitrage Terminal</h2>
-                        <p className="text-emerald-50/80 max-w-2xl text-xl leading-relaxed font-medium">
-                            The server engine automatically executes these spreads 24/7 if <strong>Autonomous Exploitation</strong> is enabled in your Vault.
-                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                            <div className="bg-white/10 p-3 rounded-xl">
+                                <div className="font-medium text-emerald-100">Market Focus</div>
+                                <div className="text-white font-mono">Polymarket CLOB</div>
+                            </div>
+                            <div className="bg-white/10 p-3 rounded-xl">
+                                <div className="font-medium text-emerald-100">Strategy</div>
+                                <div className="text-white font-mono">Negative Risk</div>
+                            </div>
+                            <div className="bg-white/10 p-3 rounded-xl">
+                                <div className="font-medium text-emerald-100">Execution</div>
+                                <div className="text-white font-mono">FAK Orders</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

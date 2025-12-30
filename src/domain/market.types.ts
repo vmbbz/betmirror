@@ -21,6 +21,8 @@ export interface OrderBook {
 export interface PositionData {
     marketId: string;
     tokenId: string;
+    // FIX: Added conditionId to satisfy bot-engine requirements and align with Polymarket CLOB API structure
+    conditionId: string;
     outcome: string;
     balance: number; // Number of shares
     valueUsd: number;

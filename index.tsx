@@ -328,7 +328,7 @@ const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
 
                         <section className="space-y-3">
                             <h3 className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                <Fuel size={14} /> 02. Gasless Revolution
+                                <Zap size={14} /> 02. Gasless Revolution
                             </h3>
                             <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
                                 As an authorized <span className="text-gray-900 dark:text-white font-bold">Polymarket Builder</span>, we route all trades through the official Relayer. Gas fees (POL/Matic) are abstracted away. 100% of your deposit goes toward position sizing, maximizing capital efficiency.
@@ -477,7 +477,7 @@ const DepositModal = ({
                         </div>
                         <div 
                             onClick={() => setSelectedUsdcType('USDC')}
-                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-blue-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
+                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-green-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
                         >
                             <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Native (Circle)</div>
                             <div className="text-sm font-mono font-bold text-gray-900 dark:text-white flex justify-between items-center">
@@ -725,6 +725,7 @@ const WithdrawalModal = ({
     );
 };
 
+/* FIX: Added missing imports for OrderManagementModal and fixed History icon conflict */
 const OrderManagementModal = ({ 
     isOpen, 
     onClose, 
@@ -746,6 +747,8 @@ const OrderManagementModal = ({
         winningOutcome?: string;
         userWon?: boolean;
         loading: boolean;
+        source?: 'CLOB' | 'GAMMA' | 'NONE';
+        error?: string;
     }>({ resolved: false, loading: true });
 
     // Check market resolution when modal opens
@@ -759,43 +762,73 @@ const OrderManagementModal = ({
             try {
                 setMarketResolution({ resolved: false, loading: true });
                 
-                // Fetch market data to check resolution
-                const response = await axios.get(`/api/market/${position.marketId}`);
-                const market = response.data;
+                const conditionId = position.conditionId || position.marketId;
+                let market;
+                let fetchError = null;
+                let resolutionSource: 'CLOB' | 'GAMMA' | 'NONE' = 'NONE';
+                
+                // Attempt 1: Fetch via local server (CLOB)
+                try {
+                    const response = await axios.get(`/api/market/${conditionId}`);
+                    market = response.data;
+                    resolutionSource = 'CLOB';
+                } catch (e: any) {
+                    fetchError = e;
+                }
+                
+                // Attempt 2: Fallback to direct Gamma API call (handles archived/resolved markets)
+                if (!market) {
+                    try {
+                        const gammaUrl = `https://gamma-api.polymarket.com/markets?condition_id=${conditionId}`;
+                        const gammaRes = await axios.get(gammaUrl);
+                        if (gammaRes.data && Array.isArray(gammaRes.data) && gammaRes.data.length > 0) {
+                            market = gammaRes.data[0];
+                            resolutionSource = 'GAMMA';
+                        }
+                    } catch (gammaE) {}
+                }
                 
                 if (market) {
-                    const isResolved = market.closed || !market.active || !market.accepting_orders || market.archived;
+                    // Normalizing flags between CLOB and Gamma APIs
+                    const isResolved = market.closed === true || market.status === 'resolved' || !market.active || market.archived;
                     let winningOutcome: string | undefined;
                     let userWon = false;
 
-                    if (market.tokens && Array.isArray(market.tokens)) {
-                        const winningToken = market.tokens.find((token: any) => token.winner === true);
-                        
-                        if (winningToken) {
-                            winningOutcome = winningToken.outcome;
-                            userWon = winningOutcome ? 
-                                (winningOutcome.toLowerCase() === position.outcome.toLowerCase() ||
-                                 (position.outcome === 'YES' && winningOutcome.includes('YES')) ||
-                                 (position.outcome === 'NO' && winningOutcome.includes('NO'))) : false;
-                        }
+                    // Handle both token structure variants
+                    const tokens = market.tokens || [];
+
+                    if (tokens.length > 0) {
+                        const winningToken = tokens.find((token: any) => token.winner === true);
+                        if (winningToken) winningOutcome = winningToken.outcome;
+                    } 
+                    
+                    if (!winningOutcome && market.winning_outcome) {
+                        winningOutcome = market.winning_outcome;
+                    }
+
+                    if (winningOutcome) {
+                        userWon = winningOutcome.toUpperCase() === position.outcome.toUpperCase();
                     }
 
                     setMarketResolution({ 
                         resolved: isResolved, 
                         winningOutcome, 
                         userWon, 
-                        loading: false 
+                        loading: false,
+                        source: resolutionSource
                     });
                 } else {
-                    setMarketResolution({ resolved: false, loading: false });
+                    const isBotOffline = fetchError?.response?.status === 404 && fetchError?.response?.data?.error?.includes("bot");
+                    
+                    setMarketResolution({ 
+                        resolved: false, 
+                        loading: false, 
+                        source: 'NONE',
+                        error: isBotOffline ? "Engine Standby: Please start the bot to sync live data." : "Unable to fetch resolution data."
+                    });
                 }
             } catch (e: any) {
-                // If we get a 404, market is likely resolved
-                if (String(e).includes("404") || String(e).includes("Not Found")) {
-                    setMarketResolution({ resolved: true, loading: false });
-                } else {
-                    setMarketResolution({ resolved: false, loading: false });
-                }
+                setMarketResolution({ resolved: false, loading: false, error: "Critical Fetch Error" });
             }
         };
 
@@ -816,7 +849,7 @@ const OrderManagementModal = ({
                         <div>
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white">Order Management</h2>
                             <p className="text-sm text-gray-500 mt-1">
-                                {position.question || `Market: ${position.marketId}`}
+                                {position.question || `ID: ${position.marketId}`}
                             </p>
                             <div className="flex items-center gap-2 mt-2">
                                 <span className={`px-2 py-1 text-xs font-bold rounded ${position.outcome === 'YES' ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'}`}>
@@ -867,14 +900,6 @@ const OrderManagementModal = ({
                                                         <span className="text-gray-500">Size:</span>
                                                         <span className="ml-2 font-mono font-bold">{order.size}</span>
                                                     </div>
-                                                    <div>
-                                                        <span className="text-gray-500">Filled:</span>
-                                                        <span className="ml-2 font-mono font-bold">{order.filled || 0}</span>
-                                                    </div>
-                                                    <div>
-                                                        <span className="text-gray-500">Remaining:</span>
-                                                        <span className="ml-2 font-mono font-bold">{(order.size - (order.filled || 0)).toFixed(2)}</span>
-                                                    </div>
                                                 </div>
                                             </div>
                                             <div className="ml-4">
@@ -901,10 +926,17 @@ const OrderManagementModal = ({
 
                     {/* Market Resolution Section */}
                     <div className="border-t border-gray-200 dark:border-white/10 pt-6">
-                        <h4 className="font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                            <Trophy size={16} className="text-yellow-500"/>
-                            Market Resolution
-                        </h4>
+                        <div className="flex justify-between items-center mb-4">
+                            <h4 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                <Trophy size={16} className="text-yellow-500"/>
+                                Market Resolution
+                            </h4>
+                            {marketResolution.source === 'GAMMA' && (
+                                <span className="bg-purple-100 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400 text-[8px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
+                                    <History size={8}/> ARCHIVED DATA
+                                </span>
+                            )}
+                        </div>
                         
                         {marketResolution.loading ? (
                             <div className="flex items-center justify-center py-6 text-gray-400">
@@ -957,12 +989,19 @@ const OrderManagementModal = ({
                                 {marketResolution.userWon && (
                                     <button 
                                         onClick={() => onRedeemWinnings(position)}
-                                        className="w-full mt-4 px-4 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
+                                        className="w-full mt-4 px-4 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
                                     >
                                         <Trophy size={16}/>
                                         Redeem Winnings
                                     </button>
                                 )}
+                            </div>
+                        ) : marketResolution.error ? (
+                            <div className="bg-yellow-50 dark:bg-yellow-900/10 rounded-lg p-4 border border-yellow-200 dark:border-yellow-800/30">
+                                <div className="flex items-center gap-3 text-yellow-700 dark:text-yellow-500">
+                                    <AlertCircle size={16}/>
+                                    <p className="text-xs font-bold">{marketResolution.error}</p>
+                                </div>
                             </div>
                         ) : (
                             <div className="bg-gray-50 dark:bg-white/5 rounded-lg p-4 border border-gray-200 dark:border-white/10">
@@ -981,7 +1020,6 @@ const OrderManagementModal = ({
         </div>
     );
 };
-
 
 const TraderDetailsModal = ({ trader, onClose }: { trader: TraderProfile, onClose: () => void }) => {
     const [trades, setTrades] = useState<PolyTrade[]>([]);
@@ -4028,7 +4066,7 @@ return (
                                     <MessageSquare size={14}/> SMS Alerts
                                 </label>
                                 <input 
-                                    type="checkbox" 
+                                    type="checkbox"
                                     className="toggle-checkbox accent-green-500 w-4 h-4"
                                     checked={config.enableNotifications}
                                     onChange={e => updateConfig({...config, enableNotifications: e.target.checked})}

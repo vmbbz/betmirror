@@ -4,6 +4,7 @@ import type { TradeSignal, ActivePosition } from '../domain/trade.types.js';
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { httpGet } from '../utils/http.js';
 import { IExchangeAdapter, LiquidityHealth } from '../adapters/interfaces.js';
+import axios from 'axios';
 
 export type TradeExecutorDeps = {
   adapter: IExchangeAdapter;
@@ -47,90 +48,72 @@ export class TradeExecutorService {
     userWon?: boolean;
     market?: any;
     conditionId?: string;
+    source?: 'CLOB' | 'GAMMA';
 }> {
-    // Debug log to verify method is being called
-    console.log('🔍 checkMarketResolution called with position:', {
-      tradeId: position.tradeId,
-      marketId: position.marketId,
-      conditionId: position.conditionId,
-      outcome: position.outcome
-    });
-
     const { logger, adapter } = this.deps;
-    const conditionId = position.conditionId; // Moved outside try block for catch block access
+    const conditionId = position.conditionId || position.marketId;
     
     try {
+        let market: any = null;
+        let source: 'CLOB' | 'GAMMA' | undefined;
+
+        // ATTEMPT 1: CLOB API (Active Markets)
         const client = (adapter as any).getRawClient?.();
-        if (!client) {
-            logger.warn('❌ No CLOB client available for market resolution check');
-            return { resolved: false, conditionId };
+        if (client) {
+            try {
+                market = await client.getMarket(conditionId);
+                if (market) source = 'CLOB';
+            } catch (e) {
+                logger.debug(`CLOB 404 for ${conditionId}, checking Gamma fallback...`);
+            }
         }
-        
-        logger.info(`🔍 Fetching market with conditionId: ${conditionId}`);
-        
-        const market = await client.getMarket(conditionId);
-        
+
+        // ATTEMPT 2: GAMMA API FALLBACK (Archived Markets)
         if (!market) {
-            logger.warn(`❌ Market not found for conditionId: ${conditionId}`);
+            try {
+                const gammaUrl = `https://gamma-api.polymarket.com/markets?condition_id=${conditionId}`;
+                const res = await axios.get(gammaUrl);
+                if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+                    market = res.data[0];
+                    source = 'GAMMA';
+                }
+            } catch (e) {
+                logger.error(`Gamma fallback failed for ${conditionId}`);
+            }
+        }
+
+        if (!market) {
+            logger.warn(`❌ Market resolution check failed: ID ${conditionId} not found.`);
             return { resolved: false, conditionId };
         }
 
-        // Log the ACTUAL Market interface fields from API
-        logger.info(`📊 Market data received: ${JSON.stringify({
-            condition_id: market.condition_id,
-            closed: market.closed,
-            active: market.active,
-            accepting_orders: market.accepting_orders,
-            archived: market.archived,
-            question: market.question?.substring(0, 50),
-            neg_risk: market.neg_risk
-        }, null, 2)}`);
+        // Detailed Metadata Logging for Admin
+        logger.info(`📊 Resolution Metadata [${source}] for ${conditionId}: closed=${market.closed}, active=${market.active}, status=${market.status}`);
 
-        // Log tokens array - this is where winner info lives
-        if (market.tokens) {
-            logger.info(`🎯 Token data: ${JSON.stringify(market.tokens.map((t: any) => ({
-                outcome: t.outcome,
-                winner: t.winner,
-                token_id: t.token_id?.substring(0, 20) + '...',
-                price: t.price
-            })), null, 2)}`);
-        }
-
-        // KEY FIX: Use market.closed as primary resolution indicator
-        // The Market interface shows: closed: boolean
-        const isResolved = market.closed === true;
-        
-        logger.info(`📌 Resolution check: closed=${market.closed}, isResolved=${isResolved}`);
+        // Primary Resolution Detection
+        const isResolved = market.closed === true || market.status === 'resolved' || market.archived === true;
 
         if (!isResolved) {
-            logger.debug(`⏳ Market ${conditionId} is not resolved yet`);
-            return { resolved: false, market, conditionId };
+            logger.debug(`⏳ Market ${conditionId} is not resolved yet.`);
+            return { resolved: false, market, conditionId, source };
         }
 
-        // Find winning outcome from tokens[].winner (boolean field)
+        // Winner Detection Logic
         let winningOutcome: string | undefined;
         let userWon = false;
 
         if (market.tokens && Array.isArray(market.tokens)) {
+            // CLOB Format
             const winningToken = market.tokens.find((t: any) => t.winner === true);
-            
-            logger.info(`🏆 Winning token search: ${JSON.stringify({
-                foundWinner: !!winningToken,
-                winningOutcome: winningToken?.outcome,
-                userOutcome: position.outcome
-            }, null, 2)}`);
-            
-            if (winningToken) {
-                winningOutcome = winningToken.outcome;
-                // Direct case-insensitive comparison
-                userWon = position.outcome.toUpperCase() === winningOutcome?.toUpperCase();
-                
-                logger.info(`✅ Resolution result: winningOutcome=${winningOutcome}, userOutcome=${position.outcome}, userWon=${userWon}`);
-            } else {
-                logger.warn(`⚠️ Market closed but no winning token found - may still be settling`);
-            }
-        } else {
-            logger.warn(`⚠️ No tokens array in market response`);
+            if (winningToken) winningOutcome = winningToken.outcome;
+        } else if (market.winning_outcome) {
+            // Gamma Format
+            winningOutcome = market.winning_outcome;
+        }
+
+        if (winningOutcome) {
+            userWon = position.outcome.toUpperCase() === winningOutcome.toUpperCase();
+            logger.info(`🏆 Resolution result: Winning=${winningOutcome}, Mine=${position.outcome}, Result=${userWon ? 'WON' : 'LOST'}`);
         }
 
         return { 
@@ -138,20 +121,13 @@ export class TradeExecutorService {
             winningOutcome, 
             userWon, 
             market,
-            conditionId
+            conditionId,
+            source
         };
 
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.error(`❌ Error checking market resolution: ${errorMessage}`);
-        
-        // 404 likely means market doesn't exist in CLOB anymore (resolved/archived)
-        if (errorMessage.includes("404") || errorMessage.includes("Not Found")) {
-            logger.info(`ℹ️ Market returned 404 - likely fully resolved and archived`);
-            return { resolved: true, conditionId };
-        }
-        
-        return { resolved: false };
+    } catch (error: any) {
+        logger.error(`❌ Error in resolution engine: ${error.message}`);
+        return { resolved: false, conditionId };
     }
 }
 
@@ -167,13 +143,12 @@ export class TradeExecutorService {
       let remainingShares = position.shares;
       
       try {
-          // Hard check for exchange minimums before even trying
           if (remainingShares < 5) {
-              logger.error(`🚨 Cannot Exit: Your balance (${remainingShares.toFixed(2)}) is below the exchange minimum of 5 shares. You must buy more of this asset to liquidate it.`);
+              logger.error(`🚨 Cannot Exit: Balance (${remainingShares.toFixed(2)}) below exchange minimum (5).`);
               return false;
           }
 
-          logger.info(`📉 Executing Market Exit: Offloading ${remainingShares} shares of ${position.tokenId}...`);
+          logger.info(`📉 Attempting Market Sell for ${position.tokenId}...`);
           
           const result = await adapter.createOrder({
               marketId: position.marketId,
@@ -196,80 +171,30 @@ export class TradeExecutorService {
               logger.success(`Exit summary: Liquidated ${filled.toFixed(2)} shares @ avg best possible price.`);
               return true;
           } else {
-              // Check if this is a resolved market that needs proper redemption logic
-              if (result.error?.includes("No orderbook") || result.error?.includes("404")) {
-                  logger.info(`Market appears resolved. Checking resolution status...`);
+              // Handle Resolution & Redemption if Orderbook is gone
+              if (result.error?.includes("404") || result.error?.includes("No orderbook")) {
+                  logger.info(`Market unresponsive. Checking resolution status...`);
                   
                   const resolution = await this.checkMarketResolution(position);
                   
                   if (resolution.resolved) {
                       if (resolution.userWon) {
-                          logger.success(`Market resolved in your favor! Winning outcome: ${resolution.winningOutcome}`);
-                          
-                          // Use the conditionId from the market resolution if available, fall back to position.marketId
-                          const conditionId = resolution.conditionId || position.marketId;
-                          logger.info(`Redeeming position with conditionId: ${conditionId}`);
-                          
-                          const redeemResult = await adapter.redeemPosition(conditionId, position.tokenId);
-                          if (redeemResult.success) {
-                              logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
-                              return true;
-                          } else {
-                              logger.error(`Redemption failed: ${redeemResult.error || 'Unknown error'}`);
-                              
-                              // Try with marketId as fallback if conditionId didn't work
-                              if (conditionId !== position.marketId) {
-                                  logger.warn(`Retrying redemption with marketId as conditionId...`);
-                                  const fallbackResult = await adapter.redeemPosition(position.marketId, position.tokenId);
-                                  if (fallbackResult.success) {
-                                      logger.success(`Successfully redeemed with fallback method: $${fallbackResult.amountUsd?.toFixed(2)} USDC`);
-                                      return true;
-                                  }
-                              }
-                              
-                              return false;
-                          }
+                          logger.success(`🏆 Winner! Redeeming Favorably...`);
+                          const redeemResult = await adapter.redeemPosition(resolution.conditionId || position.marketId, position.tokenId);
+                          return redeemResult.success;
                       } else {
-                          const message = `Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}, Your position: ${position.outcome}`;
-                          logger.warn(message);
-                          
-                          // Even if user didn't win, try to redeem as some markets might have partial payouts
-                          try {
-                              const conditionId = resolution.conditionId || position.marketId;
-                              logger.info(`Attempting to redeem losing position with conditionId: ${conditionId}`);
-                              const redeemResult = await adapter.redeemPosition(conditionId, position.tokenId);
-                              
-                              if (redeemResult.success) {
-                                  logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC from losing position`);
-                                  return true;
-                              }
-                          } catch (e: unknown) {
-                              const errorMessage = e instanceof Error ? e.message : 'Unknown error';
-                              logger.warn(`Could not redeem losing position: ${errorMessage}`);
-                          }
-                          
-                          logger.warn(`No further redemption possible - this position has expired worthless.`);
-                          return false;
-                      }
-                  } else {
-                      logger.warn(`Market status unclear. Attempting redemption as fallback...`);
-                      const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
-                      if (redeemResult.success) {
-                          logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
-                          return true;
-                      } else {
-                          logger.error(`Redemption failed: ${redeemResult.error}`);
+                          logger.warn(`💀 Position Expired Worthless. Winner was: ${resolution.winningOutcome}`);
                           return false;
                       }
                   }
               }
               
-              logger.error(`Exit attempt failed: ${result.error || "Unknown Error"}`);
+              logger.error(`Exit failed: ${result.error || "Unknown Error"}`);
               return false;
           }
           
       } catch (e: any) {
-          logger.error(`Failed to execute manual exit: ${e.message}`, e as Error);
+          logger.error(`Manual Exit Critical Error: ${e.message}`);
           return false;
       }
   }

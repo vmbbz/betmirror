@@ -14,7 +14,7 @@ import { Wallet as WalletV5 } from 'ethers-v5'; // V5 for SDK
 import { EvmWalletService } from '../../services/evm-wallet.service.js';
 import { SafeManagerService } from '../../services/safe-manager.service.js';
 import { TradingWalletConfig, L2ApiCredentials } from '../../domain/wallet.types.js';
-import { User } from '../../database/index.js';
+import { User, Trade } from '../../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { Logger } from '../../utils/logger.util.js';
 import { TOKENS } from '../../config/env.js';
@@ -236,11 +236,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             neg_risk: book.neg_risk
         };
     }
-    /**
-     * UPDATED LIQUIDITY MATH:
-     * We now use absolute cent spreads instead of percentages.
-     * This is critical for prediction markets where 1c vs 2c is a tiny gap but a huge %.
-     */
+    
     async getLiquidityMetrics(tokenId: string, side: 'BUY' | 'SELL'): Promise<LiquidityMetrics> {
         if (!this.client)
             throw new Error("Not auth");
@@ -348,7 +344,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 const size = parseFloat(p.size) || 0;
                 if (size <= 0.01)
                     continue;
-                const marketId = p.conditionId || p.market;
+                const marketId = p.market || p.conditionId;
+                const conditionId = p.conditionId || p.asset; // Extract the specific hex ID
                 const tokenId = p.asset;
                 let currentPrice = parseFloat(p.price) || 0;
                 if (currentPrice === 0 && this.client && tokenId) {
@@ -367,6 +364,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 const { marketSlug, eventSlug, question, image } = await this.fetchMarketSlugs(marketId);
                 positions.push({
                     marketId: marketId,
+                    conditionId: conditionId, // Populated hex ID
                     tokenId: tokenId,
                     outcome: p.outcome || 'UNK',
                     balance: size,

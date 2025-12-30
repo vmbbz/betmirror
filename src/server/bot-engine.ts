@@ -1,4 +1,3 @@
-
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -221,6 +220,7 @@ export class BotEngine {
                             tradeId: realId, 
                             clobOrderId: realId,
                             marketId: p.marketId,
+                            conditionId: p.conditionId, 
                             tokenId: p.tokenId,
                             outcome: (p.outcome || 'YES').toUpperCase() as 'YES' | 'NO',
                             entryPrice: p.entryPrice || 0.5,
@@ -543,7 +543,7 @@ export class BotEngine {
             
             await this.startServices(logger);
 
-            // FIX: Start scanner only after exchange is authenticated and services are ready
+            // Start scanner only after exchange is authenticated and services are ready
             if (this.arbScanner) {
                 await this.arbScanner.start();
             }
@@ -720,6 +720,7 @@ export class BotEngine {
                                 tradeId: tradeId, 
                                 clobOrderId: result.txHash,
                                 marketId: signal.marketId,
+                                conditionId: signal.marketId, 
                                 tokenId: signal.tokenId,
                                 outcome: signal.outcome,
                                 entryPrice: result.priceFilled || signal.price,

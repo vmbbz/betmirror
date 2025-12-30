@@ -95,6 +95,8 @@ async function main(): Promise<void> {
             return res.data.map((p: any) => ({
                 marketId: p.conditionId || p.market,
                 tokenId: p.asset,
+                // FIX: Added conditionId to satisfy bot-engine requirements and align with updated PositionData interface
+                conditionId: p.conditionId || p.asset,
                 outcome: p.outcome || 'UNK',
                 balance: Number(p.size),
                 valueUsd: Number(p.size) * Number(p.price),
@@ -137,6 +139,8 @@ async function main(): Promise<void> {
       getTradeHistory: async (address: string, limit: number = 20): Promise<TradeHistoryEntry[]> => {
           return []; // Simplified for headless
       },
+      // FIX: Added missing getOpenOrders method to match IExchangeAdapter interface
+      getOpenOrders: async () => [],
       createOrder: async (params: OrderParams): Promise<OrderResult> => {
           const isBuy = params.side === 'BUY';
           const orderSide = isBuy ? Side.BUY : Side.SELL;

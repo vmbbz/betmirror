@@ -101,4 +101,7 @@ export interface IExchangeAdapter {
     getRawClient?(): any;
     getSigner?(): any;
     getFunderAddress?(): string | undefined; 
+    
+    // Order Management
+    getOpenOrders?(): Promise<any[]>;
 }

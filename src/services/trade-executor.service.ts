@@ -46,64 +46,106 @@ export class TradeExecutorService {
     winningOutcome?: string;
     userWon?: boolean;
     market?: any;
-    conditionId?: string;
-  }> {
-    const { adapter } = this.deps;
+    conditionId?: string; // Add conditionId to the return type
+}> {
+    const { logger, adapter } = this.deps;
+    const conditionId = position.conditionId; // Moved outside try block for catch block access
     
     try {
-      const client = (adapter as any).getRawClient?.();
-      if (!client) {
-        return { resolved: false };
-      }
-
-      const market = await client.getMarket(position.marketId);
-      if (!market) {
-        return { resolved: false };
-      }
-
-      // Check if market is resolved using the correct API structure
-      const isResolved = market.closed || !market.active || !market.accepting_orders || market.archived;
-      
-      if (!isResolved) {
-        return { 
-          resolved: false, 
-          market,
-          conditionId: market.condition_id // Always return conditionId when available
-        };
-      }
-
-      // Use the correct API structure: tokens[].winner
-      let winningOutcome: string | undefined;
-      let userWon = false;
-
-      if (market.tokens && Array.isArray(market.tokens)) {
-        // Find the winning token - use strict boolean check for winner
-        const winningToken = market.tokens.find((token: any) => token.winner === true);
-        
-        if (winningToken) {
-          winningOutcome = winningToken.outcome;
-          // Direct comparison - outcomes are case-sensitive strings like "Yes" or "No"
-          userWon = winningOutcome && position.outcome 
-            ? winningOutcome === position.outcome
-            : false;
+        const client = (adapter as any).getRawClient?.();
+        if (!client) {
+            logger.warn('❌ No CLOB client available for market resolution check');
+            return { resolved: false, conditionId };
         }
-      }
+        
+        logger.info(`🔍 Fetching market with conditionId: ${conditionId}`);
+        
+        const market = await client.getMarket(conditionId);
+        
+        if (!market) {
+            logger.warn(`❌ Market not found for conditionId: ${conditionId}`);
+            return { resolved: false, conditionId };
+        }
 
-      return { 
-        resolved: true, 
-        winningOutcome, 
-        userWon, 
-        market 
-      };
+        // Log the ACTUAL Market interface fields from API
+        logger.info(`📊 Market data received: ${JSON.stringify({
+            condition_id: market.condition_id,
+            closed: market.closed,
+            active: market.active,
+            accepting_orders: market.accepting_orders,
+            archived: market.archived,
+            question: market.question?.substring(0, 50),
+            neg_risk: market.neg_risk
+        }, null, 2)}`);
 
-    } catch (e: any) {
-      // If we get a 404 or similar error, market is likely resolved
-      if (String(e).includes("404") || String(e).includes("Not Found")) {
-        return { resolved: true };
-      }
-      return { resolved: false };
+        // Log tokens array - this is where winner info lives
+        if (market.tokens) {
+            logger.info(`🎯 Token data: ${JSON.stringify(market.tokens.map((t: any) => ({
+                outcome: t.outcome,
+                winner: t.winner,
+                token_id: t.token_id?.substring(0, 20) + '...',
+                price: t.price
+            })), null, 2)}`);
+        }
+
+        // KEY FIX: Use market.closed as primary resolution indicator
+        // The Market interface shows: closed: boolean
+        const isResolved = market.closed === true;
+        
+        logger.info(`📌 Resolution check: closed=${market.closed}, isResolved=${isResolved}`);
+
+        if (!isResolved) {
+            logger.debug(`⏳ Market ${conditionId} is not resolved yet`);
+            return { resolved: false, market, conditionId };
+        }
+
+        // Find winning outcome from tokens[].winner (boolean field)
+        let winningOutcome: string | undefined;
+        let userWon = false;
+
+        if (market.tokens && Array.isArray(market.tokens)) {
+            const winningToken = market.tokens.find((t: any) => t.winner === true);
+            
+            logger.info(`🏆 Winning token search: ${JSON.stringify({
+                foundWinner: !!winningToken,
+                winningOutcome: winningToken?.outcome,
+                userOutcome: position.outcome
+            }, null, 2)}`);
+            
+            if (winningToken) {
+                winningOutcome = winningToken.outcome;
+                // Direct case-insensitive comparison
+                userWon = position.outcome.toUpperCase() === winningOutcome?.toUpperCase();
+                
+                logger.info(`✅ Resolution result: winningOutcome=${winningOutcome}, userOutcome=${position.outcome}, userWon=${userWon}`);
+            } else {
+                logger.warn(`⚠️ Market closed but no winning token found - may still be settling`);
+            }
+        } else {
+            logger.warn(`⚠️ No tokens array in market response`);
+        }
+
+        return { 
+            resolved: true, 
+            winningOutcome, 
+            userWon, 
+            market,
+            conditionId
+        };
+
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(`❌ Error checking market resolution: ${errorMessage}`);
+        
+        // 404 likely means market doesn't exist in CLOB anymore (resolved/archived)
+        if (errorMessage.includes("404") || errorMessage.includes("Not Found")) {
+            logger.info(`ℹ️ Market returned 404 - likely fully resolved and archived`);
+            return { resolved: true, conditionId };
+        }
+        
+        return { resolved: false };
     }
-  }
+}
 
   async executeManualExit(position: ActivePosition, currentPrice: number): Promise<boolean> {
       const { logger, adapter } = this.deps;

@@ -47,6 +47,7 @@ export interface ActivePosition {
   tradeId: string; // Link to the original TradeHistoryEntry._id
   clobOrderId?: string; // The specific order ID on Polymarket
   marketId: string;
+  conditionId?: string; // The condition ID used by Polymarket's CLOB API
   tokenId: string;
   outcome: 'YES' | 'NO';
   entryPrice: number;

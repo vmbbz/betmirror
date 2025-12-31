@@ -26,6 +26,7 @@ export class ArbitrageScanner extends EventEmitter {
     private pingInterval?: NodeJS.Timeout;
     private reconnectAttempts = 0;
     private reconnectDelay = 1000;
+    private reconnectTimeout?: NodeJS.Timeout;
     private readonly maxReconnectAttempts = 10;
     private readonly maxReconnectDelay = 30000; // 30 seconds
 
@@ -39,14 +40,33 @@ export class ArbitrageScanner extends EventEmitter {
     }
 
     async start() {
-        if (this.isScanning) {
-            this.logger.info('🔍 Arbitrage scanner is already running');
+        if (this.isScanning && this.isConnected) {
+            this.logger.info('🔍 Arbitrage scanner is already running and connected');
             return;
         }
+        
+        // Reset state if we're restarting
+        if (this.isScanning) {
+            this.logger.warn('⚠️ Scanner was in a bad state, reinitializing...');
+            await this.stop();
+        }
+        
         this.isScanning = true;
         this.logger.info('🚀 Starting arbitrage scanner...');
-        this.connect();
-        this.logger.success('🔍 ARB ENGINE: WebSocket Mode Active');
+        
+        try {
+            this.connect();
+            this.logger.success('🔍 ARB ENGINE: WebSocket Mode Active');
+            
+            // Initial market data load
+            await this.loadInitialMarketData();
+            
+        } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            this.logger.error('❌ Failed to start arbitrage scanner:', err);
+            this.isScanning = false;
+            throw err;
+        }
     }
 
     private connect() {
@@ -118,7 +138,7 @@ export class ArbitrageScanner extends EventEmitter {
         
         this.logger.info(`Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
         
-        setTimeout(() => {
+        this.reconnectTimeout = setTimeout(() => {
             if (this.isScanning) {
                 this.connect();
             }
@@ -338,13 +358,66 @@ export class ArbitrageScanner extends EventEmitter {
         }
     }
 
-    stop() {
-        this.isScanning = false;
-        this.stopPing();
-        if (this.ws) {
-            this.ws.terminate();
-            this.ws = undefined;
+    private async loadInitialMarketData() {
+        this.logger.info('📡 Loading initial market data...');
+        try {
+            // Add your market data loading logic here
+            // For example:
+            // const markets = await this.adapter.getActiveMarkets();
+            // markets.forEach(market => this.processMarketData(market));
+            this.logger.info('✅ Initial market data loaded');
+        } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            this.logger.error('❌ Failed to load initial market data:', err);
+            throw err;
         }
+    }
+
+    private processMarketData(market: any) {
+        // Process and add market data to priceMap
+        // This is a placeholder - implement according to your market data structure
+        this.priceMap.set(market.id, {
+            question: market.question,
+            isNegRisk: market.isBinary,
+            isCrypto: this.cryptoRegex.test(market.question),
+            outcomes: market.outcomes || {},
+            totalLegsExpected: market.outcomes?.length || 2
+        });
+    }
+
+    public stop() {
+        this.logger.info('🛑 Stopping arbitrage scanner...');
+        this.isScanning = false;
+        this.isConnected = false;
+        
+        // Stop the ping interval
+        this.stopPing();
+        
+        // Clean up WebSocket connection
+        if (this.ws) {
+            try {
+                // Remove all event listeners to prevent memory leaks
+                this.ws.removeAllListeners();
+                
+                // Close the connection if it's still open
+                if (this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.terminate();
+                }
+                
+                this.ws = undefined;
+                this.logger.info('✅ WebSocket connection closed');
+            } catch (error) {
+                const err = error instanceof Error ? error : new Error(String(error));
+                this.logger.error('❌ Error while stopping WebSocket:', err);
+            }
+        }
+        
+        // Clear any existing reconnection timeouts
+        if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = undefined;
+        }
+        
         this.logger.warn('🛑 Arbitrage scanner stopped');
     }
 

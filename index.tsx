@@ -1,7 +1,8 @@
-
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
+import { toast } from 'react-toastify';
 import axios from 'axios';
+import { getMarketWebSocketService } from './src/services/market-ws.service';
 import './src/index.css';
 import { 
 Shield, Play, Square, Activity, Settings, Wallet, Key, Link,
@@ -374,7 +375,7 @@ const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
 
                     <button 
                         onClick={onClose}
-                        className="mt-12 w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl shadow-xl shadow-blue-600/20 transition-all uppercase tracking-widest text-sm"
+                        className="mt-12 w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 uppercase tracking-widest"
                     >
                         I Understand the Protocols
                     </button>
@@ -741,7 +742,6 @@ const OrderManagementModal = ({
     onCancelOrder: (orderId: string) => void;
     onRedeemWinnings: (position: ActivePosition) => void;
 }) => {
-    // FIX: Added missing useState hook for market resolution state
     const [marketResolution, setMarketResolution] = useState<{
         resolved: boolean;
         winningOutcome?: string;
@@ -749,8 +749,10 @@ const OrderManagementModal = ({
         loading: boolean;
         settling?: boolean;
     }>({ resolved: false, loading: true });
+    
+    const wsService = useRef<ReturnType<typeof getMarketWebSocketService>>();
+    const wsCleanup = useRef<() => void>();
 
-    // FIX: Added missing useEffect hook to check market resolution
     useEffect(() => {
         if (!isOpen || !position) {
             setMarketResolution({ resolved: false, loading: false });
@@ -761,36 +763,40 @@ const OrderManagementModal = ({
             try {
                 setMarketResolution({ resolved: false, loading: true });
                 
-                // FIX: Added missing axios call to fetch market data
                 const response = await axios.get(`/api/market/${position.marketId}`);
                 const market = response.data;
                 
                 if (market) {
-                    // Normalize flags
-                    const isClosed = market.closed === true || market.status === 'resolved' || market.archived === true;
+                    const isResolved = market.closed === true || 
+                                    market.archived === true || 
+                                    market.status === 'resolved' ||
+                                    (market.tokens && market.tokens.some((t: any) => t.winner === true));
                     
                     let userWon = false;
                     let settling = false;
                     let winningOutcome: string | null = null;
 
-                    if (market.tokens && Array.isArray(market.tokens)) {
-                        const winningToken = market.tokens.find((token: any) => token.winner === true);
+                    if (isResolved && market.tokens && Array.isArray(market.tokens)) {
+                        const winningToken = market.tokens.find((t: any) => t.winner === true);
                         
-                        if (winningToken) {
-                            winningOutcome = winningToken.outcome;
-                            // Resilient matching: Case-insensitive and substring allowed
+                        if (winningToken?.outcome) {
+                            const winOut = winningToken.outcome.toUpperCase();
                             const userOut = position.outcome.toUpperCase();
-                            if (winningOutcome) {
-                                const winOut = winningOutcome.toUpperCase();
-                                userWon = (winOut === userOut || winOut.includes(userOut));
+                            winningOutcome = winningToken.outcome;
+                            userWon = (winOut === userOut || winOut.includes(userOut));
+                        } else {
+                            const allLosers = market.tokens.every((t: any) => t.winner === false);
+                            if (allLosers) {
+                                winningOutcome = 'VOID';
+                                settling = true;
+                            } else {
+                                settling = true;
                             }
-                        } else if (isClosed) {
-                            settling = true;
                         }
                     }
 
                     setMarketResolution({ 
-                        resolved: isClosed, 
+                        resolved: isResolved, 
                         winningOutcome: winningOutcome || undefined, 
                         userWon, 
                         loading: false,

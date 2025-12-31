@@ -131,24 +131,19 @@ export class TradeExecutorService {
     }
 }
 
+
   async executeManualExit(position: ActivePosition, currentPrice: number): Promise<boolean> {
-      console.log('🚀 executeManualExit called with:', {
-        positionId: position.tradeId,
-        marketId: position.marketId,
-        shares: position.shares,
-        currentPrice
-      });
-      
       const { logger, adapter } = this.deps;
       let remainingShares = position.shares;
       
       try {
+          // Hard check for exchange minimums before even trying
           if (remainingShares < 5) {
-              logger.error(`🚨 Cannot Exit: Balance (${remainingShares.toFixed(2)}) below exchange minimum (5).`);
+              logger.error(`🚨 Cannot Exit: Your balance (${remainingShares.toFixed(2)}) is below the exchange minimum of 5 shares. You must buy more of this asset to liquidate it.`);
               return false;
           }
 
-          logger.info(`📉 Attempting Market Sell for ${position.tokenId}...`);
+          logger.info(`📉 Executing Market Exit: Offloading ${remainingShares} shares of ${position.tokenId}...`);
           
           const result = await adapter.createOrder({
               marketId: position.marketId,
@@ -171,30 +166,47 @@ export class TradeExecutorService {
               logger.success(`Exit summary: Liquidated ${filled.toFixed(2)} shares @ avg best possible price.`);
               return true;
           } else {
-              // Handle Resolution & Redemption if Orderbook is gone
-              if (result.error?.includes("404") || result.error?.includes("No orderbook")) {
-                  logger.info(`Market unresponsive. Checking resolution status...`);
+              // Check if this is a resolved market that needs proper redemption logic
+              if (result.error?.includes("No orderbook") || result.error?.includes("404")) {
+                  logger.info(`Market appears resolved. Checking resolution status...`);
                   
                   const resolution = await this.checkMarketResolution(position);
                   
                   if (resolution.resolved) {
                       if (resolution.userWon) {
-                          logger.success(`🏆 Winner! Redeeming Favorably...`);
-                          const redeemResult = await adapter.redeemPosition(resolution.conditionId || position.marketId, position.tokenId);
-                          return redeemResult.success;
+                          logger.success(`Market resolved in your favor! Winning outcome: ${resolution.winningOutcome}`);
+                          const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                          if (redeemResult.success) {
+                              logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                              return true;
+                          } else {
+                              logger.error(`Redemption failed: ${redeemResult.error}`);
+                              return false;
+                          }
                       } else {
-                          logger.warn(`💀 Position Expired Worthless. Winner was: ${resolution.winningOutcome}`);
+                          logger.warn(`Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}, Your position: ${position.outcome}`);
+                          logger.warn(`No redemption possible - this position has expired worthless.`);
+                          return false;
+                      }
+                  } else {
+                      logger.warn(`Market status unclear. Attempting redemption as fallback...`);
+                      const redeemResult = await adapter.redeemPosition(position.marketId, position.tokenId);
+                      if (redeemResult.success) {
+                          logger.success(`Redeemed $${redeemResult.amountUsd?.toFixed(2)} USDC`);
+                          return true;
+                      } else {
+                          logger.error(`Redemption failed: ${redeemResult.error}`);
                           return false;
                       }
                   }
               }
               
-              logger.error(`Exit failed: ${result.error || "Unknown Error"}`);
+              logger.error(`Exit attempt failed: ${result.error || "Unknown Error"}`);
               return false;
           }
           
       } catch (e: any) {
-          logger.error(`Manual Exit Critical Error: ${e.message}`);
+          logger.error(`Failed to execute manual exit: ${e.message}`, e as Error);
           return false;
       }
   }

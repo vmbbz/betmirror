@@ -19,20 +19,27 @@ export interface LiquidityMetrics {
     bestPrice: number;
 }
 
+/**
+ * Updated for Market Making / Spread Capture
+ */
 export interface ArbitrageOpportunity {
     marketId: string;
+    tokenId: string;
     question: string;
-    combinedCost: number;
-    potentialProfit: number;
-    roi: number;
-    capacityUsd: number;
-    legs: Array<{
-        tokenId: string;
-        outcome: string;
-        price: number;
-        depth: number;
-    }>;
+    bestBid: number;
+    bestAsk: number;
+    spread: number;
+    spreadPct: number;
+    midpoint: number;
+    volume?: number;
+    liquidity?: number;
+    rewardsMaxSpread?: number;
+    rewardsMinSize?: number;
     timestamp: number;
+    // Compatibility fields for UI
+    roi: number; 
+    combinedCost: number;
+    capacityUsd: number;
 }
 
 export interface OrderParams {

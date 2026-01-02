@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { toast } from 'react-toastify';
@@ -157,55 +158,71 @@ const PerformanceChart = ({ userId, selectedRange }: {
     );
 };
 
+/**
+ * Updated to display Market Making / Spread Capture opportunities.
+ * Labels changed from Arbitrage/Combined Cost to Capture/Spread.
+ */
 const ArbitrageFeed = ({ opportunities, onExecute, isAutoArb }: { opportunities: ArbitrageOpportunity[], onExecute: (opp: ArbitrageOpportunity) => void, isAutoArb: boolean }) => {
     return (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {opportunities.length === 0 ? (
                 <div className="col-span-full py-20 text-center text-gray-500 italic bg-white/5 rounded-3xl border border-dashed border-white/10">
                     <Scale size={48} className="mx-auto mb-4 opacity-20"/>
-                    <p className="text-sm uppercase tracking-widest font-bold">Scanning Markets...</p>
-                    {/* FIX: Escaped '<' character to prevent JSX parsing issues and fixed potential $1 variable lookup error */}
-                    <p className="text-xs mt-2 opacity-50">Spread opportunities appear when Sum(Outcomes) {'<'} $1.00</p>
+                    <p className="text-sm uppercase tracking-widest font-bold">Scanning Orderbooks...</p>
+                    <p className="text-xs mt-2 opacity-50">Opportunities appear when bid-ask spreads are tradeable.</p>
                 </div>
             ) : (
-                opportunities.map((opp) => (
-                    <div key={opp.marketId} className="glass-panel p-6 rounded-3xl border border-emerald-500/20 hover:border-emerald-500/50 transition-all group relative overflow-hidden">
-                        {isAutoArb && (
-                            <div className="absolute top-0 right-0 px-3 py-1 bg-emerald-500 text-black text-[8px] font-black uppercase tracking-tighter rounded-bl-xl z-20">
-                                Autonomous Mode
+                opportunities.map((opp) => {
+                    const spreadCents = (opp.spread * 100).toFixed(1);
+                    const rewardEligible = opp.rewardsMaxSpread && opp.spread <= opp.rewardsMaxSpread;
+
+                    return (
+                        <div key={opp.tokenId} className="glass-panel p-6 rounded-3xl border border-emerald-500/20 hover:border-emerald-500/50 transition-all group relative overflow-hidden">
+                            {isAutoArb && (
+                                <div className="absolute top-0 right-0 px-3 py-1 bg-emerald-500 text-black text-[8px] font-black uppercase tracking-tighter rounded-bl-xl z-20">
+                                    Autonomous Mode
+                                </div>
+                            )}
+                            <div className="flex justify-between items-start mb-4">
+                                <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-500 group-hover:scale-110 transition-transform duration-500">
+                                    {rewardEligible ? <DollarSign size={24}/> : <ZapIcon size={24}/>}
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Capture ROI</div>
+                                    <div className="text-2xl font-black text-emerald-500">+{opp.spreadPct.toFixed(2)}%</div>
+                                </div>
                             </div>
-                        )}
-                        <div className="flex justify-between items-start mb-4">
-                            <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-500 group-hover:scale-110 transition-transform duration-500">
-                                <ZapIcon size={24}/>
+                            <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2 mb-6 h-10 leading-tight">{opp.question}</h4>
+                            
+                            <div className="space-y-4 bg-black/20 p-4 rounded-2xl mb-6 border border-white/5">
+                                <div className="flex justify-between text-[10px]">
+                                    <span className="text-gray-500 uppercase font-black tracking-widest">Cent-Spread</span>
+                                    <span className="font-mono text-emerald-400 font-bold">{spreadCents}¢</span>
+                                </div>
+                                <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden flex">
+                                    <div className="h-full bg-emerald-500 shadow-[0_0_10px_#10b981]" style={{ width: `${Math.min(100, opp.spreadPct * 10)}%` }}></div>
+                                </div>
+                                <div className="flex justify-between text-[10px]">
+                                    <span className="text-gray-500 uppercase font-black tracking-widest">Midpoint Price</span>
+                                    <span className="font-mono text-white font-bold">${opp.midpoint.toFixed(3)}</span>
+                                </div>
                             </div>
-                            <div className="text-right">
-                                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Est. ROI</div>
-                                <div className="text-2xl font-black text-emerald-500">+{opp.roi.toFixed(2)}%</div>
-                            </div>
+
+                            {rewardEligible && (
+                                <div className="mb-4 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-[9px] font-black text-yellow-600 text-center uppercase tracking-widest">
+                                    💰 Liquidity Reward Eligible
+                                </div>
+                            )}
+
+                            <button 
+                                onClick={() => onExecute(opp)} 
+                                className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 group-hover:-translate-y-1"
+                            >
+                                <Landmark size={16}/> POST QUOTE
+                            </button>
                         </div>
-                        <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2 mb-6 h-10 leading-tight">{opp.question}</h4>
-                        <div className="space-y-4 bg-black/20 p-4 rounded-2xl mb-6 border border-white/5">
-                            <div className="flex justify-between text-[10px]">
-                                <span className="text-gray-500 uppercase font-black tracking-widest">Combined Cost</span>
-                                <span className="font-mono text-emerald-400 font-bold">${opp.combinedCost.toFixed(3)}</span>
-                            </div>
-                            <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden flex">
-                                <div className="h-full bg-emerald-500 shadow-[0_0_10px_#10b981]" style={{ width: `${(1 - opp.combinedCost) * 100}%` }}></div>
-                            </div>
-                            <div className="flex justify-between text-[10px]">
-                                <span className="text-gray-500 uppercase font-black tracking-widest">Market Depth</span>
-                                <span className="font-mono text-white font-bold">${opp.capacityUsd.toFixed(0)}</span>
-                            </div>
-                        </div>
-                        <button 
-                            onClick={() => onExecute(opp)} 
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 group-hover:-translate-y-1"
-                        >
-                            <Landmark size={16}/> MANUAL DISPATCH
-                        </button>
-                    </div>
-                ))
+                    );
+                })
             )}
         </div>
     );
@@ -1564,7 +1581,7 @@ const ActivationView = ({
                 )}
 
                 {computedAddress && (
-                    <div className={`p-4 rounded-lg border animate-in fade-in zoom-in duration-300 ${recoveryMode ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-500/20' : 'bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10'}`}>
+                    <div className={`p-4 rounded-lg border animate-in fade-in zoom-in duration-300 ${recoveryMode ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-500/20' : 'bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10'}`}>
                         <div className="flex justify-between items-center mb-2">
                             <span className={`text-xs font-bold uppercase tracking-wider flex items-center gap-1 ${recoveryMode ? 'text-green-800 dark:text-green-400' : 'text-gray-500'}`}>
                                 {recoveryMode ? <><CheckCircle2 size={12}/> Existing Wallet Found</> : "Your Future Trading Wallet"}
@@ -2350,13 +2367,13 @@ const handleWithdraw = async (tokenType: 'USDC' | 'USDC.e' | 'POL', isRescue: bo
 };
 
 const handleExecuteArb = async (opp: ArbitrageOpportunity) => {
-    // This is a MANUAL override command sent to the server engine
-    if (!confirm(`Manually Dispatch Arbitrage Signal?\n\nTarget: ${opp.question}\nROI: ${opp.roi.toFixed(2)}%`)) return;
+    // This is a MANUAL override command sent to the server engine (Market Making)
+    if (!confirm(`Manually Post Two-Sided Quote?\n\nTarget: ${opp.question}\nSpread: ${(opp.spread * 100).toFixed(1)}¢`)) return;
     try {
         await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
         playSound('trade');
-        alert("Signal Dispatched to Server Engine");
-    } catch (e) { alert("Arb Signal Failed"); }
+        alert("MM Strategy Dispatched to Server Engine");
+    } catch (e) { alert("MM Trigger Failed"); }
 };
 
 // --- MANUAL EXIT HANDLER ---
@@ -2982,7 +2999,7 @@ return (
                                     </button>
                                     <button 
                                         onClick={() => setTradePanelTab('history')}
-                                        className={`text-sm font-bold pb-2 border-b-2 transition-colors ${tradePanelTab === 'history' ? 'border-blue-500 text-blue-500' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                                        className={`text-sm font-bold pb-2 border-b-2 transition-colors ${tradePanelTab === 'history' ? 'border-blue-500 text-blue-500' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-white'}`}
                                     >
                                         History
                                     </button>
@@ -3185,7 +3202,7 @@ return (
                                             </div>
                                         )}
                                         {tradeHistory.length > 8 && (
-                                            <button onClick={() => setActiveTab('history')} className="w-full py-2 text-[10px] text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/5 rounded-lg transition-colors">
+                                            <button onClick={() => setActiveTab('history')} className="w-full py-2 text-[10px] text-gray-500 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors">
                                                 View Full History
                                             </button>
                                         )}
@@ -3197,7 +3214,7 @@ return (
             </div>
         )}
 
-        {/* --- Arbitrage Tab --- */}
+        {/* --- Arbitrage Tab (Now Market Making Tab) --- */}
         {activeTab === 'arbitrage' && (
             <div className="space-y-12 animate-in fade-in slide-in-from-right-4 duration-500">
                 <div className="relative p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-lg">
@@ -3206,20 +3223,20 @@ return (
                             <div className="p-2 bg-white/20 rounded-xl">
                                 <Scale size={20} className="text-white"/>
                             </div>
-                            <h2 className="text-2xl sm:text-3xl font-bold">Real-time Arbitrage Scanner</h2>
+                            <h2 className="text-2xl sm:text-3xl font-bold">Market Making Engine</h2>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
                             <div className="bg-white/10 p-3 rounded-xl">
-                                <div className="font-medium text-emerald-100">Market Focus</div>
-                                <div className="text-white font-mono">Polymarket CLOB</div>
-                            </div>
-                            <div className="bg-white/10 p-3 rounded-xl">
                                 <div className="font-medium text-emerald-100">Strategy</div>
-                                <div className="text-white font-mono">Negative Risk</div>
+                                <div className="text-white font-mono">Spread Capture (GTC)</div>
                             </div>
                             <div className="bg-white/10 p-3 rounded-xl">
-                                <div className="font-medium text-emerald-100">Execution</div>
-                                <div className="text-white font-mono">FAK Orders</div>
+                                <div className="font-medium text-emerald-100">Market Focus</div>
+                                <div className="text-white font-mono">High-Vol / New Listings</div>
+                            </div>
+                            <div className="bg-white/10 p-3 rounded-xl">
+                                <div className="font-medium text-emerald-100">Rewards</div>
+                                <div className="text-white font-mono">Liquidity Incentives</div>
                             </div>
                         </div>
                     </div>
@@ -3227,10 +3244,10 @@ return (
 
                 <div className="flex items-center justify-between px-2">
                     <div className="flex items-center gap-4">
-                        <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-500"><Scale size={24}/></div>
+                        <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-500"><Zap size={24}/></div>
                         <div>
-                            <h3 className="text-xl font-black text-white">Live Arbitrage Opportunities</h3>
-                            <p className="text-xs text-slate-500">Scanning Negative Risk market inefficiencies</p>
+                            <h3 className="text-xl font-black text-white">Live Yield Opportunities</h3>
+                            <p className="text-xs text-slate-500">Real-time orderbook spread monitoring</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-6">

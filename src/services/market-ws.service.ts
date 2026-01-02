@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
+// FIX: Removed 'ws' package import as this service runs in the browser. 
+// Using the global browser WebSocket API instead.
 import { WS_URLS } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 
@@ -35,13 +36,19 @@ export class MarketWebSocketService extends EventEmitter {
 
     public connect(): void {
         if (this.ws) {
-            this.ws.removeAllListeners();
+            // FIX: Use standard close() instead of Node-specific methods
+            this.ws.onopen = null;
+            this.ws.onmessage = null;
+            this.ws.onerror = null;
+            this.ws.onclose = null;
             this.ws.close();
         }
 
+        // FIX: Use global browser WebSocket constructor
         this.ws = new WebSocket(WS_URLS.CLOB);
 
-        this.ws.on('open', () => {
+        // FIX: Use standard event property handlers for browser WebSocket
+        this.ws.onopen = () => {
             this.isConnected = true;
             this.reconnectAttempts = 0;
             this.reconnectDelay = 1000;
@@ -55,25 +62,27 @@ export class MarketWebSocketService extends EventEmitter {
                 });
             }
 
-            // Set up ping-pong to keep connection alive
+            // Set up interval to keep connection alive
             this.pingInterval = setInterval(() => {
+                // FIX: Browser WebSocket doesn't have .ping(), sending a message-based ping if needed
+                // Most servers handle connection health via standard TCP pings or idle timeouts
                 if (this.ws?.readyState === WebSocket.OPEN) {
-                    this.ws.ping();
+                    this.ws.send('ping'); 
                 }
-            }, 30000); // Send ping every 30 seconds
-        });
+            }, 30000); 
+        };
 
-        this.ws.on('message', (data: WebSocket.Data) => {
+        this.ws.onmessage = (event: MessageEvent) => {
             try {
-                const message = JSON.parse(data.toString());
+                const message = JSON.parse(event.data);
                 this.handleMessage(message);
             } catch (error) {
                 const errorMessage = error instanceof Error ? error : new Error(String(error));
                 this.logger.error('Error parsing WebSocket message:', errorMessage);
             }
-        });
+        };
 
-        this.ws.on('close', () => {
+        this.ws.onclose = () => {
             this.isConnected = false;
             this.logger.warn('🔌 Market WebSocket: Disconnected');
             this.handleReconnect();
@@ -82,11 +91,11 @@ export class MarketWebSocketService extends EventEmitter {
                 clearInterval(this.pingInterval);
                 this.pingInterval = undefined;
             }
-        });
+        };
 
-        this.ws.on('error', (error: Error) => {
-            this.logger.error(`WebSocket error: ${error.message}`, error);
-        });
+        this.ws.onerror = (error: Event) => {
+            this.logger.error('WebSocket connection error occurred');
+        };
     }
 
     private handleReconnect(): void {
@@ -148,6 +157,7 @@ export class MarketWebSocketService extends EventEmitter {
     }
 
     public subscribeToMarket(marketId: string): void {
+        // FIX: Use static OPEN property on global WebSocket constructor
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             this.logger.warn('WebSocket not connected. Will subscribe when connected.');
             this.subscribedMarkets.add(marketId);
@@ -170,6 +180,7 @@ export class MarketWebSocketService extends EventEmitter {
     }
 
     public unsubscribeFromMarket(marketId: string): void {
+        // FIX: Use static OPEN property on global WebSocket constructor
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             this.subscribedMarkets.delete(marketId);
             return;
@@ -215,10 +226,14 @@ export class MarketWebSocketService extends EventEmitter {
 
     public disconnect(): void {
         if (this.ws) {
+            // FIX: Use standard WebSocket closure and event removal
             if (this.ws.readyState === WebSocket.OPEN) {
                 this.ws.close();
             }
-            this.ws.removeAllListeners();
+            this.ws.onopen = null;
+            this.ws.onmessage = null;
+            this.ws.onerror = null;
+            this.ws.onclose = null;
             this.ws = undefined;
         }
         
@@ -234,6 +249,7 @@ export class MarketWebSocketService extends EventEmitter {
     }
 
     public isConnectedToWebSocket(): boolean {
+        // FIX: Use static OPEN property on global WebSocket constructor
         return this.isConnected && this.ws?.readyState === WebSocket.OPEN;
     }
 }

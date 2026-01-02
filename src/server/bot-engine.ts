@@ -15,7 +15,7 @@ import { FeeDistributorService } from '../services/fee-distributor.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { TOKENS } from '../config/env.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
-import { ArbitrageScanner } from '../services/arbitrage-scanner.js';
+import { MarketMakingScanner, MarketOpportunity } from '../services/arbitrage-scanner.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import crypto from 'crypto';
 
@@ -32,6 +32,9 @@ export interface BotConfig {
     enableNotifications: boolean;
     userPhoneNumber?: string;
     autoCashout?: { enabled: boolean; maxAmount: number; destinationAddress: string; };
+    enableAutoCashout?: boolean; // Legacy compat
+    maxRetentionAmount?: number; // Legacy compat
+    coldWalletAddress?: string; // Legacy compat
     enableAutoArb?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
@@ -57,7 +60,7 @@ export class BotEngine {
     public isRunning = false;
     private monitor?: TradeMonitorService;
     private executor?: TradeExecutorService;
-    private arbScanner?: ArbitrageScanner;
+    private arbScanner?: MarketMakingScanner;
     private exchange?: PolymarketAdapter;
     private portfolioService?: PortfolioService;
     private runtimeEnv: any;
@@ -398,23 +401,25 @@ export class BotEngine {
 
             await this.exchange.initialize();
 
-            // Initialize the real-time arbitrage scanner instance
-            this.arbScanner = new ArbitrageScanner(this.exchange, engineLogger);
+            // Initialize the real-time arbitrage scanner instance (Actually Market Making)
+            this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
             
-            this.arbScanner.on('opportunity', async (opp: ArbitrageOpportunity) => {
+            this.arbScanner.on('opportunity', async (opp: MarketOpportunity) => {
                 if (this.callbacks?.onArbUpdate) {
-                    await this.callbacks.onArbUpdate(this.arbScanner!.getLatestOpportunities());
+                    // FIX: Correct mapping from MarketOpportunity to ArbitrageOpportunity interface
+                    const arbOpps = this.arbScanner!.getOpportunities().map(o => ({
+                        ...o,
+                        marketId: o.conditionId,
+                        roi: o.spreadPct,
+                        combinedCost: 1 - o.spread,
+                        capacityUsd: o.liquidity || 0
+                    } as ArbitrageOpportunity));
+                    await this.callbacks.onArbUpdate(arbOpps);
                 }
                 if (this.config.enableAutoArb) {
-                    await this.executeArbitrage(opp);
+                    await this.executeMarketMaking(opp);
                 }
             });
-            
-            // Start the arbitrage scanner
-            if (this.arbScanner) {
-                await this.arbScanner.start();
-                engineLogger.info('🔄 Arbitrage scanner started');
-            }
 
             const isFunded = await this.checkFunding();
             if (!isFunded) {
@@ -444,43 +449,28 @@ export class BotEngine {
         this.addLog('warn', 'Engine Stopped.').catch(console.error);
     }
 
-    private async executeArbitrage(opp: ArbitrageOpportunity) {
+    /**
+     * Executes the new Market Making logic when an opportunity is detected.
+     * Replaces the old statistical arbitrage outcome-sum logic.
+     */
+    private async executeMarketMaking(opp: MarketOpportunity) {
         if (!this.executor || !this.exchange) return;
         
-        const size = Math.min(opp.capacityUsd, this.config.maxTradeAmount || 50);
-        if (size < 5) return;
-
-        this.addLog('info', `⚡ EXPLOITING ARB: ${opp.question} | ROI: ${opp.roi.toFixed(2)}%`);
+        // Use MarketMaking specific executor method
+        const result = await this.executor.executeMarketMakingQuotes(opp as any);
         
-        try {
-            const results = await Promise.all(opp.legs.map(leg => 
-                this.exchange!.createOrder({
-                    marketId: opp.marketId,
-                    tokenId: leg.tokenId,
-                    outcome: leg.outcome,
-                    side: 'BUY',
-                    sizeUsd: size / opp.legs.length,
-                    priceLimit: leg.price * 1.02 
-                })
-            ));
-
-            if (results.every(r => r.success)) {
-                this.addLog('success', `✅ ARB FILLED: Total Cost $${opp.combinedCost.toFixed(3)} | ROI: ${opp.roi.toFixed(2)}%`);
-                await this.syncPositions(true);
-            } else {
-                const failed = results.filter(r => !r.success).length;
-                this.addLog('warn', `⚠️ ARB PARTIAL: ${failed} leg(s) failed to fill at target price. Engine will attempt manual resolution.`);
-            }
-        } catch (e: any) {
-            this.addLog('error', `❌ ARB ERROR: ${e.message}`);
+        if (result.status === 'POSTED' || result.status === 'PARTIAL') {
+            this.addLog('success', `⚡ MM QUOTE: ${opp.question.slice(0,30)}... | Bid: ${result.bidPrice}¢ | Ask: ${result.askPrice}¢`);
+            await this.syncPositions(true);
         }
     }
 
     public async dispatchManualArb(marketId: string): Promise<boolean> {
-        const opps = this.arbScanner?.getLatestOpportunities();
-        const target = opps?.find(o => o.marketId === marketId);
+        const opps = this.arbScanner?.getOpportunities();
+        // FIX: Added correct check for marketId in MarketOpportunity
+        const target = opps?.find(o => o.conditionId === marketId);
         if (target) {
-            await this.executeArbitrage(target);
+            await this.executeMarketMaking(target);
             return true;
         }
         return false;
@@ -791,7 +781,16 @@ export class BotEngine {
     }
 
     
-    public getArbOpportunities() { return this.arbScanner?.getLatestOpportunities() || []; }
+    public getArbOpportunities() { 
+        // FIX: Correct mapping from MarketOpportunity to ArbitrageOpportunity interface
+        return this.arbScanner?.getOpportunities().map(o => ({
+            ...o,
+            marketId: o.conditionId,
+            roi: o.spreadPct,
+            combinedCost: 1 - o.spread,
+            capacityUsd: o.liquidity || 0
+        } as ArbitrageOpportunity)) || []; 
+    }
 
     public getCallbacks(): BotCallbacks | undefined {
         return this.callbacks;

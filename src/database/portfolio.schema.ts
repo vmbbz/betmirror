@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 import { PortfolioSnapshot } from '../domain/portfolio.types.js';
 
 // Interface for the model with static methods
+// FIX: Ensure the interface correctly represents a Mongoose Model with our custom statics
 interface IPortfolioSnapshotModel extends Model<PortfolioSnapshot & Document> {
   getAnalytics(userId: string, period: '1D' | '1W' | '30D' | 'ALL'): Promise<any>;
   createSnapshot(
@@ -144,4 +145,5 @@ portfolioSnapshotSchema.statics.cleanupOldSnapshots = async function() {
   });
 };
 
-export const PortfolioSnapshotModel: IPortfolioSnapshotModel = mongoose.model<PortfolioSnapshot & Document>('PortfolioSnapshot', portfolioSnapshotSchema) as IPortfolioSnapshotModel;
+// FIX: Use named generic parameters to ensure the exported model has both base and custom methods
+export const PortfolioSnapshotModel = mongoose.model<PortfolioSnapshot & Document, IPortfolioSnapshotModel>('PortfolioSnapshot', portfolioSnapshotSchema);

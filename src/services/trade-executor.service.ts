@@ -7,26 +7,48 @@ import { TOKENS } from '../config/env.js';
 import { IExchangeAdapter, LiquidityHealth } from '../adapters/interfaces.js';
 import axios from 'axios';
 
+// Import from arbitrage scanner
+import type { MarketOpportunity } from './arbitrage-scanner.js';
+
 export type TradeExecutorDeps = {
   adapter: IExchangeAdapter;
   env: RuntimeEnv;
   logger: Logger;
-  proxyWallet: string; // Funder address
+  proxyWallet: string;
 };
 
 interface Position {
   conditionId: string;
   initialValue: number;
   currentValue: number;
-  balance: string; // share balance
+  balance: string;
 }
 
 export interface ExecutionResult {
     status: 'FILLED' | 'FAILED' | 'SKIPPED' | 'ILLIQUID';
     txHash?: string;
-    executedAmount: number; // USD Value
-    executedShares: number; // Share Count
+    executedAmount: number;
+    executedShares: number;
     priceFilled: number;    
+    reason?: string;
+}
+
+// New: Market Making specific types
+export interface MarketMakingConfig {
+    quoteSize: number;           // Size per side in USD
+    spreadOffset: number;        // Offset from midpoint (e.g., 0.01 = 1 cent)
+    maxPositionUsd: number;      // Max inventory per token
+    maxOpenOrdersPerToken: number;
+    rebalanceThreshold: number;  // Inventory skew % to trigger rebalance
+}
+
+export interface QuoteResult {
+    tokenId: string;
+    bidOrderId?: string;
+    askOrderId?: string;
+    bidPrice?: number;
+    askPrice?: number;
+    status: 'POSTED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
     reason?: string;
 }
 
@@ -38,11 +60,411 @@ export class TradeExecutorService {
   
   private pendingSpend = 0;
 
-  constructor(deps: TradeExecutorDeps) {
+  // Market Making state
+  private activeQuotes: Map<string, { bidOrderId?: string; askOrderId?: string }> = new Map();
+  private inventory: Map<string, number> = new Map(); // tokenId -> share balance
+
+  private mmConfig: MarketMakingConfig = {
+      quoteSize: 50,              // $50 per side default
+      spreadOffset: 0.01,         // 1 cent from midpoint
+      maxPositionUsd: 500,        // Max $500 inventory per token
+      maxOpenOrdersPerToken: 2,   // 1 bid + 1 ask
+      rebalanceThreshold: 0.3     // 30% skew triggers rebalance
+  };
+
+  constructor(deps: TradeExecutorDeps, mmConfig?: Partial<MarketMakingConfig>) {
     this.deps = deps;
+    if (mmConfig) this.mmConfig = { ...this.mmConfig, ...mmConfig };
   }
 
-  // Check if market resolved and which outcome won
+  // ============================================================
+  // MARKET MAKING METHODS (NEW)
+  // ============================================================
+
+  /**
+   * Execute two-sided quotes for market making opportunities
+   * Places GTC limit orders on both sides to capture spread
+   * Per docs: GTC orders rest on book and earn liquidity rewards
+   */
+  async executeMarketMakingQuotes(opportunity: MarketOpportunity): Promise<QuoteResult> {
+      const { logger, adapter, proxyWallet } = this.deps;
+      const { tokenId, conditionId, midpoint, spread, question, rewardsMaxSpread, rewardsMinSize } = opportunity;
+
+      const failResult = (reason: string): QuoteResult => ({
+          tokenId,
+          status: 'FAILED',
+          reason
+      });
+
+      try {
+          // 1. Check if market is still active
+          const market = await this.validateMarketForMM(conditionId);
+          if (!market.valid) {
+              return failResult(market.reason || 'market_invalid');
+          }
+
+          // 2. Cancel existing quotes for this token before placing new ones
+          await this.cancelExistingQuotes(tokenId);
+
+          // 3. Check inventory limits
+          const currentInventory = await this.getTokenInventory(tokenId);
+          const inventoryValueUsd = currentInventory * midpoint;
+          
+          if (inventoryValueUsd >= this.mmConfig.maxPositionUsd) {
+              logger.warn(`[MM] Inventory limit reached for ${tokenId}: $${inventoryValueUsd.toFixed(2)}`);
+              // Only post asks to reduce inventory
+              return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
+          }
+
+          // 4. Calculate quote prices
+          // Per docs: rewards require quoting within max_spread from midpoint
+          let bidOffset = this.mmConfig.spreadOffset;
+          let askOffset = this.mmConfig.spreadOffset;
+
+          // If reward-eligible, ensure we're within max_spread
+          if (rewardsMaxSpread && this.mmConfig.spreadOffset > rewardsMaxSpread / 2) {
+              bidOffset = rewardsMaxSpread / 2 - 0.001;
+              askOffset = rewardsMaxSpread / 2 - 0.001;
+              logger.info(`[MM] Adjusted offsets for rewards: ${(bidOffset * 100).toFixed(2)}¢`);
+          }
+
+          const bidPrice = Math.max(0.01, midpoint - bidOffset);
+          const askPrice = Math.min(0.99, midpoint + askOffset);
+
+          // 5. Determine quote sizes
+          let bidSize = this.mmConfig.quoteSize / bidPrice;
+          let askSize = Math.min(this.mmConfig.quoteSize / askPrice, currentInventory);
+
+          // Check rewards min_size requirement
+          const minSize = rewardsMinSize || market.minOrderSize || 5;
+          if (bidSize < minSize) bidSize = minSize;
+          if (askSize < minSize && currentInventory >= minSize) askSize = minSize;
+
+          // 6. Check balance for bid
+          const balance = await adapter.fetchBalance(proxyWallet);
+          const availableForBid = Math.max(0, balance - this.pendingSpend);
+          
+          if (availableForBid < bidSize * bidPrice) {
+              logger.warn(`[MM] Insufficient balance for bid: need $${(bidSize * bidPrice).toFixed(2)}, have $${availableForBid.toFixed(2)}`);
+              bidSize = availableForBid / bidPrice;
+          }
+
+          // 7. Place orders using GTC (required for rewards)
+          const result: QuoteResult = {
+              tokenId,
+              status: 'POSTED',
+              bidPrice,
+              askPrice
+          };
+
+          // Place BID (buy order)
+          if (bidSize >= minSize) {
+              const bidResult = await this.placeGTCOrder({
+                  tokenId,
+                  conditionId,
+                  side: 'BUY',
+                  price: bidPrice,
+                  size: bidSize,
+                  negRisk: market.negRisk,
+                  tickSize: market.tickSize
+              });
+
+              if (bidResult.success) {
+                  result.bidOrderId = bidResult.orderId;
+                  this.pendingSpend += bidSize * bidPrice;
+                  logger.success(`[MM] BID posted: ${bidSize.toFixed(2)} @ ${(bidPrice * 100).toFixed(1)}¢`);
+              } else {
+                  logger.warn(`[MM] BID failed: ${bidResult.error}`);
+                  result.status = 'PARTIAL';
+              }
+          }
+
+          // Place ASK (sell order)
+          if (askSize >= minSize && currentInventory >= minSize) {
+              const askResult = await this.placeGTCOrder({
+                  tokenId,
+                  conditionId,
+                  side: 'SELL',
+                  price: askPrice,
+                  size: askSize,
+                  negRisk: market.negRisk,
+                  tickSize: market.tickSize
+              });
+
+              if (askResult.success) {
+                  result.askOrderId = askResult.orderId;
+                  logger.success(`[MM] ASK posted: ${askSize.toFixed(2)} @ ${(askPrice * 100).toFixed(1)}¢`);
+              } else {
+                  logger.warn(`[MM] ASK failed: ${askResult.error}`);
+                  if (!result.bidOrderId) result.status = 'FAILED';
+                  else result.status = 'PARTIAL';
+              }
+          }
+
+          // Track active quotes
+          this.activeQuotes.set(tokenId, {
+              bidOrderId: result.bidOrderId,
+              askOrderId: result.askOrderId
+          });
+
+          const rewardTag = rewardsMaxSpread && spread <= rewardsMaxSpread ? '💰 REWARD-ELIGIBLE' : '';
+          logger.info(`[MM] Quotes live for ${question.slice(0, 40)}... | Spread: ${(spread * 100).toFixed(1)}¢ ${rewardTag}`);
+
+          return result;
+
+      } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          logger.error(`[MM] Quote execution failed: ${err.message}`, err);
+          return failResult(err.message);
+      }
+  }
+
+  /**
+   * Place a GTC limit order (required for liquidity rewards)
+   * Per docs: createAndPostOrder with OrderType.GTC
+   */
+  private async placeGTCOrder(params: {
+      tokenId: string;
+      conditionId: string;
+      side: 'BUY' | 'SELL';
+      price: number;
+      size: number;
+      negRisk: boolean;
+      tickSize: string;
+  }): Promise<{ success: boolean; orderId?: string; error?: string }> {
+      const { adapter } = this.deps;
+      const client = (adapter as any).getRawClient?.();
+      
+      if (!client) {
+          return { success: false, error: 'No CLOB client available' };
+      }
+
+      try {
+          // Round price to tick size
+          const tickSize = parseFloat(params.tickSize) || 0.01;
+          const roundedPrice = Math.round(params.price / tickSize) * tickSize;
+
+          // Per docs: createAndPostOrder with GTC type
+          const response = await client.createAndPostOrder(
+              {
+                  tokenID: params.tokenId,
+                  price: roundedPrice,
+                  size: params.size,
+                  side: params.side === 'BUY' ? 0 : 1, // 0 = BUY, 1 = SELL per docs
+              },
+              {
+                  tickSize: params.tickSize,
+                  negRisk: params.negRisk
+              },
+              'GTC' // Good Till Cancelled - required for rewards
+          );
+
+          if (response.success) {
+              return { success: true, orderId: response.orderID };
+          } else {
+              return { success: false, error: response.errorMsg || 'Order rejected' };
+          }
+      } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          return { success: false, error: err.message };
+      }
+  }
+
+  /**
+   * Cancel existing quotes for a token before placing new ones
+   * Per docs: cancelMarketOrders with asset_id
+   */
+  private async cancelExistingQuotes(tokenId: string): Promise<void> {
+      const { adapter, logger } = this.deps;
+      const client = (adapter as any).getRawClient?.();
+      
+      const existing = this.activeQuotes.get(tokenId);
+      if (!existing) return;
+
+      try {
+          const orderIds = [existing.bidOrderId, existing.askOrderId].filter(Boolean) as string[];
+          
+          if (orderIds.length > 0 && client) {
+              // Per docs: cancelOrders for multiple orders
+              await client.cancelOrders(orderIds);
+              logger.debug(`[MM] Cancelled ${orderIds.length} existing quotes for ${tokenId}`);
+          }
+          
+          this.activeQuotes.delete(tokenId);
+      } catch (error) {
+          // Non-fatal - orders may have already been filled/cancelled
+          logger.debug(`[MM] Cancel existing quotes warning: ${error}`);
+      }
+  }
+
+  /**
+   * Post single-side quote (for inventory management)
+   */
+  private async postSingleSideQuote(
+      opportunity: MarketOpportunity, 
+      side: 'BUY' | 'SELL',
+      inventory: number
+  ): Promise<QuoteResult> {
+      const { logger } = this.deps;
+      const { tokenId, conditionId, midpoint, rewardsMaxSpread, rewardsMinSize } = opportunity;
+
+      const market = await this.validateMarketForMM(conditionId);
+      if (!market.valid) {
+          return { tokenId, status: 'FAILED', reason: market.reason };
+      }
+
+      const offset = rewardsMaxSpread ? Math.min(this.mmConfig.spreadOffset, rewardsMaxSpread / 2) : this.mmConfig.spreadOffset;
+      const price = side === 'BUY' 
+          ? Math.max(0.01, midpoint - offset)
+          : Math.min(0.99, midpoint + offset);
+      
+      const size = side === 'SELL' 
+          ? Math.min(this.mmConfig.quoteSize / price, inventory)
+          : this.mmConfig.quoteSize / price;
+
+      const minSize = rewardsMinSize || market.minOrderSize || 5;
+      if (size < minSize) {
+          return { tokenId, status: 'SKIPPED', reason: `size_below_minimum: ${size} < ${minSize}` };
+      }
+
+      const result = await this.placeGTCOrder({
+          tokenId,
+          conditionId,
+          side,
+          price,
+          size,
+          negRisk: market.negRisk,
+          tickSize: market.tickSize
+      });
+
+      if (result.success) {
+          logger.success(`[MM] ${side} posted: ${size.toFixed(2)} @ ${(price * 100).toFixed(1)}¢`);
+          return {
+              tokenId,
+              status: 'POSTED',
+              [side === 'BUY' ? 'bidOrderId' : 'askOrderId']: result.orderId,
+              [side === 'BUY' ? 'bidPrice' : 'askPrice']: price
+          };
+      }
+
+      return { tokenId, status: 'FAILED', reason: result.error };
+  }
+
+  /**
+   * Validate market is suitable for market making
+   */
+  private async validateMarketForMM(conditionId: string): Promise<{
+      valid: boolean;
+      reason?: string;
+      negRisk: boolean;
+      tickSize: string;
+      minOrderSize: number;
+  }> {
+      const { adapter } = this.deps;
+      const client = (adapter as any).getRawClient?.();
+
+      try {
+          const market = await client.getMarket(conditionId);
+          
+          if (!market) return { valid: false, reason: 'market_not_found', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+          if (market.closed) return { valid: false, reason: 'market_closed', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+          if (!market.active) return { valid: false, reason: 'market_inactive', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+          if (!market.accepting_orders) return { valid: false, reason: 'not_accepting_orders', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+
+          return {
+              valid: true,
+              negRisk: market.neg_risk || false,
+              tickSize: market.minimum_tick_size?.toString() || '0.01',
+              minOrderSize: market.minimum_order_size || 5
+          };
+      } catch (error) {
+          return { valid: false, reason: 'validation_error', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+      }
+  }
+
+  /**
+   * Get current token inventory (share balance)
+   */
+  private async getTokenInventory(tokenId: string): Promise<number> {
+      const { adapter, proxyWallet } = this.deps;
+      
+      try {
+          const positions = await adapter.getPositions(proxyWallet);
+          const position = positions.find(p => p.tokenId === tokenId);
+          return position?.balance || 0;
+      } catch {
+          return this.inventory.get(tokenId) || 0;
+      }
+  }
+
+  /**
+   * Cancel all market making quotes (kill switch)
+   */
+  async cancelAllMMQuotes(): Promise<void> {
+      const { adapter, logger } = this.deps;
+      const client = (adapter as any).getRawClient?.();
+
+      if (!client) return;
+
+      try {
+          // Per docs: cancelAll() cancels all open orders
+          await client.cancelAll();
+          this.activeQuotes.clear();
+          this.pendingSpend = 0;
+          logger.warn('[MM] 🛑 All quotes cancelled');
+      } catch (error) {
+          logger.error(`[MM] Failed to cancel all quotes: ${error}`);
+      }
+  }
+
+  /**
+   * Update quotes when price changes (called from WebSocket handler)
+   */
+  async updateQuotesOnPriceChange(opportunity: MarketOpportunity): Promise<void> {
+      const { logger } = this.deps;
+      const existing = this.activeQuotes.get(opportunity.tokenId);
+      
+      if (!existing) return;
+
+      // Check if our quotes are still competitive
+      const { midpoint, bestBid, bestAsk } = opportunity;
+      
+      // If spread has tightened significantly, re-quote
+      if (existing.bidOrderId && existing.askOrderId) {
+          const ourSpread = bestAsk - bestBid; // Using bestBid and bestAsk directly as they're the only available prices
+          const marketSpread = bestAsk - bestBid;
+          
+          if (marketSpread < ourSpread * 0.7) {
+              logger.info(`[MM] Spread tightened, re-quoting ${opportunity.tokenId}`);
+              await this.executeMarketMakingQuotes(opportunity);
+          }
+      }
+  }
+
+  /**
+   * Check if orders are scoring for rewards
+   * Per docs: isOrderScoring endpoint
+   */
+  async checkOrdersScoring(orderIds: string[]): Promise<Record<string, boolean>> {
+      const { adapter, logger } = this.deps;
+      const client = (adapter as any).getRawClient?.();
+
+      if (!client || orderIds.length === 0) return {};
+
+      try {
+          // Per docs: areOrdersScoring for multiple orders
+          const scoring = await client.areOrdersScoring({ orderIds });
+          return scoring;
+      } catch (error) {
+          logger.warn(`[MM] Failed to check order scoring: ${error}`);
+          return {};
+      }
+  }
+
+  // ============================================================
+  // ORIGINAL COPY TRADING METHODS (PRESERVED)
+  // ============================================================
+
   private async checkMarketResolution(position: ActivePosition): Promise<{
     resolved: boolean;
     winningOutcome?: string;
@@ -50,7 +472,7 @@ export class TradeExecutorService {
     market?: any;
     conditionId?: string;
     source?: 'CLOB' | 'GAMMA';
-}> {
+  }> {
     const { logger, adapter } = this.deps;
     const conditionId = position.conditionId || position.marketId;
     
@@ -58,7 +480,6 @@ export class TradeExecutorService {
         let market: any = null;
         let source: 'CLOB' | 'GAMMA' | undefined;
 
-        // ATTEMPT 1: CLOB API (Active Markets)
         const client = (adapter as any).getRawClient?.();
         if (client) {
             try {
@@ -69,7 +490,6 @@ export class TradeExecutorService {
             }
         }
 
-        // ATTEMPT 2: GAMMA API FALLBACK (Archived Markets)
         if (!market) {
             try {
                 const gammaUrl = `https://gamma-api.polymarket.com/markets?condition_id=${conditionId}`;
@@ -88,10 +508,8 @@ export class TradeExecutorService {
             return { resolved: false, conditionId };
         }
 
-        // Detailed Metadata Logging for Admin
         logger.info(`📊 Resolution Metadata [${source}] for ${conditionId}: closed=${market.closed}, active=${market.active}, status=${market.status}`);
 
-        // Primary Resolution Detection
         const isResolved = market.closed === true || market.status === 'resolved' || market.archived === true;
 
         if (!isResolved) {
@@ -99,16 +517,13 @@ export class TradeExecutorService {
             return { resolved: false, market, conditionId, source };
         }
 
-        // Winner Detection Logic
         let winningOutcome: string | undefined;
         let userWon = false;
 
         if (market.tokens && Array.isArray(market.tokens)) {
-            // CLOB Format
             const winningToken = market.tokens.find((t: any) => t.winner === true);
             if (winningToken) winningOutcome = winningToken.outcome;
         } else if (market.winning_outcome) {
-            // Gamma Format
             winningOutcome = market.winning_outcome;
         }
 
@@ -130,17 +545,15 @@ export class TradeExecutorService {
         logger.error(`❌ Error in resolution engine: ${error.message}`);
         return { resolved: false, conditionId };
     }
-}
-
+  }
 
   async executeManualExit(position: ActivePosition, currentPrice: number): Promise<boolean> {
       const { logger, adapter } = this.deps;
       let remainingShares = position.shares;
       
       try {
-          // Hard check for exchange minimums before even trying
           if (remainingShares < 5) {
-              logger.error(`🚨 Cannot Exit: Your balance (${remainingShares.toFixed(2)}) is below the exchange minimum of 5 shares. You must buy more of this asset to liquidate it.`);
+              logger.error(`🚨 Cannot Exit: Your balance (${remainingShares.toFixed(2)}) is below the exchange minimum of 5 shares.`);
               return false;
           }
 
@@ -161,13 +574,12 @@ export class TradeExecutorService {
               const diff = position.shares - filled;
               
               if (diff > 0.01) {
-                  logger.warn(`⚠️ Partial Fill: Only liquidated ${filled}/${position.shares} shares. ${diff.toFixed(2)} shares remain stuck due to book depth.`);
+                  logger.warn(`⚠️ Partial Fill: Only liquidated ${filled}/${position.shares} shares.`);
               }
               
               logger.success(`Exit summary: Liquidated ${filled.toFixed(2)} shares @ avg best possible price.`);
               return true;
           } else {
-              // Check if this is a resolved market that needs proper redemption logic
               if (result.error?.includes("No orderbook") || result.error?.includes("404")) {
                   logger.info(`Market appears resolved. Checking resolution status...`);
                   
@@ -185,8 +597,7 @@ export class TradeExecutorService {
                               return false;
                           }
                       } else {
-                          logger.warn(`Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}, Your position: ${position.outcome}`);
-                          logger.warn(`No redemption possible - this position has expired worthless.`);
+                          logger.warn(`Market resolved but you did not win. Winning outcome: ${resolution.winningOutcome || 'Unknown'}`);
                           return false;
                       }
                   } else {
@@ -224,7 +635,6 @@ export class TradeExecutorService {
     });
 
     try {
-      // MARKET VALIDATION - Check if market is still tradeable
       try {
         const market = await (adapter as any).getRawClient().getMarket(signal.marketId);
         
@@ -248,7 +658,6 @@ export class TradeExecutorService {
         if (e.message?.includes("404") || e.message?.includes("No orderbook") || String(e).includes("404")) {
           logger.warn(`[Market Resolved] ${signal.marketId} - Attempting to redeem existing position`);
           
-          // Try to redeem existing position if market is resolved
           try {
             const positions = await adapter.getPositions(proxyWallet);
             const existingPosition = positions.find(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
@@ -281,6 +690,7 @@ export class TradeExecutorService {
         }
         throw e;
       }
+
       if (this.deps.adapter.getLiquidityMetrics) {
           try {
               const metrics = await this.deps.adapter.getLiquidityMetrics(signal.tokenId, signal.side);
@@ -300,11 +710,9 @@ export class TradeExecutorService {
               }
               logger.info(`[Liquidity OK] Health: ${metrics.health} | Spread: ${(metrics.spread * 100).toFixed(1)}¢ | Depth: $${metrics.availableDepthUsd.toFixed(0)}`);
           } catch (e: any) {
-              // Check if this is a resolved market (404/No orderbook)
               if (e.message?.includes("404") || e.message?.includes("No orderbook") || String(e).includes("404")) {
                   logger.warn(`[Market Resolved] ${signal.marketId} - Attempting to redeem existing position (liquidity check)`);
                   
-                  // Try to redeem existing position if market is resolved
                   try {
                       const positions = await adapter.getPositions(proxyWallet);
                       const existingPosition = positions.find(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
@@ -358,14 +766,12 @@ export class TradeExecutorService {
 
       const traderBalance = await this.getTraderBalance(signal.trader);
 
-      // Get minOrderSize for the market
       let minOrderSize = 5; 
       try {
           const book = await adapter.getOrderBook(signal.tokenId);
           if (book.min_order_size) minOrderSize = Number(book.min_order_size);
       } catch (e) {}
 
-      // First compute the desired trade size
       const sizing = computeProportionalSizing({
         yourUsdBalance: usableBalanceForTrade,
         yourShareBalance: currentShareBalance,
@@ -382,7 +788,6 @@ export class TradeExecutorService {
           return failResult(sizing.reason || "skipped_by_sizing_engine");
       }
 
-      // Now check if we have enough balance for this specific trade
       if (signal.side === 'BUY' && usableBalanceForTrade < sizing.targetUsdSize) {
           const chainBalance = await adapter.fetchBalance(proxyWallet);
           return failResult(
@@ -403,11 +808,10 @@ export class TradeExecutorService {
 
       logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.targetShares} shares) | Reason: ${sizing.reason}`);
 
-      // Check and update allowance if needed for BUY orders
       if (signal.side === 'BUY' && adapter.getSigner && adapter.getSigner().safeManager) {
           const safeManager = adapter.getSigner().safeManager;
-          const requiredAmount = BigInt(Math.ceil(sizing.targetUsdSize * 1e6)); // Convert to USDC units (6 decimals)
-          const spender = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E'; // CTF Exchange address
+          const requiredAmount = BigInt(Math.ceil(sizing.targetUsdSize * 1e6));
+          const spender = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
           
           try {
               this.deps.logger.info(`[Allowance] Checking USDC allowance for trade: $${sizing.targetUsdSize.toFixed(2)}`);

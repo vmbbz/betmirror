@@ -16,6 +16,8 @@ export interface MarketOpportunity {
     conditionId: string;
     tokenId: string;
     question: string;
+    image?: string;
+    marketSlug?: string;
     bestBid: number;
     bestAsk: number;
     spread: number;
@@ -40,6 +42,8 @@ interface TrackedMarket {
     conditionId: string;
     tokenId: string;
     question: string;
+    image?: string;
+    marketSlug?: string;
     bestBid: number;
     bestAsk: number;
     spread: number;
@@ -271,6 +275,8 @@ export class MarketMakingScanner extends EventEmitter {
                             conditionId,
                             tokenId,
                             question: market.question || event.title || 'Unknown',
+                            image: market.image || '',
+                            marketSlug: market.market_slug || '',
                             bestBid: 0,
                             bestAsk: 0,
                             spread: 0,
@@ -665,6 +671,8 @@ export class MarketMakingScanner extends EventEmitter {
             conditionId: market.conditionId,
             tokenId: market.tokenId,
             question: market.question,
+            image: market.image,
+            marketSlug: market.marketSlug,
             bestBid: market.bestBid,
             bestAsk: market.bestAsk,
             spread: market.spread,
@@ -729,6 +737,8 @@ export class MarketMakingScanner extends EventEmitter {
                         conditionId: market.conditionId,
                         tokenId,
                         question: market.question,
+                        image: market.image,
+                        marketSlug: market.marketSlug,
                         bestBid: market.bestBid,
                         bestAsk: market.bestAsk,
                         spread: market.spread,

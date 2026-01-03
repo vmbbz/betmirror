@@ -90,6 +90,8 @@ export interface IMoneyMarketOpportunity extends Document {
   marketId: string;
   tokenId: string;
   question: string;
+  image?: string;
+  marketSlug?: string;
   bestBid: number;
   bestAsk: number;
   spread: number;
@@ -107,6 +109,8 @@ const MoneyMarketOpportunitySchema = new Schema({
   marketId: { type: String, required: true, index: true },
   tokenId: { type: String, required: true, unique: true },
   question: String,
+  image: String,
+  marketSlug: String,
   bestBid: Number,
   bestAsk: Number,
   spread: Number,

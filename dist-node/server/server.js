@@ -6,7 +6,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -15,6 +15,7 @@ import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
 import axios from 'axios';
 import fs from 'fs';
+import crypto from 'crypto';
 // ESM compatibility
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,7 +123,7 @@ async function startUserBot(userId, config) {
                 }
             });
         },
-        onMMUpdate: async (opportunities) => {
+        onArbUpdate: async (opportunities) => {
             // Memory update handled by poll
         },
         onFeePaid: async (event) => {
@@ -375,7 +376,7 @@ app.post('/api/feedback', async (req, res) => {
 });
 // 5. Start Bot
 app.post('/api/bot/start', async (req, res) => {
-    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoMM, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
+    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
     if (!userId) {
         res.status(400).json({ error: 'Missing userId' });
         return;
@@ -398,7 +399,7 @@ app.post('/api/bot/start', async (req, res) => {
             geminiApiKey,
             multiplier: Number(multiplier),
             riskProfile,
-            enableAutoMM,
+            enableAutoArb,
             autoTp: autoTp ? Number(autoTp) : undefined,
             enableNotifications: notifications?.enabled,
             userPhoneNumber: notifications?.phoneNumber,
@@ -495,6 +496,8 @@ app.get('/api/bot/status/:userId', async (req, res) => {
         const tradeHistory = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
         const user = await User.findOne({ address: normId }).lean();
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
+        // PERSISTED RECENT OPPORTUNITIES FALLBACK
+        const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(20).lean();
         const formattedLogs = dbLogs.map(l => ({
             id: l._id.toString(),
             time: l.timestamp.toLocaleTimeString(),
@@ -509,27 +512,37 @@ app.get('/api/bot/status/:userId', async (req, res) => {
         // LIVE FEED:
         // Use active memory state if running, else DB state.
         let livePositions = [];
-        let mmOpportunities = [];
+        // FIX: Ensure persisted opportunities match the ArbitrageOpportunity interface expectations
+        let mmOpportunities = persistedMMOpps.map((o) => ({
+            marketId: o.marketId,
+            tokenId: o.tokenId,
+            question: o.question || '',
+            bestBid: o.bestBid || 0,
+            bestAsk: o.bestAsk || 0,
+            spread: o.spread || 0,
+            spreadPct: o.spreadPct || 0,
+            spreadCents: (o.spread || 0) * 100,
+            midpoint: o.midpoint || 0,
+            volume: o.volume || 0,
+            liquidity: o.liquidity || 0,
+            timestamp: o.timestamp instanceof Date ? o.timestamp.getTime() : new Date(o.timestamp).getTime(),
+            roi: o.roi || o.spreadPct || 0,
+            combinedCost: o.combinedCost || (1 - (o.spread || 0)),
+            capacityUsd: o.capacityUsd || o.liquidity || 0
+        }));
         if (engine) {
             // Priority: Active Engine Memory (which is synced from DB)
-            livePositions = engine.activePositions || [];
-            // Access money market scanner from bot engine
-            const adapter = engine.getAdapter();
-            // Get latest money market opportunities
-            mmOpportunities = engine.arbScanner?.getLatestOpportunities() || [];
+            livePositions = engine.getActivePositions() || [];
+            // Access arbitrage scanner from bot engine via public method
+            const engineOpps = engine.getArbOpportunities() || [];
+            if (engineOpps.length > 0) {
+                mmOpportunities = engineOpps; // Override with live ones if they exist
+            }
         }
         else if (user && user.activePositions) {
             // Fallback: Database State
             livePositions = user.activePositions;
         }
-        // --- DEBUG LOG FOR POSITIONS ---
-        // CLARIFICATION: This logs the payload for the current USER VIEWING THE DASHBOARD (normId),
-        // but the positions themselves are fetched for the SAFE associated with that user.
-        if (livePositions.length > 0) {
-            //console.log(`\n📦 [DEBUG] Raw Positions Payload for User ${normId.slice(0, 6)}... (Safe: ${user?.tradingWallet?.safeAddress?.slice(0,6) || 'Unknown'}) :`);
-            //console.dir(livePositions, { depth: null, colors: true });
-        }
-        // -------------------------------
         res.json({
             isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
             logs: formattedLogs,
@@ -537,7 +550,7 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             positions: livePositions,
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
-            mmOpportunities
+            mmOpportunities: mmOpportunities // SYNC KEY NAME WITH index.tsx
         });
     }
     catch (e) {
@@ -822,7 +835,7 @@ app.post('/api/wallet/add-recovery', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-app.post('/api/bot/execute-mm', async (req, res) => {
+app.post('/api/bot/execute-arb', async (req, res) => {
     const { userId, marketId } = req.body;
     const engine = ACTIVE_BOTS.get(userId.toLowerCase());
     if (!engine)
@@ -1097,7 +1110,7 @@ async function restoreBots() {
         console.error("Restore failed:", e);
     }
 }
-// --- REGISTRY SEEDER ---
+// --- REGISTRY SEER ---
 async function seedRegistry() {
     const systemWallets = ENV.userAddresses;
     if (!systemWallets || systemWallets.length === 0)

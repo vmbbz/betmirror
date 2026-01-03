@@ -2,6 +2,24 @@ import mongoose, { Schema } from 'mongoose';
 import { DatabaseEncryptionService } from '../services/database-encryption.service.js';
 // Initialize the encryption service immediately with the environment key
 DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
+const MoneyMarketOpportunitySchema = new Schema({
+    marketId: { type: String, required: true, index: true },
+    tokenId: { type: String, required: true, unique: true },
+    question: String,
+    image: String,
+    marketSlug: String,
+    bestBid: Number,
+    bestAsk: Number,
+    spread: Number,
+    spreadPct: Number,
+    midpoint: Number,
+    volume: Number,
+    liquidity: Number,
+    isNew: Boolean,
+    timestamp: { type: Date, default: Date.now, expires: 3600 }, // Expire after 1 hour
+    roi: Number,
+    capacityUsd: Number
+});
 const ActivePositionSchema = new Schema({
     tradeId: String,
     clobOrderId: String,
@@ -56,7 +74,7 @@ const TradingWalletSchema = new Schema({
         },
         secret: {
             type: String,
-            select: false // Never include in queries by default
+            select: false // Never include in already queries by default
         },
         passphrase: {
             type: String,
@@ -183,6 +201,7 @@ export { CopiedTrade, HunterEarning, WalletAnalytics } from './trade-tracking.sc
 export const BridgeTransaction = mongoose.model('BridgeTransaction', BridgeTransactionSchema);
 export const DepositLog = mongoose.model('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model('BotLog', BotLogSchema);
+export const MoneyMarketOpportunity = mongoose.model('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
 // --- Connection ---
 export const connectDB = async () => {
     const uri = process.env.MONGODB_URI;

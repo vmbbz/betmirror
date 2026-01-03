@@ -25,6 +25,14 @@ import { ArbitrageOpportunity } from './src/adapters/interfaces';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
+// Format numbers to compact form (1K, 1M, 1B, etc.)
+const formatCompactNumber = (num: number): string => {
+  if (num < 1000) return num.toString();
+  if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
+  if (num < 1000000000) return (num / 1000000).toFixed(1) + 'M';
+  return (num / 1000000000).toFixed(1) + 'B';
+};
+
 // Constants & Assets
 const CHAIN_ICONS: Record<number, string> = {
     1: "https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026",
@@ -162,11 +170,15 @@ const PerformanceChart = ({ userId, selectedRange }: {
  * Money Market Feed - Displays available money market opportunities
  * for providing liquidity and earning yield through market making
  */
-const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb }: { opportunities: ArbitrageOpportunity[], onExecute: (opp: ArbitrageOpportunity) => void, isAutoArb: boolean }) => {
+const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb }: { 
+    opportunities: ArbitrageOpportunity[], 
+    onExecute: (opp: ArbitrageOpportunity) => void, 
+    isAutoArb: boolean 
+}) => {
     return (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {opportunities.length === 0 ? (
-                <div className="col-span-full py-20 text-center text-gray-500 italic bg-white/5 rounded-3xl border border-dashed border-white/10">
+                <div className="col-span-full text-center p-12 text-gray-400">
                     <Landmark size={48} className="mx-auto mb-4 opacity-20"/>
                     <p className="text-sm uppercase tracking-widest font-bold">Scanning Money Markets...</p>
                     <p className="text-xs mt-2 opacity-50">Yield opportunities will appear when spreads are favorable.</p>
@@ -175,51 +187,83 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb }: { opportunitie
                 opportunities.map((opp) => {
                     const spreadCents = (opp.spread * 100).toFixed(1);
                     const rewardEligible = opp.rewardsMaxSpread && opp.spread <= opp.rewardsMaxSpread;
+                    const marketLink = opp.marketSlug ? `https://polymarket.com/market/${opp.marketSlug}` : null;
 
                     return (
-                        <div key={opp.tokenId} className="glass-panel p-6 rounded-3xl border border-emerald-500/20 hover:border-emerald-500/50 transition-all group relative overflow-hidden">
+                        <div key={opp.tokenId} className="glass-panel p-6 rounded-3xl border border-emerald-500/20 hover:border-emerald-500/50 transition-all group relative overflow-hidden flex flex-col">
                             {isAutoArb && (
-                                <div className="absolute top-0 right-0 px-3 py-1 bg-blue-500 text-black text-[8px] font-black uppercase tracking-tighter rounded-bl-xl z-20">
-                                    Auto MM Mode
+                                <div className="absolute top-0 right-0 px-3 py-1 bg-blue-500 text-white text-[8px] font-black uppercase tracking-tighter rounded-bl-xl z-20">
+                                    Autonomous MM Active
                                 </div>
                             )}
+                            
                             <div className="flex justify-between items-start mb-4">
-                                <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-500 group-hover:scale-110 transition-transform duration-500">
-                                    {rewardEligible ? <DollarSign size={24}/> : <Landmark size={24}/>}
+                                <div className="flex gap-3 items-center">
+                                    {opp.image ? (
+                                        <img src={opp.image} alt="" className="w-12 h-12 rounded-xl object-cover border border-white/10" />
+                                    ) : (
+                                        <div className="p-3 bg-blue-500/10 rounded-xl text-blue-500">
+                                            <Landmark size={24}/>
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="text-right">
-                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Capture ROI</div>
-                                    <div className="text-2xl font-black text-blue-500">+{opp.spreadPct.toFixed(2)}% APY</div>
+                                    <div className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Target ROI</div>
+                                    <div className="text-2xl font-black text-blue-500">+{opp.spreadPct.toFixed(2)}%</div>
                                 </div>
                             </div>
-                            <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2 mb-6 h-10 leading-tight">{opp.question}</h4>
+
+                            <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2 mb-6 h-10 leading-tight flex-grow">{opp.question}</h4>
                             
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                <div className="p-2 bg-black/20 rounded-xl border border-white/5">
+                                    <div className="text-[8px] text-gray-500 font-bold uppercase tracking-widest">Total Volume</div>
+                                    <div className="text-xs font-mono font-bold text-white">${formatCompactNumber(opp.volume || 0)}</div>
+                                </div>
+                                <div className="p-2 bg-black/20 rounded-xl border border-white/5">
+                                    <div className="text-[8px] text-gray-500 font-bold uppercase tracking-widest">Deep Liquidity</div>
+                                    <div className="text-xs font-mono font-bold text-white">${formatCompactNumber(opp.liquidity || 0)}</div>
+                                </div>
+                            </div>
+
                             <div className="space-y-4 bg-black/20 p-4 rounded-2xl mb-6 border border-white/5">
                                 <div className="flex justify-between text-[10px]">
-                                    <span className="text-gray-500 uppercase font-black tracking-widest">Yield Spread</span>
+                                    <span className="text-gray-500 uppercase font-black tracking-widest">Bid-Ask Spread</span>
                                     <span className="font-mono text-blue-400 font-bold">{spreadCents}¢</span>
                                 </div>
                                 <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden flex">
                                     <div className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 shadow-[0_0_10px_#3b82f6]" style={{ width: `${Math.min(100, opp.spreadPct * 10)}%` }}></div>
                                 </div>
                                 <div className="flex justify-between text-[10px]">
-                                    <span className="text-gray-500 uppercase font-black tracking-widest">Midpoint Price</span>
+                                    <span className="text-gray-500 uppercase font-black tracking-widest">Midpoint</span>
                                     <span className="font-mono text-white font-bold">${opp.midpoint.toFixed(3)}</span>
                                 </div>
                             </div>
 
                             {rewardEligible && (
                                 <div className="mb-4 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-[9px] font-black text-yellow-600 text-center uppercase tracking-widest">
-                                    💰 MM Reward Eligible
+                                    💰 Reward Eligible (Spread ≤ {opp.rewardsMaxSpread}%)
                                 </div>
                             )}
 
-                            <button 
-                                onClick={() => onExecute(opp)} 
-                                className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 group-hover:-translate-y-1"
-                            >
-                                <Landmark size={16}/> PROVIDE LIQUIDITY
-                            </button>
+                            <div className="flex flex-col gap-2">
+                                <button 
+                                    onClick={() => onExecute(opp)} 
+                                    className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black rounded-xl text-xs transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 group-hover:-translate-y-1"
+                                >
+                                    <ZapIcon size={16}/> DEPLOY MM STRATEGY
+                                </button>
+                                {marketLink && (
+                                    <a 
+                                        href={marketLink} 
+                                        target="_blank" 
+                                        rel="noreferrer"
+                                        className="w-full py-2 bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 text-gray-500 dark:text-gray-400 font-bold rounded-xl text-[10px] text-center uppercase tracking-widest transition-all flex items-center justify-center gap-1"
+                                    >
+                                        Inspect on Polymarket <ExternalLink size={10}/>
+                                    </a>
+                                )}
+                            </div>
                         </div>
                     );
                 })
@@ -711,7 +755,7 @@ const WithdrawalModal = ({
                                     </div>
                                 )}
 
-                                <div className="p-4 bg-gray-50 dark:bg-black/40 rounded-xl border border-gray-200 dark:border-white/10 flex justify-between items-center">
+                                <div className="glass-panel p-8 rounded-xl border border-gray-200 dark:border-white/10 text-center">
                                     <div>
                                         <div className="font-bold text-gray-900 dark:text-white">POL (Gas)</div>
                                         <div className="text-xs text-gray-500">Network Token</div>

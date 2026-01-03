@@ -1,4 +1,3 @@
-
 import { OrderBook, PositionData } from '../domain/market.types.js';
 import { TradeSignal, TradeHistoryEntry } from '../domain/trade.types.js';
 
@@ -26,6 +25,8 @@ export interface ArbitrageOpportunity {
     marketId: string;
     tokenId: string;
     question: string;
+    image?: string;
+    marketSlug?: string;
     bestBid: number;
     bestAsk: number;
     spread: number;
@@ -106,6 +107,7 @@ export interface IExchangeAdapter {
     // Execution
     createOrder(params: OrderParams): Promise<OrderResult>; 
     cancelOrder(orderId: string): Promise<boolean>;
+    cancel_all_orders?(): Promise<boolean>; // Compatibility
     cancelAllOrders(): Promise<boolean>;
     
     // Order Management

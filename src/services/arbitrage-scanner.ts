@@ -187,22 +187,29 @@ export class MarketMakingScanner extends EventEmitter {
             const response = await fetch(
                 'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100&order=volume&ascending=false'
             );
-            const events = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(`Gamma API returned ${response.status}`);
+            }
+
+            const data = await response.json();
+            const events = Array.isArray(data) ? data : (data.data || []);
 
             let addedCount = 0;
             const newTokenIds: string[] = [];
 
             for (const event of events) {
-                if (!event.markets) continue;
+                const markets = event.markets || [];
 
-                for (const market of event.markets) {
-                    const volume = parseFloat(market.volume || '0');
-                    const liquidity = parseFloat(market.liquidity || '0');
+                for (const market of markets) {
+                    const volume = parseFloat(market.volume || market.volumeNum || '0');
+                    const liquidity = parseFloat(market.liquidity || market.liquidityNum || '0');
 
                     if (volume < this.config.minVolume) continue;
                     if (liquidity < this.config.minLiquidity) continue;
 
-                    const tokenIds: string[] = market.clobTokenIds || [];
+                    // Support multiple field naming conventions for token IDs
+                    const tokenIds: string[] = market.clobTokenIds || market.clob_token_ids || market.tokenIds || [];
                     
                     /**
                      * 🔒 BINARY GUARD:
@@ -211,8 +218,6 @@ export class MarketMakingScanner extends EventEmitter {
                     if (tokenIds.length !== 2) continue;
 
                     const rewards = market.rewards || {};
-
-                    // NEW: Track YES/NO token mapping
                     const outcomes: string[] = market.outcomes || ['Yes', 'No'];
 
                     for (let i = 0; i < tokenIds.length; i++) {
@@ -228,9 +233,9 @@ export class MarketMakingScanner extends EventEmitter {
                         }
 
                         this.trackedMarkets.set(tokenId, {
-                            conditionId: market.conditionId,
+                            conditionId: market.conditionId || market.condition_id,
                             tokenId,
-                            question: market.question,
+                            question: market.question || event.title || 'Unknown',
                             bestBid: 0,
                             bestAsk: 0,
                             spread: 0,
@@ -240,7 +245,6 @@ export class MarketMakingScanner extends EventEmitter {
                             discoveredAt: Date.now(),
                             rewardsMaxSpread: rewards.max_spread,
                             rewardsMinSize: rewards.min_size,
-                            // NEW: Token pair tracking
                             isYesToken,
                             pairedTokenId
                         });
@@ -253,7 +257,8 @@ export class MarketMakingScanner extends EventEmitter {
 
             this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new) | Min volume: $${this.config.minVolume}`);
 
-                if (newTokenIds.length > 0 && this.ws?.readyState === WebSocket.OPEN) {
+            // FIX: Using numeric constant 1 instead of WebSocket.OPEN which sometimes errors in TS DOM/Node hybrid environments
+            if (newTokenIds.length > 0 && this.ws?.readyState === 1) {
                 this.subscribeToTokens(newTokenIds);
             }
 

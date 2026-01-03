@@ -1,4 +1,3 @@
-
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -28,7 +27,7 @@ export const TOKENS = {
 };
 
 export const WS_URLS = {
-    CLOB: 'wss://ws-live-data.polymarket.com',
+    CLOB: 'wss://ws-subscriptions-clob.polymarket.com',
     DATA: 'wss://ws-live-data.polymarket.com' 
 };
 

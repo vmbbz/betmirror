@@ -2,9 +2,9 @@
 
 ![Bet Mirror Header](./docs/assets/header.png)
 
-**Institutional-grade Polymarket Copy Trading Terminal. Features Dedicated Gnosis Safes, AI Risk Analysis (Gemini), and Cross-Chain funding via Li.Fi.**
+**Institutional-grade Polymarket Copy Trading Terminal. Features Dedicated Gnosis Safes, AI Risk Analysis (Gemini), and High-Frequency Market Making (Spread Capture).**
 
-**Bet Mirror Pro** is an enterprise-grade trading terminal designed to democratize algorithmic prediction market trading. Unlike traditional bots that require you to keep your browser open, Bet Mirror uses a **Hybrid Cloud Architecture**. It deploys a **Gnosis Safe** (Smart Wallet) for every user, controlled by an encrypted EOA signer. This allows the cloud engine to execute **Gasless Trades** 24/7 via the Polymarket Relayer based on **AI Risk Analysis** and **Copy Trading signals**, while ensuring your main savings wallet remains untouched. The platform includes a built-in "Alpha Registry" marketplace, rewarding top traders with a 1% protocol fee from every copier.
+**Bet Mirror Pro** is an enterprise-grade trading terminal designed to democratize algorithmic prediction market trading. Unlike traditional bots that require you to keep your browser open, Bet Mirror uses a **Hybrid Cloud Architecture**. It deploys a **Gnosis Safe** (Smart Wallet) for every user, controlled by an encrypted EOA signer. This allows the cloud engine to execute **Gasless Trades** 24/7 via the Polymarket Relayer based on **AI Risk Analysis**, **Copy Trading signals**, and **Proactive Market Making**, while ensuring your main savings wallet remains untouched. The platform includes a built-in "Alpha Registry" marketplace, rewarding top traders with a 1% protocol fee from every copier.
 
 Developed by **PolyCafe**.
 
@@ -28,13 +28,16 @@ Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step proce
 
 ### 2. The Cloud Engine (Server-Side)
 - **Persistence:** Once the bot is started, it runs on our Node.js cloud cluster backed by **MongoDB**.
-- **Offline Trading:** The user can close their browser or turn off their computer. The bot continues to monitor markets and execute trades 24/7.
+- **Dual-Strategy Execution:** 
+    - **Mirror Trading:** Monitors whales in real-time and replicates their positions proportionally.
+    - **Market Making:** Analyzes orderbook spreads via WebSockets. When gaps are found, it posts two-sided GTC limit orders to capture the "Cent-Spread" and earn **Polymarket Liquidity Rewards**.
 - **AI Analysis:** Before every trade, the **Google Gemini 2.5** Agent analyzes the market question to ensure it aligns with the user's risk profile (Conservative, Balanced, or Degen).
-- **Liquidity Intelligence:** The bot uses an **Absolute Spread Approach** (measuring cents vs percentages). This is specifically optimized for binary prediction markets where traditional percentage spread metrics fail at extreme price points (e.g., a $0.01 gap at a price of $0.02 is a 50% spread, which most bots skip, but Bet Mirror Pro identifies as high liquidity).
+- **Liquidity Intelligence:** The bot uses an **Absolute Spread Approach** (measuring cents vs percentages). This is specifically optimized for binary prediction markets where traditional percentage spread metrics fail at extreme price points.
 
-### 3. The Marketplace & Profit
+### 3. The Marketplace & Capital Efficiency
 - **Copy Trading:** Users browse the **Alpha Registry** to find whales with high win rates.
-- **Fee Sharing:** When a user profits from a copied trade, a **1% fee** is automatically sent to the **Lister** (the user who found and listed the wallet) and **1%** to the Platform. This rewards discovery.
+- **Auto-Merge (Recycling):** The engine automatically detects when you hold matching YES and NO shares. It executes an atomic `mergePositions` call to burn the pairs and release locked USDCe back into your liquid balance.
+- **Inventory Skewing:** To manage risk, the bot dynamically adjusts bid/ask prices based on current holdings to maintain a delta-neutral profile.
 - **Withdrawal:** Users can trigger a withdrawal from the dashboard at any time, sweeping funds back to their Main Wallet.
 
 ---
@@ -87,13 +90,13 @@ You can seed the Marketplace with "Official" or "System" wallets (e.g., trusted 
 The command center. View your Real-Time PnL, Active Positions, and System Logs.
 > *Displays wallet balances (Main & Trading Wallet), Live Trade Console, and Performance Metrics.*
 
+### ⚡ Market Making Console
+Visualize real-time yield opportunities on the exchange.
+> *Monitor bid-ask spreads and capture ROI. Features "Autonomous Mode" for 24/7 liquidity providing and automated capital recycling.*
+
 ### 🔒 The Vault
 Security first. Configure your AI Risk settings and manage automation.
 > *Manage API Keys, Risk Profiles (Conservative/Degen), Auto-Cashout thresholds, and SMS Notification settings.*
-
-### 🌍 The Alpha Registry
-A decentralized marketplace for trading signals.
-> *A leaderboard of top Polymarket traders. Users can "One-Click Copy" any wallet listed here.*
 
 ### 🌉 Cross-Chain Bridge
 Fund your bot from anywhere.
@@ -116,6 +119,7 @@ graph TD
         API["⚙️ Node.js API Cluster"]
         DB[("🗄️ MongoDB Atlas")]
         Gemini["🧠 Gemini 2.5 AI"]
+        Scanner["🔍 MM Scanner"]
     end
 
     subgraph "Blockchain & Execution"
@@ -134,10 +138,11 @@ graph TD
     API -->|"4. Deploy Safe & Encrypt Signer"| DB
     
     API -->|"5. Risk Analysis"| Gemini
+    Scanner -->|"6. Yield Signals"| API
     
-    API -->|"6. Sign Trade (EOA Key)"| API
-    API -->|"7. Submit to Relayer"| Relayer
-    Relayer -->|"8. Execute via Safe"| CLOB
+    API -->|"7. Sign Intent (EOA Key)"| API
+    API -->|"8. Submit to Relayer"| Relayer
+    Relayer -->|"9. Execute via Safe"| CLOB
 ```
 
 ---
@@ -155,16 +160,6 @@ This allows for seamless integration of new prediction markets (e.g., **PredictB
 1.  **Create Adapter:** Implement `src/adapters/predictbase/predictbase.adapter.ts`.
 2.  **Implement Methods:** Fulfill the `IExchangeAdapter` contract (`getPositions`, `createOrder`, `fetchBalance`).
 3.  **Dependency Injection:** Swap the adapter import in `src/server/bot-engine.ts`.
-
----
-
-## 📸 Screenshots
-
-![Dashboard View](./docs/assets/dashboard_view.png)
-*Real-time Dashboard with Asset Matrix and Performance Metrics.*
-
-![Bridge Interface](./docs/assets/bridge_view.png)
-*Cross-Chain Deposit via Li.Fi.*
 
 ---
 

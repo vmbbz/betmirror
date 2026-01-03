@@ -1,3 +1,4 @@
+
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -404,9 +405,49 @@ export class BotEngine {
             // Initialize the real-time arbitrage scanner instance (Actually Market Making)
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
             
+            // --- NEW MARKET MAKING EVENT WIREUP ---
+
+            // 1. Kill Switch: Stop trading if flash move detected
+            this.arbScanner.on('killSwitch', async ({ reason }) => {
+                await this.addLog('error', `🚨 EMERGENCY STOP: ${reason}`);
+                if (this.executor) {
+                    const adapter = this.executor.getAdapter();
+                    await adapter?.cancelAllOrders();
+                }
+                this.stop(); // Stop the bot loop
+            });
+
+            // 2. Auto Merge: If we have equal YES and NO, free up USDCe
+            this.arbScanner.on('mergeOpportunity', async ({ conditionId, amount }) => {
+                await this.addLog('info', `📦 Auto-Merging ${amount} pairs for ${conditionId}`);
+                try {
+                    const adapter = this.executor?.getAdapter();
+                    if (adapter) {
+                        const tx = await adapter.mergePositions(conditionId, amount);
+                        await this.addLog('success', `✅ Inventory Merged: ${tx}`);
+                    } else {
+                        throw new Error('Adapter not available');
+                    }
+                } catch (e: any) {
+                    await this.addLog('warn', `Merge failed: ${e.message}`);
+                }
+            });
+
+            // 3. Instant Redemption
+            this.arbScanner.on('marketResolved', async ({ conditionId, question }) => {
+                await this.addLog('info', `🏁 Market Resolved: ${question}`);
+                // Force a position sync to find winning shares
+                await this.syncPositions(true);
+                const winner = this.activePositions.find(p => p.conditionId === conditionId);
+                if (winner) {
+                    await this.addLog('info', `🏆 Winning shares detected. Redeeming...`);
+                    await this.exchange?.redeemPosition(conditionId, winner.tokenId);
+                }
+            });
+
+            // 4. Standard Quote Signal
             this.arbScanner.on('opportunity', async (opp: MarketOpportunity) => {
                 if (this.callbacks?.onArbUpdate) {
-                    // FIX: Correct mapping from MarketOpportunity to ArbitrageOpportunity interface
                     const arbOpps = this.arbScanner!.getOpportunities().map(o => ({
                         ...o,
                         marketId: o.conditionId,
@@ -456,18 +497,17 @@ export class BotEngine {
     private async executeMarketMaking(opp: MarketOpportunity) {
         if (!this.executor || !this.exchange) return;
         
-        // Use MarketMaking specific executor method
-        const result = await this.executor.executeMarketMakingQuotes(opp as any);
+        // Use MarketMaking specific executor method with skewed pricing
+        const result = await this.executor.executeMarketMakingQuotes(opp);
         
         if (result.status === 'POSTED' || result.status === 'PARTIAL') {
-            this.addLog('success', `⚡ MM QUOTE: ${opp.question.slice(0,30)}... | Bid: ${result.bidPrice}¢ | Ask: ${result.askPrice}¢`);
+            await this.addLog('success', `⚡ MM QUOTE: ${opp.question.slice(0,30)}... | Bid: ${result.bidPrice}¢ | Ask: ${result.askPrice}¢`);
             await this.syncPositions(true);
         }
     }
 
     public async dispatchManualArb(marketId: string): Promise<boolean> {
         const opps = this.arbScanner?.getOpportunities();
-        // FIX: Added correct check for marketId in MarketOpportunity
         const target = opps?.find(o => o.conditionId === marketId);
         if (target) {
             await this.executeMarketMaking(target);
@@ -511,12 +551,12 @@ export class BotEngine {
         }, 15000) as unknown as NodeJS.Timeout; 
     }
 
-    private async proceedWithPostFundingSetup(logger: Logger) {
+    private async proceedWithPostFundingSetup(engineLogger: Logger) {
         try {
             if(!this.exchange) return;
             await this.exchange.authenticate();
             
-            this.portfolioService = new PortfolioService(logger);
+            this.portfolioService = new PortfolioService(engineLogger);
             this.portfolioService.startSnapshotService(
                 this.config.userId,
                 async () => {
@@ -531,7 +571,7 @@ export class BotEngine {
                 }
             );
             
-            await this.startServices(logger);
+            await this.startServices(engineLogger);
 
             // Start scanner only after exchange is authenticated and services are ready
             if (this.arbScanner) {
@@ -773,7 +813,7 @@ export class BotEngine {
         });
 
         await this.monitor.start(this.config.startCursor || Math.floor(Date.now() / 1000));
-        this.addLog('success', `Engine Active. Monitoring ${this.config.userAddresses.length} targets.`);
+        await this.addLog('success', `Engine Active. Monitoring ${this.config.userAddresses.length} targets.`);
     }
 
     public getActivePositions(): ActivePosition[] {
@@ -782,7 +822,6 @@ export class BotEngine {
 
     
     public getArbOpportunities() { 
-        // FIX: Correct mapping from MarketOpportunity to ArbitrageOpportunity interface
         return this.arbScanner?.getOpportunities().map(o => ({
             ...o,
             marketId: o.conditionId,

@@ -20,9 +20,9 @@ export interface LiquidityMetrics {
 }
 
 /**
- * Updated for Market Making / Spread Capture
+ * Money Market Opportunity - Represents a yield opportunity in the money market
  */
-export interface ArbitrageOpportunity {
+export interface MoneyMarketOpportunity {
     marketId: string;
     tokenId: string;
     question: string;
@@ -30,6 +30,7 @@ export interface ArbitrageOpportunity {
     bestAsk: number;
     spread: number;
     spreadPct: number;
+    spreadCents: number;
     midpoint: number;
     volume?: number;
     liquidity?: number;
@@ -40,6 +41,8 @@ export interface ArbitrageOpportunity {
     roi: number; 
     combinedCost: number;
     capacityUsd: number;
+    // Risk metrics
+    skew?: number;
 }
 
 export interface OrderParams {
@@ -50,7 +53,9 @@ export interface OrderParams {
     sizeUsd: number;
     priceLimit?: number;
     // Allow specifying raw share count for sells
-    sizeShares?: number; 
+    sizeShares?: number;
+    // Order type: GTC (Good Till Cancelled), IOC (Immediate or Cancel), FOK (Fill or Kill), FAK (Fill and Kill)
+    orderType?: 'GTC' | 'IOC' | 'FOK' | 'FAK';
 }
 
 export interface OrderResult {
@@ -89,6 +94,9 @@ export interface IExchangeAdapter {
     // Liquidity Analysis
     getLiquidityMetrics?(tokenId: string, side: 'BUY' | 'SELL'): Promise<LiquidityMetrics>;
 
+    // Inventory Management
+    mergePositions(conditionId: string, amount: number): Promise<string>;
+
     // Monitoring
     fetchPublicTrades(address: string, limit?: number): Promise<TradeSignal[]>;
     
@@ -98,6 +106,7 @@ export interface IExchangeAdapter {
     // Execution
     createOrder(params: OrderParams): Promise<OrderResult>; 
     cancelOrder(orderId: string): Promise<boolean>;
+    cancelAllOrders(): Promise<boolean>;
     
     // Order Management
     cashout(amount: number, destination: string): Promise<string>;

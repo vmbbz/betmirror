@@ -21,7 +21,7 @@ import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge
 import { TradeHistoryEntry, ActivePosition } from './src/domain/trade.types';
 import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/alpha.types';
 import { UserStats } from './src/domain/user.types';
-import { ArbitrageOpportunity } from './src/adapters/interfaces';
+import { MoneyMarketOpportunity } from './src/adapters/interfaces';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -159,17 +159,17 @@ const PerformanceChart = ({ userId, selectedRange }: {
 };
 
 /**
- * Updated to display Market Making / Spread Capture opportunities.
- * Labels changed from Arbitrage/Combined Cost to Capture/Spread.
+ * Money Market Feed - Displays available money market opportunities
+ * for providing liquidity and earning yield through market making
  */
-const ArbitrageFeed = ({ opportunities, onExecute, isAutoArb }: { opportunities: ArbitrageOpportunity[], onExecute: (opp: ArbitrageOpportunity) => void, isAutoArb: boolean }) => {
+const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb }: { opportunities: MoneyMarketOpportunity[], onExecute: (opp: MoneyMarketOpportunity) => void, isAutoArb: boolean }) => {
     return (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {opportunities.length === 0 ? (
                 <div className="col-span-full py-20 text-center text-gray-500 italic bg-white/5 rounded-3xl border border-dashed border-white/10">
-                    <Scale size={48} className="mx-auto mb-4 opacity-20"/>
-                    <p className="text-sm uppercase tracking-widest font-bold">Scanning Orderbooks...</p>
-                    <p className="text-xs mt-2 opacity-50">Opportunities appear when bid-ask spreads are tradeable.</p>
+                    <Landmark size={48} className="mx-auto mb-4 opacity-20"/>
+                    <p className="text-sm uppercase tracking-widest font-bold">Scanning Money Markets...</p>
+                    <p className="text-xs mt-2 opacity-50">Yield opportunities will appear when spreads are favorable.</p>
                 </div>
             ) : (
                 opportunities.map((opp) => {
@@ -179,28 +179,28 @@ const ArbitrageFeed = ({ opportunities, onExecute, isAutoArb }: { opportunities:
                     return (
                         <div key={opp.tokenId} className="glass-panel p-6 rounded-3xl border border-emerald-500/20 hover:border-emerald-500/50 transition-all group relative overflow-hidden">
                             {isAutoArb && (
-                                <div className="absolute top-0 right-0 px-3 py-1 bg-emerald-500 text-black text-[8px] font-black uppercase tracking-tighter rounded-bl-xl z-20">
-                                    Autonomous Mode
+                                <div className="absolute top-0 right-0 px-3 py-1 bg-blue-500 text-black text-[8px] font-black uppercase tracking-tighter rounded-bl-xl z-20">
+                                    Auto MM Mode
                                 </div>
                             )}
                             <div className="flex justify-between items-start mb-4">
-                                <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-500 group-hover:scale-110 transition-transform duration-500">
-                                    {rewardEligible ? <DollarSign size={24}/> : <ZapIcon size={24}/>}
+                                <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-500 group-hover:scale-110 transition-transform duration-500">
+                                    {rewardEligible ? <DollarSign size={24}/> : <Landmark size={24}/>}
                                 </div>
                                 <div className="text-right">
                                     <div className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">Capture ROI</div>
-                                    <div className="text-2xl font-black text-emerald-500">+{opp.spreadPct.toFixed(2)}%</div>
+                                    <div className="text-2xl font-black text-blue-500">+{opp.spreadPct.toFixed(2)}% APY</div>
                                 </div>
                             </div>
                             <h4 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2 mb-6 h-10 leading-tight">{opp.question}</h4>
                             
                             <div className="space-y-4 bg-black/20 p-4 rounded-2xl mb-6 border border-white/5">
                                 <div className="flex justify-between text-[10px]">
-                                    <span className="text-gray-500 uppercase font-black tracking-widest">Cent-Spread</span>
-                                    <span className="font-mono text-emerald-400 font-bold">{spreadCents}¢</span>
+                                    <span className="text-gray-500 uppercase font-black tracking-widest">Yield Spread</span>
+                                    <span className="font-mono text-blue-400 font-bold">{spreadCents}¢</span>
                                 </div>
                                 <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden flex">
-                                    <div className="h-full bg-emerald-500 shadow-[0_0_10px_#10b981]" style={{ width: `${Math.min(100, opp.spreadPct * 10)}%` }}></div>
+                                    <div className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 shadow-[0_0_10px_#3b82f6]" style={{ width: `${Math.min(100, opp.spreadPct * 10)}%` }}></div>
                                 </div>
                                 <div className="flex justify-between text-[10px]">
                                     <span className="text-gray-500 uppercase font-black tracking-widest">Midpoint Price</span>
@@ -210,15 +210,15 @@ const ArbitrageFeed = ({ opportunities, onExecute, isAutoArb }: { opportunities:
 
                             {rewardEligible && (
                                 <div className="mb-4 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-[9px] font-black text-yellow-600 text-center uppercase tracking-widest">
-                                    💰 Liquidity Reward Eligible
+                                    💰 MM Reward Eligible
                                 </div>
                             )}
 
                             <button 
                                 onClick={() => onExecute(opp)} 
-                                className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 group-hover:-translate-y-1"
+                                className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 group-hover:-translate-y-1"
                             >
-                                <Landmark size={16}/> POST QUOTE
+                                <Landmark size={16}/> PROVIDE LIQUIDITY
                             </button>
                         </div>
                     );
@@ -1653,20 +1653,20 @@ const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
-const [activeTab, setActiveTab] = useState<'dashboard' | 'arbitrage' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help'>('dashboard');
+const [activeTab, setActiveTab] = useState<'dashboard' | 'money-market' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help'>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 // RENAMED from history to tradeHistory to prevent collision with History component from lucide-react
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
 const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); 
-const [arbOpps, setArbOpps] = useState<ArbitrageOpportunity[]>([]);
+const [moneyMarketOpps, setMoneyMarketOpps] = useState<MoneyMarketOpportunity[]>([]);
 const [stats, setStats] = useState<UserStats | null>(null);
 const [registry, setRegistry] = useState<TraderProfile[]>([]);
 const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
 const [bridgeHistory, setBridgeHistory] = useState<BridgeTransactionRecord[]>([]);
 const [theme, setTheme] = useState<'light' | 'dark'>('light');
 const [performanceRange, setPerformanceRange] = useState<'1W' | '30D' | 'ALL'>('ALL');
-const [isPolling, setIsPolling] = useState(false); // Arbitrage service rfresh
+const [isPolling, setIsPolling] = useState(false); // Money market service refresh
 const [systemView, setSystemView] = useState<'attribution' | 'global'>('attribution');
 // -- MOBILE MENU STATE --
 const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -1900,7 +1900,7 @@ useEffect(() => {
             if (res.data.logs) setLogs(res.data.logs); // Now fetches from DB
             if (res.data.history) setTradeHistory(res.data.history);
             if (res.data.stats) setStats(res.data.stats);
-            if (res.data.arbOpportunities) setArbOpps(res.data.arbOpportunities);
+            if (res.data.arbOpportunities) setMoneyMarketOpps(res.data.arbOpportunities);
             // Sync Active Positions
             if (res.data.positions) setActivePositions(res.data.positions);
 
@@ -2366,9 +2366,9 @@ const handleWithdraw = async (tokenType: 'USDC' | 'USDC.e' | 'POL', isRescue: bo
     setIsWithdrawing(false);
 };
 
-const handleExecuteArb = async (opp: ArbitrageOpportunity) => {
+const handleExecuteMM = async (opp: MoneyMarketOpportunity) => {
     // This is a MANUAL override command sent to the server engine (Market Making)
-    if (!confirm(`Manually Post Two-Sided Quote?\n\nTarget: ${opp.question}\nSpread: ${(opp.spread * 100).toFixed(1)}¢`)) return;
+    if (!confirm(`Manually Provide Liquidity?\n\nMarket: ${opp.question}\nSpread: ${(opp.spread * 100).toFixed(1)}¢`)) return;
     try {
         await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
         playSound('trade');
@@ -2723,7 +2723,7 @@ return (
                     {[
                     { id: 'dashboard', icon: Activity },
                     { id: 'system', icon: Gauge },
-                    { id: 'arbitrage', icon: Scale },
+                    { id: 'money-market', icon: Scale },
                     { id: 'bridge', icon: Globe },
                     { id: 'marketplace', icon: Users },
                     { id: 'history', icon: History },
@@ -3214,8 +3214,8 @@ return (
             </div>
         )}
 
-        {/* --- Arbitrage Tab (Now Market Making Tab) --- */}
-        {activeTab === 'arbitrage' && (
+        {/* --- Money Market Tab --- */}
+        {activeTab === 'money-market' && (
             <div className="space-y-12 animate-in fade-in slide-in-from-right-4 duration-500">
                 <div className="relative p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-lg">
                     <div className="relative z-10">
@@ -3257,7 +3257,7 @@ return (
                     </div>
                 </div>
 
-                <ArbitrageFeed opportunities={arbOpps} onExecute={handleExecuteArb} isAutoArb={config.enableAutoArb} />
+                <MoneyMarketFeed opportunities={moneyMarketOpps} onExecute={handleExecuteMM} isAutoArb={config.enableAutoArb} />
             </div>
         )}
         
@@ -3920,15 +3920,15 @@ return (
                     </div>
                 </div>
 
-                {/* Arbitrage Protocols Section */}
+                {/* Money Market Protocols Section */}
                 <div className="glass-panel p-6 md:p-8 rounded-3xl space-y-6 border border-blue-200 dark:border-blue-500/30 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm mb-8 transition-colors duration-300">
                     <div className="flex items-center gap-4 border-b border-gray-200 dark:border-slate-700 pb-4">
                         <div className="w-10 h-10 md:w-12 md:h-12 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl flex items-center justify-center shadow-sm">
-                            <Scale size={20} />
+                            <Landmark size={20} />
                         </div>
                         <div>
-                            <h4 className="font-bold text-gray-900 dark:text-white text-lg md:text-xl uppercase tracking-tight">Arbitrage Protocols</h4>
-                            <p className="text-xs text-gray-500 dark:text-slate-400">Automated Server Execution</p>
+                            <h4 className="font-bold text-gray-900 dark:text-white text-lg md:text-xl uppercase tracking-tight">Money Market</h4>
+                            <p className="text-xs text-gray-500 dark:text-slate-400">Liquidity Provision & Yield</p>
                         </div>
                     </div>
 

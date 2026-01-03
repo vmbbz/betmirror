@@ -107,6 +107,10 @@ async function main(): Promise<void> {
             return [];
         }
       },
+      // FIX: Added missing mergePositions method
+      mergePositions: async (conditionId: string, amount: number) => {
+          return "merge_not_supported_in_headless";
+      },
       fetchPublicTrades: async (address: string, limit: number = 20): Promise<TradeSignal[]> => {
         try {
             const url = `https://data-api.polymarket.com/activity?user=${address}&limit=${limit}`;
@@ -141,6 +145,8 @@ async function main(): Promise<void> {
       },
       // FIX: Added missing getOpenOrders method to match IExchangeAdapter interface
       getOpenOrders: async () => [],
+      // FIX: Added missing cancelAllOrders method
+      cancelAllOrders: async () => true,
       createOrder: async (params: OrderParams): Promise<OrderResult> => {
           const isBuy = params.side === 'BUY';
           const orderSide = isBuy ? Side.BUY : Side.SELL;

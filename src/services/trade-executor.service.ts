@@ -1,3 +1,4 @@
+
 import type { RuntimeEnv } from '../config/env.js';
 import type { Logger } from '../utils/logger.util.js';
 import type { TradeSignal, ActivePosition } from '../domain/trade.types.js';
@@ -77,6 +78,13 @@ export class TradeExecutorService {
     if (mmConfig) this.mmConfig = { ...this.mmConfig, ...mmConfig };
   }
 
+  /**
+   * Get the exchange adapter instance
+   */
+  public getAdapter(): IExchangeAdapter {
+    return this.deps.adapter;
+  }
+
   // ============================================================
   // MARKET MAKING METHODS (NEW)
   // ============================================================
@@ -88,7 +96,7 @@ export class TradeExecutorService {
    */
   async executeMarketMakingQuotes(opportunity: MarketOpportunity): Promise<QuoteResult> {
       const { logger, adapter, proxyWallet } = this.deps;
-      const { tokenId, conditionId, midpoint, spread, question, rewardsMaxSpread, rewardsMinSize } = opportunity;
+      const { tokenId, conditionId, midpoint, spread, question, rewardsMaxSpread, rewardsMinSize, skew = 0 } = opportunity;
 
       const failResult = (reason: string): QuoteResult => ({
           tokenId,
@@ -116,8 +124,15 @@ export class TradeExecutorService {
               return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
           }
 
-          // 4. Calculate quote prices
-          // Per docs: rewards require quoting within max_spread from midpoint
+          // 4. Calculate quote prices with INVENTORY SKEW
+          /**
+           * SKEW LOGIC:
+           * If skew > 0 (heavy YES), we lower BOTH prices.
+           * Lower Bid = Harder to buy more YES.
+           * Lower Ask = Easier to sell current YES shares (cheapest on book).
+           */
+          const skewAdjustment = skew * 0.02; // Max 2 cent aggressive lean
+
           let bidOffset = this.mmConfig.spreadOffset;
           let askOffset = this.mmConfig.spreadOffset;
 
@@ -125,11 +140,10 @@ export class TradeExecutorService {
           if (rewardsMaxSpread && this.mmConfig.spreadOffset > rewardsMaxSpread / 2) {
               bidOffset = rewardsMaxSpread / 2 - 0.001;
               askOffset = rewardsMaxSpread / 2 - 0.001;
-              logger.info(`[MM] Adjusted offsets for rewards: ${(bidOffset * 100).toFixed(2)}¢`);
           }
 
-          const bidPrice = Math.max(0.01, midpoint - bidOffset);
-          const askPrice = Math.min(0.99, midpoint + askOffset);
+          const bidPrice = Math.max(0.01, midpoint - bidOffset - skewAdjustment);
+          const askPrice = Math.min(0.99, midpoint + askOffset - skewAdjustment);
 
           // 5. Determine quote sizes
           let bidSize = this.mmConfig.quoteSize / bidPrice;
@@ -145,7 +159,6 @@ export class TradeExecutorService {
           const availableForBid = Math.max(0, balance - this.pendingSpend);
           
           if (availableForBid < bidSize * bidPrice) {
-              logger.warn(`[MM] Insufficient balance for bid: need $${(bidSize * bidPrice).toFixed(2)}, have $${availableForBid.toFixed(2)}`);
               bidSize = availableForBid / bidPrice;
           }
 
@@ -172,9 +185,7 @@ export class TradeExecutorService {
               if (bidResult.success) {
                   result.bidOrderId = bidResult.orderId;
                   this.pendingSpend += bidSize * bidPrice;
-                  logger.success(`[MM] BID posted: ${bidSize.toFixed(2)} @ ${(bidPrice * 100).toFixed(1)}¢`);
               } else {
-                  logger.warn(`[MM] BID failed: ${bidResult.error}`);
                   result.status = 'PARTIAL';
               }
           }
@@ -193,9 +204,7 @@ export class TradeExecutorService {
 
               if (askResult.success) {
                   result.askOrderId = askResult.orderId;
-                  logger.success(`[MM] ASK posted: ${askSize.toFixed(2)} @ ${(askPrice * 100).toFixed(1)}¢`);
               } else {
-                  logger.warn(`[MM] ASK failed: ${askResult.error}`);
                   if (!result.bidOrderId) result.status = 'FAILED';
                   else result.status = 'PARTIAL';
               }
@@ -206,9 +215,6 @@ export class TradeExecutorService {
               bidOrderId: result.bidOrderId,
               askOrderId: result.askOrderId
           });
-
-          const rewardTag = rewardsMaxSpread && spread <= rewardsMaxSpread ? '💰 REWARD-ELIGIBLE' : '';
-          logger.info(`[MM] Quotes live for ${question.slice(0, 40)}... | Spread: ${(spread * 100).toFixed(1)}¢ ${rewardTag}`);
 
           return result;
 
@@ -414,50 +420,6 @@ export class TradeExecutorService {
           logger.warn('[MM] 🛑 All quotes cancelled');
       } catch (error) {
           logger.error(`[MM] Failed to cancel all quotes: ${error}`);
-      }
-  }
-
-  /**
-   * Update quotes when price changes (called from WebSocket handler)
-   */
-  async updateQuotesOnPriceChange(opportunity: MarketOpportunity): Promise<void> {
-      const { logger } = this.deps;
-      const existing = this.activeQuotes.get(opportunity.tokenId);
-      
-      if (!existing) return;
-
-      // Check if our quotes are still competitive
-      const { midpoint, bestBid, bestAsk } = opportunity;
-      
-      // If spread has tightened significantly, re-quote
-      if (existing.bidOrderId && existing.askOrderId) {
-          const ourSpread = bestAsk - bestBid; // Using bestBid and bestAsk directly as they're the only available prices
-          const marketSpread = bestAsk - bestBid;
-          
-          if (marketSpread < ourSpread * 0.7) {
-              logger.info(`[MM] Spread tightened, re-quoting ${opportunity.tokenId}`);
-              await this.executeMarketMakingQuotes(opportunity);
-          }
-      }
-  }
-
-  /**
-   * Check if orders are scoring for rewards
-   * Per docs: isOrderScoring endpoint
-   */
-  async checkOrdersScoring(orderIds: string[]): Promise<Record<string, boolean>> {
-      const { adapter, logger } = this.deps;
-      const client = (adapter as any).getRawClient?.();
-
-      if (!client || orderIds.length === 0) return {};
-
-      try {
-          // Per docs: areOrdersScoring for multiple orders
-          const scoring = await client.areOrdersScoring({ orderIds });
-          return scoring;
-      } catch (error) {
-          logger.warn(`[MM] Failed to check order scoring: ${error}`);
-          return {};
       }
   }
 

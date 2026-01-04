@@ -50,7 +50,7 @@ export interface MarketOpportunity {
     midpoint: number;
     volume: number;
     liquidity: number;
-    isNew: boolean;
+    isNewMarket: boolean;
     rewardsMaxSpread?: number;
     rewardsMinSize?: number;
     timestamp: number;
@@ -80,7 +80,7 @@ interface TrackedMarket {
     spread: number;
     volume: number;
     liquidity: number;
-    isNew: boolean;
+    isNewMarket: boolean;
     discoveredAt: number;
     rewardsMaxSpread?: number;
     rewardsMinSize?: number;
@@ -512,7 +512,7 @@ export class MarketMakingScanner extends EventEmitter {
                 spread: initialAsk - initialBid,
                 volume,
                 liquidity,
-                isNew: market.new === true || this.isRecentlyCreated(market.createdAt),
+                isNewMarket: market.new === true || this.isRecentlyCreated(market.createdAt),
                 discoveredAt: Date.now(),
                 rewardsMaxSpread: market.rewardsMaxSpread,
                 rewardsMinSize: market.rewardsMinSize,
@@ -988,7 +988,7 @@ export class MarketMakingScanner extends EventEmitter {
                     spread: 0,
                     volume: 0,
                     liquidity: 0,
-                    isNew: true,
+                    isNewMarket: true,
                     discoveredAt: Date.now(),
                     isYesToken: outcomes[i]?.toLowerCase() === 'yes' || i === 0,
                     pairedTokenId: assetIds[i === 0 ? 1 : 0],
@@ -1133,7 +1133,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         // 5. Check if market is still considered "new" for relaxed requirements
         const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
-        const isStillNew = market.isNew && ageMinutes < this.config.newMarketAgeMinutes;
+        const isStillNew = market.isNewMarket && ageMinutes < this.config.newMarketAgeMinutes;
         
         // 6. Apply volume/liquidity filters with relaxed thresholds for new markets
         const effectiveMinVolume = isStillNew ? 
@@ -1173,7 +1173,7 @@ export class MarketMakingScanner extends EventEmitter {
             midpoint: midpoint,
             volume: market.volume,
             liquidity: market.liquidity,
-            isNew: isStillNew,
+            isNewMarket: isStillNew,
             rewardsMaxSpread: market.rewardsMaxSpread,
             rewardsMinSize: market.rewardsMinSize,
             timestamp: Date.now(),
@@ -1210,7 +1210,7 @@ export class MarketMakingScanner extends EventEmitter {
         } catch (dbErr) {}
 
         this.opportunities.sort((a, b) => {
-            if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+            if (a.isNewMarket !== b.isNewMarket) return a.isNewMarket ? -1 : 1;
             return b.spreadCents - a.spreadCents;
         });
 

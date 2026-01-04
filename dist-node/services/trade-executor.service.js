@@ -8,6 +8,36 @@ export class TradeExecutorService {
     balanceCache = new Map();
     CACHE_TTL = 5 * 60 * 1000;
     pendingSpend = 0;
+    pendingOrders = new Map();
+    /**
+     * Update the pending spend amount for buy orders
+     * @param amount - The amount to add or subtract from pending spend
+     * @param isAdd - Whether to add (true) or subtract (false) the amount
+     * @param orderId - Optional order ID to track pending orders
+     */
+    updatePendingSpend(amount, isAdd, orderId) {
+        if (isAdd) {
+            this.pendingSpend += amount;
+            if (orderId) {
+                this.pendingOrders.set(orderId, { amount, timestamp: Date.now() });
+                // Set a timeout to clear pending if not confirmed
+                setTimeout(() => {
+                    if (this.pendingOrders.has(orderId)) {
+                        this.pendingSpend = Math.max(0, this.pendingSpend - amount);
+                        this.pendingOrders.delete(orderId);
+                    }
+                }, 300000); // 5 minutes timeout
+            }
+        }
+        else if (orderId && this.pendingOrders.has(orderId)) {
+            const order = this.pendingOrders.get(orderId);
+            this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
+            this.pendingOrders.delete(orderId);
+        }
+        else if (!orderId) {
+            this.pendingSpend = Math.max(0, this.pendingSpend - amount);
+        }
+    }
     // Market Making state
     activeQuotes = new Map();
     inventory = new Map(); // tokenId -> share balance
@@ -265,6 +295,10 @@ export class TradeExecutorService {
                 return { valid: false, reason: 'market_inactive', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
             if (!market.accepting_orders)
                 return { valid: false, reason: 'not_accepting_orders', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            // Skip markets without rewards
+            if (!market.rewards?.rates) {
+                return { valid: false, reason: 'no_rewards', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            }
             return {
                 valid: true,
                 negRisk: market.neg_risk || false,
@@ -572,21 +606,16 @@ export class TradeExecutorService {
             }
             let usableBalanceForTrade = 0;
             let currentShareBalance = 0;
-            const positions = await adapter.getPositions(proxyWallet);
+            // Get current positions and trader balance first
+            const [positions, traderBalance] = await Promise.all([
+                adapter.getPositions(proxyWallet),
+                this.getTraderBalance(signal.trader)
+            ]);
             const myPosition = positions.find(p => p.tokenId === signal.tokenId);
             if (myPosition) {
                 currentShareBalance = myPosition.balance;
             }
-            if (signal.side === 'BUY') {
-                const chainBalance = await adapter.fetchBalance(proxyWallet);
-                usableBalanceForTrade = Math.max(0, chainBalance - this.pendingSpend);
-            }
-            else {
-                if (!myPosition || myPosition.balance <= 0)
-                    return failResult("no_position_to_sell");
-                usableBalanceForTrade = myPosition.valueUsd;
-            }
-            const traderBalance = await this.getTraderBalance(signal.trader);
+            // Get minimum order size
             let minOrderSize = 5;
             try {
                 const book = await adapter.getOrderBook(signal.tokenId);
@@ -594,8 +623,9 @@ export class TradeExecutorService {
                     minOrderSize = Number(book.min_order_size);
             }
             catch (e) { }
-            const sizing = computeProportionalSizing({
-                yourUsdBalance: usableBalanceForTrade,
+            // Calculate initial sizing with current balance
+            let sizing = computeProportionalSizing({
+                yourUsdBalance: 0, // Will be updated below
                 yourShareBalance: currentShareBalance,
                 traderUsdBalance: traderBalance,
                 traderTradeUsd: signal.sizeUsd,
@@ -605,6 +635,35 @@ export class TradeExecutorService {
                 minOrderSize: minOrderSize,
                 side: signal.side
             });
+            // Now handle balance checks and adjustments
+            if (signal.side === 'BUY') {
+                const chainBalance = await adapter.fetchBalance(proxyWallet);
+                usableBalanceForTrade = Math.max(0, chainBalance - this.pendingSpend);
+                // Update sizing with actual usable balance
+                sizing = computeProportionalSizing({
+                    yourUsdBalance: usableBalanceForTrade,
+                    yourShareBalance: currentShareBalance,
+                    traderUsdBalance: traderBalance,
+                    traderTradeUsd: signal.sizeUsd,
+                    multiplier: env.tradeMultiplier,
+                    currentPrice: signal.price,
+                    maxTradeAmount: env.maxTradeAmount,
+                    minOrderSize: minOrderSize,
+                    side: signal.side
+                });
+                // Adjust target size if needed
+                if (usableBalanceForTrade < sizing.targetUsdSize) {
+                    sizing.targetUsdSize = Math.min(sizing.targetUsdSize, usableBalanceForTrade);
+                    if (signal.price > 0) {
+                        sizing.targetShares = sizing.targetUsdSize / signal.price;
+                    }
+                }
+            }
+            else {
+                if (!myPosition || myPosition.balance <= 0)
+                    return failResult("no_position_to_sell");
+                usableBalanceForTrade = myPosition.valueUsd;
+            }
             if (sizing.targetShares <= 0) {
                 return failResult(sizing.reason || "skipped_by_sizing_engine");
             }
@@ -657,15 +716,18 @@ export class TradeExecutorService {
                     reason: result.error || 'Unknown error'
                 };
             }
-            if (signal.side === 'BUY')
-                this.pendingSpend += sizing.targetUsdSize;
+            // Update pending spend based on actual filled amount for BUY orders
+            if (signal.side === 'BUY' && result.sharesFilled > 0) {
+                const filledAmount = result.sharesFilled * (result.priceFilled || signal.price || 0);
+                this.updatePendingSpend(filledAmount, true, result.orderId);
+            }
             return {
                 status: 'FILLED',
                 txHash: result.orderId || result.txHash,
-                executedAmount: result.sharesFilled * result.priceFilled,
+                executedAmount: result.sharesFilled * (result.priceFilled || signal.price || 0),
                 executedShares: result.sharesFilled,
-                priceFilled: result.priceFilled,
-                reason: sizing.reason
+                priceFilled: result.priceFilled || signal.price || 0,
+                reason: sizing?.reason
             };
         }
         catch (err) {

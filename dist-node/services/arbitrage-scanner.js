@@ -47,6 +47,14 @@ export class MarketMakingScanner extends EventEmitter {
     resolvedMarkets = new Set();
     killSwitchActive = false;
     bookmarkedMarkets = new Set();
+    /**
+     * Initialize bookmarks from storage
+     * @param bookmarks Array of market IDs to bookmark
+     */
+    initializeBookmarks(bookmarks) {
+        this.bookmarkedMarkets = new Set(bookmarks);
+        this.logger.info(`Initialized ${this.bookmarkedMarkets.size} bookmarked markets`);
+    }
     // Default config (EXTENDED)
     config = {
         minSpreadCents: 1,
@@ -338,7 +346,7 @@ export class MarketMakingScanner extends EventEmitter {
                 spread: initialAsk - initialBid,
                 volume,
                 liquidity,
-                isNew: market.new === true || this.isRecentlyCreated(market.createdAt),
+                isNewMarket: market.new === true || this.isRecentlyCreated(market.createdAt),
                 discoveredAt: Date.now(),
                 rewardsMaxSpread: market.rewardsMaxSpread,
                 rewardsMinSize: market.rewardsMinSize,
@@ -763,7 +771,7 @@ export class MarketMakingScanner extends EventEmitter {
                     spread: 0,
                     volume: 0,
                     liquidity: 0,
-                    isNew: true,
+                    isNewMarket: true,
                     discoveredAt: Date.now(),
                     isYesToken: outcomes[i]?.toLowerCase() === 'yes' || i === 0,
                     pairedTokenId: assetIds[i === 0 ? 1 : 0],
@@ -801,10 +809,22 @@ export class MarketMakingScanner extends EventEmitter {
         const lastMid = this.lastMidpoints.get(tokenId);
         if (lastMid && lastMid > 0) {
             const movePct = Math.abs(price - lastMid) / lastMid * 100;
+            // Update market volatility state
+            market.lastPriceMovePct = movePct;
+            market.isVolatile = movePct > this.config.priceMoveThresholdPct;
             if (movePct > this.config.priceMoveThresholdPct) {
-                this.logger.warn(`🔴 FLASH MOVE: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
-                if (this.config.enableKillSwitch) {
-                    this.triggerKillSwitch(`Volatility spike on ${market.tokenId}`);
+                this.logger.warn(`🔴 FLASH MOVE DETECTED: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
+                // Instead of killing the bot, we emit a specific alert event
+                this.emit('volatilityAlert', {
+                    tokenId: market.tokenId,
+                    question: market.question,
+                    movePct,
+                    timestamp: Date.now()
+                });
+                // We only trigger kill switch if move is extreme (e.g. > 25%) 
+                // and user has enabled the safety feature
+                if (this.config.enableKillSwitch && movePct > 25) {
+                    this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
                 }
             }
         }
@@ -874,7 +894,7 @@ export class MarketMakingScanner extends EventEmitter {
             return;
         // 5. Check if market is still considered "new" for relaxed requirements
         const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
-        const isStillNew = market.isNew && ageMinutes < this.config.newMarketAgeMinutes;
+        const isStillNew = market.isNewMarket && ageMinutes < this.config.newMarketAgeMinutes;
         // 6. Apply volume/liquidity filters with relaxed thresholds for new markets
         const effectiveMinVolume = isStillNew ?
             Math.max(100, this.config.minVolume * 0.1) : // At least $100 for new markets
@@ -908,7 +928,7 @@ export class MarketMakingScanner extends EventEmitter {
             midpoint: midpoint,
             volume: market.volume,
             liquidity: market.liquidity,
-            isNew: isStillNew,
+            isNewMarket: isStillNew,
             rewardsMaxSpread: market.rewardsMaxSpread,
             rewardsMinSize: market.rewardsMinSize,
             timestamp: Date.now(),
@@ -939,8 +959,8 @@ export class MarketMakingScanner extends EventEmitter {
         }
         catch (dbErr) { }
         this.opportunities.sort((a, b) => {
-            if (a.isNew !== b.isNew)
-                return a.isNew ? -1 : 1;
+            if (a.isNewMarket !== b.isNewMarket)
+                return a.isNewMarket ? -1 : 1;
             return b.spreadCents - a.spreadCents;
         });
         this.emit('opportunity', opp);

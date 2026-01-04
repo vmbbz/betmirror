@@ -100,7 +100,7 @@ export interface IMoneyMarketOpportunity extends Document {
   midpoint: number;
   volume: number;
   liquidity: number;
-  isNew: boolean;
+  isNewMarket: boolean;
   timestamp: Date;
   roi: number;
   capacityUsd: number;
@@ -119,7 +119,7 @@ const MoneyMarketOpportunitySchema = new Schema({
   midpoint: Number,
   volume: Number,
   liquidity: Number,
-  isNew: Boolean,
+  isNewMarket: { type: Boolean, default: false },
   timestamp: { type: Date, default: Date.now, expires: 3600 }, // Expire after 1 hour
   roi: Number,
   capacityUsd: Number

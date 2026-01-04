@@ -123,12 +123,22 @@ export class LiFiBridgeService {
     // Renamed for generic usage, maintains backward compat structure
     async getRoute(params) {
         try {
-            // Ensure amount is string
-            const amountStr = typeof params.fromAmount === 'number' ? String(params.fromAmount) : params.fromAmount;
+            // Convert amount to string and handle decimal places
+            let amountStr;
+            if (typeof params.fromAmount === 'number') {
+                // For USDC (6 decimals) - multiply by 1e6 and convert to string
+                amountStr = Math.floor(Number(params.fromAmount) * 1e6).toString();
+            }
+            else {
+                // If it's already a string, ensure it's in the correct format
+                amountStr = params.fromAmount.includes('.')
+                    ? Math.floor(parseFloat(params.fromAmount) * 1e6).toString()
+                    : params.fromAmount;
+            }
             const result = await getRoutes({
                 fromChainId: params.fromChainId,
                 fromTokenAddress: params.fromTokenAddress,
-                fromAmount: amountStr,
+                fromAmount: amountStr, // This should now be in the correct format
                 fromAddress: params.fromAddress,
                 toChainId: params.toChainId,
                 toTokenAddress: params.toTokenAddress,

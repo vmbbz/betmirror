@@ -131,6 +131,21 @@ async function startUserBot(userId, config) {
             }
         }
     });
+    // Load bookmarks for this user
+    try {
+        const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
+        const bookmarks = user?.bookmarkedMarkets || [];
+        if (bookmarks.length > 0) {
+            const scanner = engine.arbScanner;
+            if (scanner && typeof scanner.initializeBookmarks === 'function') {
+                scanner.initializeBookmarks(bookmarks);
+                console.log(`📌 Initialized ${bookmarks.length} bookmarks for user ${normId}`);
+            }
+        }
+    }
+    catch (e) {
+        console.error(`Failed to load bookmarks for ${normId}:`, e);
+    }
     ACTIVE_BOTS.set(normId, engine);
     engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
 }
@@ -499,12 +514,14 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             id: t._id.toString()
         }));
         let livePositions = [];
-        // FIX: Added conditionId to satisfy ArbitrageOpportunity interface requirements
+        // MAPPER: Ensure full metadata and volatility info is passed to the UI
         let mmOpportunities = persistedMMOpps.map((o) => ({
             marketId: o.marketId,
             conditionId: o.conditionId || o.marketId,
             tokenId: o.tokenId,
             question: o.question || '',
+            image: o.image || '',
+            marketSlug: o.marketSlug || '',
             bestBid: o.bestBid || 0,
             bestAsk: o.bestAsk || 0,
             spread: o.spread || 0,
@@ -513,13 +530,18 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             midpoint: o.midpoint || 0,
             volume: o.volume || 0,
             liquidity: o.liquidity || 0,
-            isNew: o.isNew || false,
+            isNewMarket: o.isNewMarket || false,
             timestamp: o.timestamp instanceof Date ? o.timestamp.getTime() : new Date(o.timestamp).getTime(),
             roi: o.roi || o.spreadPct || 0,
             combinedCost: o.combinedCost || (1 - (o.spread || 0)),
             capacityUsd: o.capacityUsd || o.liquidity || 0,
             status: o.status || 'active',
-            acceptingOrders: o.acceptingOrders !== false
+            acceptingOrders: o.acceptingOrders !== false,
+            volume24hr: o.volume24hr || 0,
+            category: o.category || 'general',
+            // Pass through volatility data
+            lastPriceMovePct: o.lastPriceMovePct || 0,
+            isVolatile: o.isVolatile || false
         }));
         if (engine) {
             livePositions = engine.getActivePositions() || [];
@@ -562,19 +584,48 @@ app.post('/api/bot/mm/add-market', async (req, res) => {
     }
     res.json({ success });
 });
+// In src/server/server.ts, update the /api/bot/mm/bookmark endpoint
 app.post('/api/bot/mm/bookmark', async (req, res) => {
-    const { userId, conditionId, action } = req.body;
+    const { userId, marketId, isBookmarked } = req.body;
+    console.log('📌 Bookmark request:', { userId, marketId, isBookmarked });
+    if (!userId) {
+        console.error('❌ No userId provided in request');
+        return res.status(400).json({ error: "userId is required" });
+    }
+    if (marketId === undefined) {
+        console.error('❌ No marketId provided in request');
+        return res.status(400).json({ error: "marketId is required" });
+    }
     const normId = userId.toLowerCase();
     const engine = ACTIVE_BOTS.get(normId);
-    if (!engine)
-        return res.status(404).json({ error: "Engine offline" });
-    if (action === 'add') {
-        engine.bookmarkMarket(conditionId);
+    if (!engine) {
+        console.error(`❌ No engine found for user: ${userId}`);
+        return res.status(404).json({ error: "Trading engine is not running. Please start the bot first." });
     }
-    else {
-        engine.unbookmarkMarket(conditionId);
+    try {
+        console.log(`🔄 ${isBookmarked ? 'Bookmarking' : 'Unbookmarking'} market:`, marketId);
+        // Update in-memory state
+        if (isBookmarked) {
+            engine.bookmarkMarket(marketId);
+        }
+        else {
+            engine.unbookmarkMarket(marketId);
+        }
+        // Update database
+        const update = isBookmarked
+            ? { $addToSet: { bookmarkedMarkets: marketId } }
+            : { $pull: { bookmarkedMarkets: marketId } };
+        await User.updateOne({ address: normId }, update);
+        console.log(`✅ Successfully ${isBookmarked ? 'bookmarked' : 'unbookmarked'} market:`, marketId);
+        res.json({ success: true });
     }
-    res.json({ success: true });
+    catch (error) {
+        console.error('❌ Error updating bookmark:', error);
+        res.status(500).json({
+            error: 'Failed to update bookmark',
+            details: error instanceof Error ? error.message : String(error)
+        });
+    }
 });
 app.get('/api/bot/mm/bookmarks', async (req, res) => {
     const { userId } = req.query;

@@ -73,7 +73,7 @@ export interface ArbitrageOpportunity {
     midpoint: number;
     volume: number;
     liquidity: number;
-    isNew: boolean;
+    isNewMarket: boolean;
     rewardsMaxSpread?: number;
     rewardsMinSize?: number;
     timestamp: number;

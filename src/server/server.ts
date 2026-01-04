@@ -586,7 +586,7 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             midpoint: o.midpoint || 0,
             volume: o.volume || 0,
             liquidity: o.liquidity || 0,
-            isNew: o.isNew || false,
+isNewMarket: o.isNewMarket || false,
             timestamp: o.timestamp instanceof Date ? o.timestamp.getTime() : new Date(o.timestamp).getTime(),
             roi: o.roi || o.spreadPct || 0,
             combinedCost: o.combinedCost || (1 - (o.spread || 0)),

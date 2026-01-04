@@ -15,7 +15,7 @@ const MoneyMarketOpportunitySchema = new Schema({
     midpoint: Number,
     volume: Number,
     liquidity: Number,
-    isNew: Boolean,
+    isNewMarket: { type: Boolean, default: false },
     timestamp: { type: Date, default: Date.now, expires: 3600 }, // Expire after 1 hour
     roi: Number,
     capacityUsd: Number
@@ -103,6 +103,7 @@ const UserSchema = new Schema({
         portfolioValue: { type: Number, default: 0 },
         cashBalance: { type: Number, default: 0 }
     },
+    bookmarkedMarkets: { type: [String], default: [] },
     cashoutHistory: [Schema.Types.Mixed],
     lastActive: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }

@@ -550,7 +550,7 @@ export class BotEngine {
                         midpoint: (tracked.bestBid + tracked.bestAsk) / 2,
                         volume: tracked.volume,
                         liquidity: tracked.liquidity,
-                        isNew: tracked.isNew,
+                        isNewMarket: tracked.isNewMarket,
                         timestamp: Date.now(),
                         roi: 1.0,
                         combinedCost: 1.0,

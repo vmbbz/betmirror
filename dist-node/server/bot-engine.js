@@ -337,14 +337,19 @@ export class BotEngine {
             // Initialize the real-time arbitrage scanner instance (Actually Market Making)
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
             // --- MARKET MAKING EVENT WIREUP ---
-            // 1. Kill Switch: Stop trading if flash move detected
+            // 1. Modified: Log spikes but don't stop the engine for normal volatility
+            this.arbScanner.on('volatilityAlert', async ({ question, movePct }) => {
+                await this.addLog('warn', `⚡ VOLATILITY ALERT: ${movePct.toFixed(1)}% move on ${question.slice(0, 20)}... Engine continuing execution.`);
+            });
+            // 2. Kill Switch: Only triggered for extreme safety events (e.g. > 25% move)
             this.arbScanner.on('killSwitch', async ({ reason }) => {
                 await this.addLog('error', `🚨 EMERGENCY STOP: ${reason}`);
                 if (this.executor) {
                     const adapter = this.executor.getAdapter();
                     await adapter?.cancelAllOrders();
                 }
-                this.stop(); // Stop the bot loop
+                // Keep engine running but pause this specific scanner if needed
+                // For now, we follow user request to NOT stop the whole bot
             });
             // 2. Auto Merge: If we have equal YES and NO, free up USDCe
             this.arbScanner.on('mergeOpportunity', async ({ conditionId, amount }) => {
@@ -468,7 +473,7 @@ export class BotEngine {
                         midpoint: (tracked.bestBid + tracked.bestAsk) / 2,
                         volume: tracked.volume,
                         liquidity: tracked.liquidity,
-                        isNew: tracked.isNew,
+                        isNewMarket: tracked.isNewMarket,
                         timestamp: Date.now(),
                         roi: 1.0,
                         combinedCost: 1.0,

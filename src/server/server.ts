@@ -555,12 +555,14 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         }));
 
         let livePositions: ActivePosition[] = [];
-        // FIX: Added conditionId to satisfy ArbitrageOpportunity interface requirements
+        // MAPPER: Ensure full metadata and volatility info is passed to the UI
         let mmOpportunities: ArbitrageOpportunity[] = persistedMMOpps.map((o: any) => ({
             marketId: o.marketId,
             conditionId: o.conditionId || o.marketId,
             tokenId: o.tokenId,
             question: o.question || '',
+            image: o.image || '',
+            marketSlug: o.marketSlug || '',
             bestBid: o.bestBid || 0,
             bestAsk: o.bestAsk || 0,
             spread: o.spread || 0,
@@ -575,7 +577,12 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             combinedCost: o.combinedCost || (1 - (o.spread || 0)),
             capacityUsd: o.capacityUsd || o.liquidity || 0,
             status: o.status || 'active',
-            acceptingOrders: o.acceptingOrders !== false
+            acceptingOrders: o.acceptingOrders !== false,
+            volume24hr: o.volume24hr || 0,
+            category: o.category || 'general',
+            // Pass through volatility data
+            lastPriceMovePct: o.lastPriceMovePct || 0,
+            isVolatile: o.isVolatile || false
         }));
         
         if (engine) {

@@ -1023,11 +1023,25 @@ export class MarketMakingScanner extends EventEmitter {
         if (lastMid && lastMid > 0) {
             const movePct = Math.abs(price - lastMid) / lastMid * 100;
 
+            // Update market volatility state
+            (market as any).lastPriceMovePct = movePct;
+            (market as any).isVolatile = movePct > this.config.priceMoveThresholdPct;
+
             if (movePct > this.config.priceMoveThresholdPct) {
-                this.logger.warn(`🔴 FLASH MOVE: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
+                this.logger.warn(`🔴 FLASH MOVE DETECTED: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
                 
-                if (this.config.enableKillSwitch) {
-                    this.triggerKillSwitch(`Volatility spike on ${market.tokenId}`);
+                // Instead of killing the bot, we emit a specific alert event
+                this.emit('volatilityAlert', { 
+                    tokenId: market.tokenId, 
+                    question: market.question,
+                    movePct, 
+                    timestamp: Date.now() 
+                });
+
+                // We only trigger kill switch if move is extreme (e.g. > 25%) 
+                // and user has enabled the safety feature
+                if (this.config.enableKillSwitch && movePct > 25) {
+                    this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
                 }
             }
         }

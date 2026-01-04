@@ -60,6 +60,7 @@ export interface LiquidityMetrics {
  */
 export interface ArbitrageOpportunity {
     marketId: string;
+    conditionId: string;
     tokenId: string;
     question: string;
     image?: string;
@@ -79,6 +80,16 @@ export interface ArbitrageOpportunity {
     roi: number;
     combinedCost: number;
     capacityUsd: number;
+    // Status & Metadata for UI enrichment
+    status: 'active' | 'closed' | 'resolved' | 'paused';
+    acceptingOrders: boolean;
+    volume24hr?: number;
+    category?: string;
+    featured?: boolean;
+    isBookmarked?: boolean;
+    // NEW: Volatility metrics
+    lastPriceMovePct?: number;
+    isVolatile?: boolean;
 }
 
 /**

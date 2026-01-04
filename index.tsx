@@ -217,6 +217,9 @@ interface EnhancedMarketCardProps {
     isBookmarked?: boolean;
     acceptingOrders?: boolean;
     orderMinSize?: number;
+    marketSlug?: string;
+    isVolatile?: boolean;
+    lastPriceMovePct?: number;
   };
   onExecute: (opp: any) => void;
   onBookmark: (marketId: string, isBookmarked: boolean) => void;
@@ -224,7 +227,6 @@ interface EnhancedMarketCardProps {
   userId?: string;
   isBookmarking?: boolean;
 }
-
 const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({ 
   opp, 
   onExecute, 
@@ -234,8 +236,17 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
   isBookmarking = false
 }) => {
     const spreadCents = (opp.spread * 100).toFixed(1);
-    const marketLink = opp.marketId ? `https://polymarket.com/market/${opp.marketId}` : null;
+    const marketLink = opp.marketSlug 
+        ? `https://polymarket.com/market/${opp.marketSlug}`
+        : opp.marketId 
+            ? `https://polymarket.com/market/${opp.marketId}`
+            : null;
     const [isHovered, setIsHovered] = useState(false);
+    const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
+
+    // Volatility state
+    const isHighVol = opp.isVolatile || (opp.lastPriceMovePct !== undefined && opp.lastPriceMovePct > 3);
+    const movePct = opp.lastPriceMovePct?.toFixed(1) || '0.0';
 
     // Format numbers with proper handling
     const formatNumber = (num: number = 0) => {
@@ -258,21 +269,39 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
         return colors[category?.toLowerCase() || 'default'] || colors.default;
     };
 
-    const handleBookmark = (e: React.MouseEvent) => {
+    const handleBookmark = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (onBookmark && opp.marketId) {
-            onBookmark(opp.marketId, !opp.isBookmarked);
+        if (!onBookmark || !opp.marketId || isBookmarkLoading) return;
+        
+        setIsBookmarkLoading(true);
+        try {
+            await onBookmark(opp.marketId, !opp.isBookmarked);
+            // Optional: Add toast notification here if needed
+        } finally {
+            setIsBookmarkLoading(false);
         }
     };
 
     return (
         <div 
-            className={`relative group bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${
-                isHovered ? 'border-blue-500' : 'hover:border-blue-500/50'
+            className={`relative group bg-white dark:bg-gray-900 border rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${
+                isHighVol 
+                    ? 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
+                    : isHovered 
+                        ? 'border-blue-500' 
+                        : 'border-gray-200 dark:border-gray-800 hover:border-blue-500/50'
             }`}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
         >
+            {/* Volatility Badge */}
+            {isHighVol && (
+                <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600 text-white text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1 z-10 shadow-lg">
+                    <Zap className="w-3 h-3" fill="currentColor" /> 
+                    FLASH MOVE: {movePct}%
+                </div>
+            )}
+
             {/* Market Image with Status Overlay */}
             <div className="relative h-40 bg-gray-100 dark:bg-gray-800 overflow-hidden">
                 {opp.image ? (
@@ -317,15 +346,15 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                     </h3>
                     <button
                         onClick={handleBookmark}
-                        disabled={isBookmarking || !userId}
-                        className={`p-1.5 rounded-full ${
+                        disabled={isBookmarkLoading || isBookmarking || !userId}
+                        className={`p-1.5 rounded-full transition-colors ${
                             opp.isBookmarked 
                                 ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/30' 
                                 : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
                         } disabled:opacity-50`}
                         aria-label={opp.isBookmarked ? 'Remove from bookmarks' : 'Add to bookmarks'}
                     >
-                        {isBookmarking ? (
+                        {isBookmarkLoading || isBookmarking ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
                             <Star className="w-4 h-4" fill={opp.isBookmarked ? "currentColor" : "none"} />
@@ -349,7 +378,9 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                     </div>
                     <div className="p-2 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
                         <p className="text-gray-500 dark:text-gray-400 text-xs">Spread</p>
-                        <p className="font-medium text-gray-900 dark:text-white">
+                        <p className={`font-medium ${
+                            isHighVol ? 'text-red-500' : 'text-gray-900 dark:text-white'
+                        }`}>
                             {spreadCents}¢
                         </p>
                     </div>
@@ -367,12 +398,14 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                         onClick={() => onExecute(opp)}
                         disabled={!opp.acceptingOrders}
                         className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-colors ${
-                            isAutoArb
-                                ? 'bg-purple-600 hover:bg-purple-700 text-white'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                            isHighVol
+                                ? 'bg-red-600 hover:bg-red-700 text-white'
+                                : isAutoArb
+                                    ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                                    : 'bg-blue-600 hover:bg-blue-700 text-white'
                         } disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
-                        {isAutoArb ? 'Auto Trade' : 'Trade Now'}
+                        {isHighVol ? 'Trade Spike' : isAutoArb ? 'Auto Trade' : 'Trade Now'}
                     </button>
                     
                     {marketLink && (
@@ -395,9 +428,13 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                     <button
                         onClick={() => onExecute(opp)}
                         disabled={!opp.acceptingOrders}
-                        className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium text-sm hover:bg-gray-100 transition-colors"
+                        className={`px-4 py-2 rounded-lg font-medium text-sm ${
+                            isHighVol
+                                ? 'bg-red-600 hover:bg-red-700 text-white'
+                                : 'bg-white hover:bg-gray-100 text-gray-900'
+                        } transition-colors`}
                     >
-                        Quick Trade
+                        {isHighVol ? 'Quick Trade (Spike!)' : 'Quick Trade'}
                     </button>
                 </div>
             )}

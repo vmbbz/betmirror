@@ -184,32 +184,49 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     async start() {
-        if (this.isScanning && this.isConnected) {
-            this.logger.info('🔍 Market making scanner already running');
+        if (this.isScanning) {
+            this.logger.info('⚠️ Scanner is already running');
             return;
         }
-
-        if (this.isScanning) {
-            await this.stop();
-        }
-
+        
         this.isScanning = true;
-        this.killSwitchActive = false; 
-        this.logger.info('🚀 Starting market making scanner...');
-        this.logger.info(`📊 Config: minSpread=${this.config.minSpreadCents}¢, maxSpread=${this.config.maxSpreadCents}¢, minVolume=$${this.config.minVolume}`);
+        this.logger.info('🚀 Starting MarketMakingScanner...');
 
         try {
             // Debug API before discovery
+            this.logger.info('🔍 Testing API connectivity...');
             await this.debugApiResponse();
             
+            this.logger.info('🌐 Starting initial market discovery...');
             await this.discoverMarkets();
+            
+            this.logger.info(`✅ Initial discovery complete. Tracking ${this.trackedMarkets.size} markets`);
+            
+            this.logger.info('🔌 Connecting to WebSocket...');
             this.connect();
             
-            this.refreshInterval = setInterval(() => {
-                this.discoverMarkets();
-            }, this.config.refreshIntervalMs);
+            this.refreshInterval = setInterval(async () => {
+                try {
+                    this.logger.info('🔄 Refreshing markets...');
+                    await this.discoverMarkets();
+                    this.logger.info(`✅ Market refresh complete. Tracking ${this.trackedMarkets.size} markets`);
+                    
+                    // Log some stats about tracked markets
+                    if (this.trackedMarkets.size > 0) {
+                        const sampleMarket = Array.from(this.trackedMarkets.values())[0];
+                        this.logger.info(`📊 Sample market: ${sampleMarket.question?.substring(0, 50)}...`);
+                        this.logger.info(`   Bid: ${sampleMarket.bestBid} | Ask: ${sampleMarket.bestAsk} | Spread: ${sampleMarket.spread.toFixed(4)}`);
+                    }
+                    
+                    this.logger.info(`🔄 Next refresh in ${this.config.refreshIntervalMs / 1000} seconds`);
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    this.logger.error(`❌ Error during market refresh: ${errorMessage}`);
+                }
+            }, this.config.refreshIntervalMs) as unknown as NodeJS.Timeout;
             
             this.logger.success('📊 MM ENGINE: Spread Capture Mode Active');
+            this.logger.info(`🔍 Currently tracking ${this.trackedMarkets.size} markets`);
         } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
             this.logger.error('❌ Failed to start scanner:', err);
@@ -219,46 +236,46 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     /**
-     * Fetch available tag IDs from Gamma API
+     * PRODUCTION: Fetch available tag IDs from Gamma API
+     * Uses /tags endpoint to get category IDs for filtering
      */
     private async fetchTagIds(): Promise<Record<string, number>> {
         const tagMap: Record<string, number> = {};
         
         try {
             const response = await this.rateLimiter.limit(() => 
-                fetch('https://gamma-api.polymarket.com/tags?limit=100')
+                fetch('https://gamma-api.polymarket.com/tags?limit=200')
             );
             
             if (!response.ok) {
-                this.logger.warn('Failed to fetch tags, using defaults');
+                this.logger.warn('Failed to fetch tags, proceeding without category filtering');
                 return tagMap;
             }
             
             const tags = await response.json();
             
-            // Map common category names to their IDs
             for (const tag of tags) {
                 const slug = (tag.slug || tag.label || '').toLowerCase();
                 const id = parseInt(tag.id);
                 
-                if (slug.includes('sport') || slug.includes('nfl') || slug.includes('nba')) {
-                    tagMap.sports = tagMap.sports || id;
+                if (!id || isNaN(id)) continue;
+                
+                // Map primary categories - take first match only
+                if (!tagMap.sports && (slug.includes('sport') || slug === 'nfl' || slug === 'nba' || slug === 'mlb' || slug === 'nhl')) {
+                    tagMap.sports = id;
                 }
-                if (slug.includes('politic') || slug.includes('election')) {
-                    tagMap.politics = tagMap.politics || id;
+                if (!tagMap.politics && (slug.includes('politic') || slug.includes('election') || slug === 'us-politics')) {
+                    tagMap.politics = id;
                 }
-                if (slug.includes('crypto') || slug.includes('bitcoin') || slug.includes('ethereum')) {
-                    tagMap.crypto = tagMap.crypto || id;
+                if (!tagMap.crypto && (slug.includes('crypto') || slug === 'bitcoin' || slug === 'ethereum' || slug === 'defi')) {
+                    tagMap.crypto = id;
                 }
-                if (slug.includes('business') || slug.includes('economy') || slug.includes('stock')) {
-                    tagMap.business = tagMap.business || id;
-                }
-                if (slug.includes('entertainment') || slug.includes('celebrity')) {
-                    tagMap.entertainment = tagMap.entertainment || id;
+                if (!tagMap.business && (slug.includes('business') || slug.includes('economy') || slug.includes('stock') || slug === 'finance')) {
+                    tagMap.business = id;
                 }
             }
             
-            this.logger.debug(`Found tag IDs: ${JSON.stringify(tagMap)}`);
+            this.logger.info(`📋 Tag IDs loaded: ${JSON.stringify(tagMap)}`);
             return tagMap;
             
         } catch (error) {
@@ -268,8 +285,8 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     /**
-     * PRODUCTION: Multi-source market discovery
-     * Fetches from multiple endpoints to capture different market segments
+     * PRODUCTION: Multi-source market discovery with pagination
+     * Fetches from multiple endpoints including /events, /markets, and /sports
      */
     private async discoverMarkets() {
         this.logger.info('📡 Discovering markets from Gamma API...');
@@ -278,33 +295,48 @@ export class MarketMakingScanner extends EventEmitter {
             // Step 1: Fetch available tags to get tag IDs
             const tagIds = await this.fetchTagIds();
             
-            // Step 2: Build endpoints with correct parameters
+            // Step 2: Build endpoints for specific categories
             const endpoints = [
-                // High volume markets (most reliable)
-                'https://gamma-api.polymarket.com/events?closed=false&limit=100&order=volume&ascending=false',
+                // Featured markets (highlighted by Polymarket)
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&featured=true&limit=100',
                 
-                // High liquidity markets
-                'https://gamma-api.polymarket.com/events?closed=false&limit=100&order=liquidity&ascending=false',
+                // Sports markets
+                ...(tagIds.sports ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.sports}&limit=100&order=volume&ascending=false`
+                ] : []),
                 
-                // Newest markets (recently created)
-                'https://gamma-api.polymarket.com/events?closed=false&limit=50&order=id&ascending=false',
+                // Crypto markets
+                ...(tagIds.crypto ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.crypto}&limit=100&order=volume&ascending=false`
+                ] : []),
                 
-                // Category-specific using tag_id (if we have them)
-                ...(tagIds.sports ? [`https://gamma-api.polymarket.com/events?closed=false&limit=100&tag_id=${tagIds.sports}&order=volume&ascending=false`] : []),
-                ...(tagIds.politics ? [`https://gamma-api.polymarket.com/events?closed=false&limit=100&tag_id=${tagIds.politics}&order=volume&ascending=false`] : []),
-                ...(tagIds.crypto ? [`https://gamma-api.polymarket.com/events?closed=false&limit=100&tag_id=${tagIds.crypto}&order=volume&ascending=false`] : []),
-                ...(tagIds.business ? [`https://gamma-api.polymarket.com/events?closed=false&limit=50&tag_id=${tagIds.business}&order=volume&ascending=false`] : []),
+                // Business/Finance markets
+                ...(tagIds.business ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.business}&limit=50&order=volume&ascending=false`
+                ] : []),
+                
+                // Politics markets
+                ...(tagIds.politics ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.politics}&limit=100&order=volume&ascending=false`
+                ] : []),
+                
+                // Get trending markets (high volume, recent)
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=volume&ascending=false',
+                
+                // Get newest markets (for breaking news)
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=id&ascending=false'
             ];
 
             let addedCount = 0;
             const newTokenIds: string[] = [];
             const seenConditionIds = new Set<string>();
 
+            // Process each endpoint
             for (const url of endpoints) {
                 try {
                     this.logger.debug(`Fetching: ${url}`);
-                    const response = await this.rateLimiter.limit(() => fetch(url));
                     
+                    const response = await this.rateLimiter.limit(() => fetch(url));
                     if (!response.ok) {
                         this.logger.debug(`Endpoint returned ${response.status}: ${url}`);
                         continue;
@@ -314,11 +346,17 @@ export class MarketMakingScanner extends EventEmitter {
                     const events = Array.isArray(data) ? data : (data.data || []);
                     
                     this.logger.debug(`Got ${events.length} events from ${url.split('?')[0]}`);
-
+                    
                     for (const event of events) {
                         const markets = event.markets || [];
+                        const isFeatured = url.includes('featured=true');
                         
                         for (const market of markets) {
+                            // Mark as featured if coming from featured endpoint
+                            if (isFeatured) {
+                                market.featured = true;
+                            }
+                            
                             const result = this.processMarketData(market, event, seenConditionIds);
                             if (result.added) {
                                 addedCount++;
@@ -326,8 +364,8 @@ export class MarketMakingScanner extends EventEmitter {
                             }
                         }
                     }
-                } catch (endpointError) {
-                    this.logger.debug(`Endpoint error: ${url} - ${endpointError}`);
+                } catch (error) {
+                    this.logger.warn(`Error in market discovery: ${error}`);
                     continue;
                 }
             }
@@ -335,8 +373,12 @@ export class MarketMakingScanner extends EventEmitter {
             this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new) | Min volume: $${this.config.minVolume}`);
 
             // Subscribe to WebSocket for new tokens
-            if (newTokenIds.length > 0 && this.ws?.readyState === 1) {
-                this.subscribeToTokens(newTokenIds);
+            if (newTokenIds.length > 0) {
+                if (this.ws?.readyState === 1) {
+                    this.subscribeToTokens(newTokenIds);
+                } else {
+                    this.logger.warn('WebSocket not connected, will subscribe on reconnect');
+                }
             }
 
             // Trigger initial opportunity evaluation for markets with price data
@@ -347,10 +389,16 @@ export class MarketMakingScanner extends EventEmitter {
             this.logger.error('❌ Failed to discover markets:', err);
         }
     }
+    
+    /**
+     * Fetch markets for a specific series
+     */
+    // Removed fetchMarketsBySeries as we're not using sports series endpoints anymore
 
     /**
      * PRODUCTION: Process a single market from API response
-     * Handles JSON string parsing for clobTokenIds, outcomes, outcomePrices
+     * FIXED: Removed volume/liquidity pre-filtering - only filter on structural requirements
+     * Volume/liquidity filtering happens in evaluateOpportunity() based on config
      */
     private processMarketData(
         market: any, 
@@ -359,133 +407,89 @@ export class MarketMakingScanner extends EventEmitter {
     ): { added: boolean; tokenIds: string[] } {
         const result = { added: false, tokenIds: [] as string[] };
 
-        // Get condition ID
+        // Get condition ID (required)
         const conditionId = market.conditionId || market.condition_id;
-        
-        // DEBUG: Log first 5 markets to see filtering
-        const debugCount = seenConditionIds.size;
-        const shouldDebug = debugCount < 5;
-        
-        if (shouldDebug) {
-            this.logger.info(`\n=== DEBUG MARKET #${debugCount + 1} ===`);
-            this.logger.info(`Question: ${market.question?.slice(0, 60)}`);
-            this.logger.info(`ConditionId: ${conditionId}`);
-        }
-
         if (!conditionId) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: No conditionId`);
             return result;
         }
         
+        // Skip if already processed
         if (seenConditionIds.has(conditionId)) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: Already seen`);
             return result;
         }
 
-        // Check closed/inactive filters
-        if (shouldDebug) {
-            this.logger.info(`closed: ${market.closed} (type: ${typeof market.closed})`);
-            this.logger.info(`acceptingOrders: ${market.acceptingOrders} (type: ${typeof market.acceptingOrders})`);
-            this.logger.info(`active: ${market.active} (type: ${typeof market.active})`);
-            this.logger.info(`archived: ${market.archived} (type: ${typeof market.archived})`);
-        }
-
+        // STRUCTURAL FILTERS ONLY - these are hard requirements
+        // Market must be open and accepting orders
         if (market.closed === true) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: closed === true`);
             return result;
         }
         if (market.acceptingOrders === false) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: acceptingOrders === false`);
             return result;
         }
         if (market.active === false) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: active === false`);
             return result;
         }
         if (market.archived === true) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: archived === true`);
             return result;
         }
 
-        // Parse volume/liquidity
-        const volume = this.parseNumber(market.volumeNum || market.volume || market.volumeClob);
-        const liquidity = this.parseNumber(market.liquidityNum || market.liquidity || market.liquidityClob);
-        
-        if (shouldDebug) {
-            this.logger.info(`volume: ${volume} (raw: ${market.volume}, volumeNum: ${market.volumeNum})`);
-            this.logger.info(`liquidity: ${liquidity} (raw: ${market.liquidity}, liquidityNum: ${market.liquidityNum})`);
-        }
-
-        if (volume < 100) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: volume ${volume} < 100`);
-            return result;
-        }
-        if (liquidity < 100) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: liquidity ${liquidity} < 100`);
-            return result;
-        }
-
-        // Parse clobTokenIds - THIS IS THE CRITICAL PART
+        // Parse clobTokenIds - CRITICAL: must have exactly 2 for binary markets
         const rawTokenIds = market.clobTokenIds || market.clob_token_ids;
-        
-        if (shouldDebug) {
-            this.logger.info(`clobTokenIds raw: ${rawTokenIds}`);
-            this.logger.info(`clobTokenIds type: ${typeof rawTokenIds}`);
-        }
-        
         const tokenIds = this.parseJsonArray(rawTokenIds);
         
-        if (shouldDebug) {
-            this.logger.info(`Parsed tokenIds: ${JSON.stringify(tokenIds)}`);
-            this.logger.info(`tokenIds length: ${tokenIds.length}`);
-        }
-
-        if (tokenIds.length === 0) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: No tokenIds parsed`);
-            return result;
-        }
-        
         if (tokenIds.length !== 2) {
-            if (shouldDebug) this.logger.warn(`❌ FILTERED: Non-binary (${tokenIds.length} tokens)`);
+            // Skip non-binary markets (multi-outcome handled differently)
             return result;
         }
 
-        // If we get here, market passed all filters!
-        if (shouldDebug) {
-            this.logger.success(`✅ PASSED ALL FILTERS!`);
-        }
-
-        // Mark as seen
+        // Mark as seen AFTER passing structural filters
         seenConditionIds.add(conditionId);
 
-        // Parse outcomes and prices
+        // Parse market data - NO filtering here, just extraction
+        const volume = this.parseNumber(market.volumeNum || market.volume || market.volumeClob || 0);
+        const liquidity = this.parseNumber(market.liquidityNum || market.liquidity || market.liquidityClob || 0);
         const outcomes = this.parseJsonArray(market.outcomes) || ['Yes', 'No'];
         const outcomePrices = this.parseJsonArray(market.outcomePrices);
         const status = this.computeMarketStatus(market);
-        const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob);
+        const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
+        const category = this.extractCategory(event, market);
 
-        // Process each token
+        // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];
             
+            // Update existing market if already tracked
             if (this.trackedMarkets.has(tokenId)) {
                 const existing = this.trackedMarkets.get(tokenId)!;
                 existing.volume = volume;
                 existing.liquidity = liquidity;
-                existing.bestBid = market.bestBid || existing.bestBid;
-                existing.bestAsk = market.bestAsk || existing.bestAsk;
-                existing.spread = market.spread || existing.spread;
                 existing.status = status;
                 existing.acceptingOrders = market.acceptingOrders !== false;
+                existing.volume24hr = volume24hr;
+                // Update prices if available
+                if (outcomePrices && outcomePrices[i]) {
+                    const price = this.parseNumber(outcomePrices[i]);
+                    if (price > 0 && price < 1) {
+                        existing.bestBid = Math.max(0.01, price - 0.01);
+                        existing.bestAsk = Math.min(0.99, price + 0.01);
+                        existing.spread = existing.bestAsk - existing.bestBid;
+                    }
+                }
                 continue;
             }
 
             const isYesToken = (outcomes[i]?.toLowerCase() === 'yes') || (i === 0);
             const pairedTokenId = tokenIds[i === 0 ? 1 : 0];
 
-            let initialPrice = 0;
+            // Initialize price from outcomePrices if available
+            let initialBid = 0;
+            let initialAsk = 0;
             if (outcomePrices && outcomePrices[i]) {
-                initialPrice = this.parseNumber(outcomePrices[i]);
+                const price = this.parseNumber(outcomePrices[i]);
+                if (price > 0 && price < 1) {
+                    initialBid = Math.max(0.01, price - 0.01);
+                    initialAsk = Math.min(0.99, price + 0.01);
+                }
             }
 
             this.trackedMarkets.set(tokenId, {
@@ -494,9 +498,9 @@ export class MarketMakingScanner extends EventEmitter {
                 question: market.question || event.title || 'Unknown',
                 image: market.image || market.icon || event.image || event.icon || '',
                 marketSlug: market.slug || '',
-                bestBid: market.bestBid || (initialPrice > 0 ? initialPrice - 0.005 : 0),
-                bestAsk: market.bestAsk || (initialPrice > 0 ? initialPrice + 0.005 : 0),
-                spread: market.spread || 0.01,
+                bestBid: initialBid,
+                bestAsk: initialAsk,
+                spread: initialAsk - initialBid,
                 volume,
                 liquidity,
                 isNew: market.new === true || this.isRecentlyCreated(market.createdAt),
@@ -508,9 +512,9 @@ export class MarketMakingScanner extends EventEmitter {
                 status,
                 acceptingOrders: market.acceptingOrders !== false,
                 volume24hr,
-                orderMinSize: market.orderMinSize || 5,
-                orderPriceMinTickSize: market.orderPriceMinTickSize || 0.01,
-                category: this.extractCategory(event, market),
+                orderMinSize: this.parseNumber(market.orderMinSize || market.minimum_order_size || 5),
+                orderPriceMinTickSize: this.parseNumber(market.orderPriceMinTickSize || market.minimum_tick_size || 0.01),
+                category,
                 featured: market.featured === true || event.featured === true,
                 competitive: market.competitive
             });
@@ -574,27 +578,51 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     /**
-     * PRODUCTION: Extract category from event tags array
+     * PRODUCTION: Extract category from event tags
+     * Per docs: event.tags is array of { id, label, slug }
      */
     private extractCategory(event: any, market?: any): string | undefined {
-        // Check event tags first (array of { id, label, slug })
+        // Primary: use event tags array (per Gamma API docs)
         if (event.tags && Array.isArray(event.tags) && event.tags.length > 0) {
             const tag = event.tags[0];
+            const slug = (tag.slug || tag.label || '').toLowerCase();
+            
+            // Normalize to standard categories
+            if (slug.includes('sport') || slug.includes('nfl') || slug.includes('nba') || 
+                slug.includes('mlb') || slug.includes('nhl') || slug.includes('soccer') ||
+                slug.includes('football') || slug.includes('basketball')) {
+                return 'sports';
+            }
+            if (slug.includes('politic') || slug.includes('election')) {
+                return 'politics';
+            }
+            if (slug.includes('crypto') || slug.includes('bitcoin') || slug.includes('ethereum')) {
+                return 'crypto';
+            }
+            if (slug.includes('business') || slug.includes('economy') || slug.includes('finance')) {
+                return 'business';
+            }
+            
+            // Return raw slug if no match
             return tag.slug || tag.label || undefined;
         }
         
-        // Fallback: infer from slug
+        // Fallback: infer from event/market slug
         const slug = (event.slug || market?.slug || '').toLowerCase();
-        if (slug.includes('nfl') || slug.includes('nba') || slug.includes('super-bowl') || slug.includes('sport')) {
+        if (slug.includes('nfl') || slug.includes('nba') || slug.includes('super-bowl') || 
+            slug.includes('world-series') || slug.includes('stanley-cup')) {
             return 'sports';
         }
-        if (slug.includes('bitcoin') || slug.includes('ethereum') || slug.includes('crypto')) {
+        if (slug.includes('bitcoin') || slug.includes('ethereum') || slug.includes('crypto') ||
+            slug.includes('btc') || slug.includes('eth')) {
             return 'crypto';
         }
-        if (slug.includes('election') || slug.includes('president') || slug.includes('trump') || slug.includes('biden')) {
+        if (slug.includes('election') || slug.includes('president') || slug.includes('congress') ||
+            slug.includes('senate') || slug.includes('governor')) {
             return 'politics';
         }
-        if (slug.includes('stock') || slug.includes('company') || slug.includes('business')) {
+        if (slug.includes('stock') || slug.includes('company') || slug.includes('earnings') ||
+            slug.includes('fed') || slug.includes('gdp')) {
             return 'business';
         }
         
@@ -799,15 +827,17 @@ export class MarketMakingScanner extends EventEmitter {
         if (!this.ws || this.ws.readyState !== 1) return;
 
         const assetIds = Array.from(this.trackedMarkets.keys());
+        if (assetIds.length === 0) return;
         
         const subscribeMsg = {
             type: 'market',
             assets_ids: assetIds,
-            custom_feature_enabled: true 
+            custom_feature_enabled: true,
+            initial_dump: true  // Request initial orderbook state
         };
 
         this.ws.send(JSON.stringify(subscribeMsg));
-        this.logger.info(`📡 Subscribed to ${assetIds.length} tokens with custom features enabled`);
+        this.logger.info(`📡 Subscribed to ${assetIds.length} tokens with initial orderbook dump`);
     }
 
     private subscribeToTokens(tokenIds: string[]) {
@@ -822,7 +852,22 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     private processMessage(msg: any) {
-        if (!msg?.event_type) return;
+        if (!msg) return;
+
+        // Handle initial orderbook dump
+        if (msg.type === 'initial_dump' && Array.isArray(msg.data)) {
+            this.logger.debug(`Processing initial orderbook dump for ${msg.data.length} markets`);
+            for (const marketData of msg.data) {
+                this.handleBestBidAsk({
+                    ...marketData,
+                    event_type: 'best_bid_ask',
+                    asset_id: marketData.asset_id || marketData.token_id
+                });
+            }
+            return;
+        }
+
+        if (!msg.event_type) return;
 
         if (this.killSwitchActive && msg.event_type !== 'market_resolved') {
             return;
@@ -850,23 +895,46 @@ export class MarketMakingScanner extends EventEmitter {
             case 'tick_size_change':
                 this.handleTickSizeChange(msg);
                 break;
+            default:
+                this.logger.debug(`Unhandled message type: ${msg.event_type || 'unknown'} - ${JSON.stringify(msg)}`);
         }
     }
 
     private handleBestBidAsk(msg: any) {
-        const tokenId = msg.asset_id;
+        const tokenId = msg.asset_id || msg.token_id;
+        if (!tokenId) {
+            this.logger.warn(`Received best_bid_ask message without asset_id or token_id: ${JSON.stringify(msg)}`);
+            return;
+        }
+
         const bestBid = parseFloat(msg.best_bid || '0');
         const bestAsk = parseFloat(msg.best_ask || '1');
-        const spread = parseFloat(msg.spread || '0');
+        
+        // Calculate spread if not provided
+        const spread = msg.spread !== undefined ? parseFloat(msg.spread) : (bestAsk - bestBid);
 
         let market = this.trackedMarkets.get(tokenId);
-        if (!market) return;
+        if (!market) {
+            this.logger.debug(`Received update for untracked token: ${tokenId}`);
+            return;
+        }
 
-        market.bestBid = bestBid;
-        market.bestAsk = bestAsk;
-        market.spread = spread;
-
-        this.evaluateOpportunity(market);
+        // Only update if we have valid price data
+        if (bestBid > 0 && bestAsk > 0 && bestAsk > bestBid) {
+            market.bestBid = bestBid;
+            market.bestAsk = bestAsk;
+            market.spread = spread;
+            
+            // If this is the first price update after discovery, log it
+            if (market.discoveredAt && (Date.now() - market.discoveredAt) < 10000) {
+                this.logger.debug(`Initial price for ${market.question?.substring(0, 30)}...: ${bestBid.toFixed(4)} / ${bestAsk.toFixed(4)}`);
+            }
+            
+            this.evaluateOpportunity(market);
+        } else if (market.bestBid === 0 || market.bestAsk === 0) {
+            // If we don't have valid prices yet, log the issue
+            this.logger.debug(`Invalid price data for ${tokenId}: bid=${bestBid}, ask=${bestAsk}`);
+        }
     }
 
     private handleBookUpdate(msg: any) {
@@ -1015,30 +1083,58 @@ export class MarketMakingScanner extends EventEmitter {
         });
     }
 
-    // FIX: Renamed evaluateOpportunityInternal to evaluateOpportunity to match message handler calls
+    /**
+     * PRODUCTION: Evaluate if a market meets our opportunity criteria
+     * Central place for all filtering logic - only structural filters in processMarketData
+     */
     private evaluateOpportunity(market: TrackedMarket) {
-        const spreadCents = market.spread * 100;
-        const midpoint = (market.bestBid + market.bestAsk) / 2;
-
-        if (market.bestBid <= 0 || market.bestAsk >= 1 || market.bestAsk <= market.bestBid) {
-            return;
+        // 1. Price data validation - must have valid bid/ask with positive spread
+        if (market.bestBid <= 0 || market.bestAsk <= 0 || market.bestAsk <= market.bestBid) {
+            return; // No valid price data yet
         }
-
+        
+        // 2. Market status - must be active and accepting orders
         if (market.status !== 'active' || !market.acceptingOrders) {
             return;
         }
-
-        const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
-        const isStillNew = market.isNew && ageMinutes < this.config.newMarketAgeMinutes;
-        const effectiveMinVolume = isStillNew ? 0 : this.config.minVolume;
-
+        
+        // 3. Calculate spread metrics
+        const spread = market.spread;
+        const midpoint = (market.bestBid + market.bestAsk) / 2;
+        const spreadCents = spread * 100;
+        const spreadPct = midpoint > 0 ? (spread / midpoint) * 100 : 0;
+        
+        // 4. Apply spread filters from config
         if (spreadCents < this.config.minSpreadCents) return;
         if (spreadCents > this.config.maxSpreadCents) return;
-        if (market.volume < effectiveMinVolume) return;
-
-        const spreadPct = midpoint > 0 ? (market.spread / midpoint) * 100 : 0;
+        
+        // 5. Check if market is still considered "new" for relaxed requirements
+        const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
+        const isStillNew = market.isNew && ageMinutes < this.config.newMarketAgeMinutes;
+        
+        // 6. Apply volume/liquidity filters with relaxed thresholds for new markets
+        const effectiveMinVolume = isStillNew ? 
+            Math.max(100, this.config.minVolume * 0.1) : // At least $100 for new markets
+            this.config.minVolume;
+            
+        const effectiveMinLiquidity = isStillNew ? 
+            Math.max(50, this.config.minLiquidity * 0.1) : // At least $50 for new markets
+            this.config.minLiquidity;
+            
+        if (market.volume < effectiveMinVolume) {
+            return;
+        }
+        
+        if (market.liquidity < effectiveMinLiquidity) {
+            return;
+        }
+        
+        // 7. Calculate ROI and capacity
         const skew = this.getInventorySkew(market.conditionId);
-
+        const roi = spreadPct; // ROI is just the spread percentage for now
+        const combinedCost = 1 - spread; // Cost to buy both sides
+        
+        // 8. Create opportunity object
         const opportunity: MarketOpportunity = {
             marketId: market.conditionId,
             conditionId: market.conditionId,
@@ -1048,20 +1144,20 @@ export class MarketMakingScanner extends EventEmitter {
             marketSlug: market.marketSlug,
             bestBid: market.bestBid,
             bestAsk: market.bestAsk,
-            spread: market.spread,
-            spreadPct,
-            spreadCents,
-            midpoint,
+            spread: spread,
+            spreadPct: spreadPct,
+            spreadCents: spreadCents,
+            midpoint: midpoint,
             volume: market.volume,
             liquidity: market.liquidity,
             isNew: isStillNew,
             rewardsMaxSpread: market.rewardsMaxSpread,
             rewardsMinSize: market.rewardsMinSize,
             timestamp: Date.now(),
-            roi: spreadPct,
-            combinedCost: 1 - market.spread,
+            roi: roi,
+            combinedCost: combinedCost,
             capacityUsd: market.liquidity,
-            skew,
+            skew: skew,
             status: market.status,
             acceptingOrders: market.acceptingOrders,
             volume24hr: market.volume24hr,
@@ -1069,7 +1165,8 @@ export class MarketMakingScanner extends EventEmitter {
             featured: market.featured,
             isBookmarked: this.bookmarkedMarkets.has(market.conditionId)
         };
-
+        
+        // 9. Update opportunities
         this.updateOpportunitiesInternal(opportunity);
     }
 

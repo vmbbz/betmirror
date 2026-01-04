@@ -157,6 +157,15 @@ export class MarketMakingScanner extends EventEmitter {
     private killSwitchActive = false;
     private bookmarkedMarkets: Set<string> = new Set();
 
+    /**
+     * Initialize bookmarks from storage
+     * @param bookmarks Array of market IDs to bookmark
+     */
+    public initializeBookmarks(bookmarks: string[]): void {
+        this.bookmarkedMarkets = new Set(bookmarks);
+        this.logger.info(`Initialized ${this.bookmarkedMarkets.size} bookmarked markets`);
+    }
+
     // Default config (EXTENDED)
     private config: MarketMakerConfig = {
         minSpreadCents: 1, 

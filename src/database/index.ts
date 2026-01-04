@@ -18,6 +18,7 @@ export interface IUser extends Document {
   activePositions: ActivePosition[];
   stats: UserStats;
   cashoutHistory: any[];
+  bookmarkedMarkets: string[];
   createdAt: Date;
   lastActive: Date;
 }
@@ -210,6 +211,7 @@ const UserSchema = new Schema<IUser>({
     portfolioValue: { type: Number, default: 0 },
     cashBalance: { type: Number, default: 0 }
   },
+  bookmarkedMarkets: { type: [String], default: [] },
   cashoutHistory: [Schema.Types.Mixed],
   lastActive: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now }

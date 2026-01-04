@@ -142,14 +142,29 @@ async function startUserBot(userId: string, config: BotConfig) {
             // Memory update handled by poll
         },
         onFeePaid: async (event) => {
-             const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
-             if (lister) {
-                 lister.copyCount = (lister.copyCount || 0) + 1;
-                 lister.copyProfitGenerated = (lister.copyProfitGenerated || 0) + event.profitAmount;
-                 await lister.save();
-             }
+            const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
+            if (lister) {
+                lister.copyCount = (lister.copyCount || 0) + 1;
+                lister.copyProfitGenerated = (lister.copyProfitGenerated || 0) + event.profitAmount;
+                await lister.save();
+            }
         }
     });
+
+    // Load bookmarks for this user
+    try {
+        const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
+        const bookmarks = user?.bookmarkedMarkets || [];
+        if (bookmarks.length > 0) {
+            const scanner = (engine as any).arbScanner;
+            if (scanner && typeof scanner.initializeBookmarks === 'function') {
+                scanner.initializeBookmarks(bookmarks);
+                console.log(`📌 Initialized ${bookmarks.length} bookmarks for user ${normId}`);
+            }
+        }
+    } catch (e) {
+        console.error(`Failed to load bookmarks for ${normId}:`, e);
+    }
 
     ACTIVE_BOTS.set(normId, engine);
     engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
@@ -627,19 +642,55 @@ app.post('/api/bot/mm/add-market', async (req: any, res: any) => {
     res.json({ success });
 });
 
+// In src/server/server.ts, update the /api/bot/mm/bookmark endpoint
 app.post('/api/bot/mm/bookmark', async (req: any, res: any) => {
-    const { userId, conditionId, action } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Engine offline" });
+    const { userId, marketId, isBookmarked } = req.body;
+    console.log('📌 Bookmark request:', { userId, marketId, isBookmarked });
     
-    if (action === 'add') {
-        engine.bookmarkMarket(conditionId);
-    } else {
-        engine.unbookmarkMarket(conditionId);
+    if (!userId) {
+        console.error('❌ No userId provided in request');
+        return res.status(400).json({ error: "userId is required" });
     }
     
-    res.json({ success: true });
+    if (marketId === undefined) {
+        console.error('❌ No marketId provided in request');
+        return res.status(400).json({ error: "marketId is required" });
+    }
+    
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    
+    if (!engine) {
+        console.error(`❌ No engine found for user: ${userId}`);
+        return res.status(404).json({ error: "Trading engine is not running. Please start the bot first." });
+    }
+    
+    try {
+        console.log(`🔄 ${isBookmarked ? 'Bookmarking' : 'Unbookmarking'} market:`, marketId);
+        
+        // Update in-memory state
+        if (isBookmarked) {
+            engine.bookmarkMarket(marketId);
+        } else {
+            engine.unbookmarkMarket(marketId);
+        }
+        
+        // Update database
+        const update = isBookmarked 
+            ? { $addToSet: { bookmarkedMarkets: marketId } }
+            : { $pull: { bookmarkedMarkets: marketId } };
+            
+        await User.updateOne({ address: normId }, update);
+        
+        console.log(`✅ Successfully ${isBookmarked ? 'bookmarked' : 'unbookmarked'} market:`, marketId);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('❌ Error updating bookmark:', error);
+        res.status(500).json({ 
+            error: 'Failed to update bookmark',
+            details: error instanceof Error ? error.message : String(error)
+        });
+    }
 });
 
 app.get('/api/bot/mm/bookmarks', async (req: any, res: any) => {

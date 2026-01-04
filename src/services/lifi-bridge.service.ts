@@ -154,30 +154,39 @@ export class LiFiBridgeService {
   // Renamed for generic usage, maintains backward compat structure
   async getRoute(params: BridgeQuoteParams) {
     try {
-      // Ensure amount is string
-      const amountStr = typeof params.fromAmount === 'number' ? String(params.fromAmount) : params.fromAmount;
-
-      const result = await getRoutes({
-        fromChainId: params.fromChainId,
-        fromTokenAddress: params.fromTokenAddress,
-        fromAmount: amountStr,
-        fromAddress: params.fromAddress, 
-        toChainId: params.toChainId,
-        toTokenAddress: params.toTokenAddress, 
-        toAddress: params.toAddress,
-        options: {
-            slippage: 0.005, // 0.5%
-            order: 'CHEAPEST',
-            allowSwitchChain: true
+        // Convert amount to string and handle decimal places
+        let amountStr: string;
+        if (typeof params.fromAmount === 'number') {
+            // For USDC (6 decimals) - multiply by 1e6 and convert to string
+            amountStr = Math.floor(Number(params.fromAmount) * 1e6).toString();
+        } else {
+            // If it's already a string, ensure it's in the correct format
+            amountStr = params.fromAmount.includes('.')
+                ? Math.floor(parseFloat(params.fromAmount) * 1e6).toString()
+                : params.fromAmount;
         }
-      });
-      
-      return result.routes;
+
+        const result = await getRoutes({
+            fromChainId: params.fromChainId,
+            fromTokenAddress: params.fromTokenAddress,
+            fromAmount: amountStr,  // This should now be in the correct format
+            fromAddress: params.fromAddress, 
+            toChainId: params.toChainId,
+            toTokenAddress: params.toTokenAddress, 
+            toAddress: params.toAddress,
+            options: {
+                slippage: 0.005, // 0.5%
+                order: 'CHEAPEST',
+                allowSwitchChain: true
+            }
+        });
+        
+        return result.routes;
     } catch (error) {
-      console.error("LiFi Route Error:", error);
-      throw error;
+        console.error("LiFi Route Error:", error);
+        throw error;
     }
-  }
+}
 
   async executeBridge(route: Route, onUpdate: (status: string, step?: any) => void) {
      const recordId = Math.random().toString(36).substring(7);

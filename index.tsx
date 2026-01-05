@@ -14,7 +14,7 @@ Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLe
 Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
 Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle,
 Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown, Sliders, Bell, ShieldAlert,
-Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark
+Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark, ArrowLeft
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_BRIDGED_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -775,7 +775,198 @@ const Tooltip = ({ text }: { text: string }) => (
     </div>
 );
 
+const MoneyMarketsModal = ({ onBack }: { onBack: () => void }) => {
+    const [activeTab, setActiveTab] = useState<'overview' | 'examples'>('overview');
+    
+    return (
+        <>
+            <div className="flex items-center gap-3 mb-6">
+                <button 
+                    onClick={onBack}
+                    className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-white/10 transition-colors"
+                >
+                    <ArrowLeft size={18} className="text-gray-500" />
+                </button>
+                <div>
+                    <h3 className="text-lg font-bold text-gray-900 dark:text-white">Money Markets</h3>
+                    <p className="text-sm text-gray-500">Advanced risk management & position scaling</p>
+                </div>
+            </div>
+
+            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-6">
+                <button
+                    onClick={() => setActiveTab('overview')}
+                    className={`px-4 py-2 text-sm font-medium ${activeTab === 'overview' 
+                        ? 'text-blue-600 border-b-2 border-blue-600 dark:text-blue-400 dark:border-blue-400' 
+                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+                >
+                    Overview
+                </button>
+                <button
+                    onClick={() => setActiveTab('examples')}
+                    className={`px-4 py-2 text-sm font-medium ${activeTab === 'examples' 
+                        ? 'text-blue-600 border-b-2 border-blue-600 dark:text-blue-400 dark:border-blue-400' 
+                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+                >
+                    Examples & Scenarios
+                </button>
+            </div>
+
+            {activeTab === 'overview' ? (
+                <div className="space-y-6">
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                            <ShieldCheck size={16} className="text-green-500" />
+                            Risk Management
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="p-4 bg-white dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-white/5">
+                                <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">Dynamic Position Sizing</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">Positions automatically adjust based on market volatility and account equity. More volatile markets = smaller positions.</p>
+                                <div className="mt-3 flex items-center gap-2 text-xs">
+                                    <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full">2% Base Position</span>
+                                    <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-full">10% Max Position</span>
+                                </div>
+                            </div>
+                            <div className="p-4 bg-white dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-white/5">
+                                <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">Stop-Loss Protection</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">Automatically exits positions when they reach predefined risk thresholds to limit losses.</p>
+                                <div className="mt-3 flex items-center gap-2 text-xs">
+                                    <span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-full">3% Stop Loss</span>
+                                    <span className="px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-full">5% Daily Drawdown</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                            <BarChart3 size={16} className="text-blue-500" />
+                            Market Analysis
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="p-4 bg-white dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-white/5">
+                                <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">Volatility Tracking</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">Monitors price movements in real-time to adjust position sizes and risk exposure.</p>
+                                <div className="mt-2 text-xs text-blue-600 dark:text-blue-400">
+                                    <span className="font-mono">Volatility: 12.5%</span>
+                                </div>
+                            </div>
+                            <div className="p-4 bg-white dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-white/5">
+                                <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">Liquidity Analysis</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">Ensures orders can be filled without significant price impact.</p>
+                                <div className="mt-2 text-xs text-green-600 dark:text-green-400">
+                                    <span className="font-mono">Liquidity: $245K</span>
+                                </div>
+                            </div>
+                            <div className="p-4 bg-white dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-white/5">
+                                <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">Spread Monitoring</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">Dynamically adjusts order spreads based on market conditions.</p>
+                                <div className="mt-2 text-xs text-purple-600 dark:text-purple-400">
+                                    <span className="font-mono">Spread: 1.2%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                            <Settings size={16} className="text-purple-500" />
+                            Position Management
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="p-4 bg-white dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-white/5">
+                                <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">Inventory Rebalancing</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">Automatically rebalances positions to maintain target allocations and risk parameters.</p>
+                                <div className="mt-2 flex items-center gap-2 text-xs">
+                                    <span className="px-2 py-1 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-full">Rebalanced: 2h ago</span>
+                                </div>
+                            </div>
+                            <div className="p-4 bg-amber-50 dark:bg-amber-900/10 rounded-xl border border-amber-100 dark:border-amber-900/20">
+                                <div className="flex items-start gap-3">
+                                    <AlertTriangle size={18} className="text-amber-500 mt-0.5 flex-shrink-0" />
+                                    <div>
+                                        <p className="font-bold text-sm text-amber-900 dark:text-amber-200 mb-1">Risk Notice</p>
+                                        <p className="text-xs text-amber-800/80 dark:text-amber-400/80">Money markets involve significant risk. The system includes multiple safeguards, but no system can eliminate all risk. Only trade with funds you can afford to lose.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                <div className="space-y-6">
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                            <Zap size={16} className="text-yellow-500" />
+                            Dynamic Position Sizing Example
+                        </h4>
+                        <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl">
+                            <div className="font-mono text-sm space-y-2">
+                                <p><span className="text-gray-500">// Portfolio: $10,000 | Base Position: 2%</span></p>
+                                <p><span className="text-blue-500">const</span> basePosition = 10000 * 0.02; <span className="text-gray-500">// $200</span></p>
+                                <p><span className="text-blue-500">const</span> volatility = <span className="text-purple-500">0.20</span>; <span className="text-gray-500">// 20% volatility</span></p>
+                                <p><span className="text-blue-500">const</span> adjustment = Math.min(2, 0.1 / (volatility + 0.05)); <span className="text-gray-500">// ≈0.4</span></p>
+                                <p><span className="text-blue-500">const</span> adjustedPosition = basePosition * adjustment; <span className="text-gray-500">// $80 (40% of base)</span></p>
+                            </div>
+                            <p className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+                                When volatility is high (20%), position size is automatically reduced to 40% of normal to limit risk exposure.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                            <RefreshCw size={16} className="text-green-500" />
+                            Inventory Rebalancing Example
+                        </h4>
+                        <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl">
+                            <div className="font-mono text-sm space-y-2">
+                                <p><span className="text-gray-500">// Current Position (YES/NO Market)</span></p>
+                                <p><span className="text-blue-500">const</span> position = {'{'}</p>
+                                <p className="ml-4">yes: <span className="text-green-500">8</span>, <span className="text-gray-500">// 80% of position</span></p>
+                                <p className="ml-4">no: <span className="text-green-500">2</span>  <span className="text-gray-500">// 20% of position</span></p>
+                                <p>{'}'};</p>
+                                <p><span className="text-blue-500">const</span> skew = (8 - 2) / (8 + 2); <span className="text-gray-500">// 0.6 (60% skew)</span></p>
+                                <p><span className="text-blue-500">if</span> (Math.abs(skew) &gt; 0.3) {'{'}</p>
+                                <p className="ml-4 text-yellow-500">// System will rebalance by reducing YES and increasing NO</p>
+                                <p className="ml-4">placeOrder(<span className="text-red-500">'SELL'</span>, <span className="text-green-500">3</span>); <span className="text-gray-500">// Reduce YES</span></p>
+                                <p className="ml-4">placeOrder(<span className="text-green-500">'BUY'</span>, <span className="text-green-500">3</span>);  <span className="text-gray-500">// Increase NO</span></p>
+                                <p>{'}'}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <h4 className="font-bold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                            <ShieldAlert size={16} className="text-red-500" />
+                            Stop-Loss Protection Example
+                        </h4>
+                        <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl">
+                            <div className="font-mono text-sm space-y-2">
+                                <p><span className="text-gray-500">// Position Parameters</span></p>
+                                <p><span className="text-blue-500">const</span> entryPrice = <span className="text-green-500">0.50</span>; <span className="text-gray-500">// Entry price</span></p>
+                                <p><span className="text-blue-500">const</span> currentPrice = <span className="text-green-500">0.47</span>; <span className="text-gray-500">// Current price</span></p>
+                                <p><span className="text-blue-500">const</span> stopLossPct = <span className="text-green-500">0.05</span>; <span className="text-gray-500">// 5% stop loss</span></p>
+                                <p><span className="text-blue-500">const</span> pnlPct = (currentPrice - entryPrice) / entryPrice; <span className="text-gray-500">// -6%</span></p>
+                                <p><span className="text-blue-500">if</span> (pnlPct &lt;= -stopLossPct) {'{'}</p>
+                                <p className="ml-4 text-red-500">// Stop loss triggered! Closing position...</p>
+                                <p className="ml-4">closePosition(<span className="text-green-500">'STOP_LOSS'</span>);</p>
+                                <p>{'}'}</p>
+                            </div>
+                            <p className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+                                When position loses 5% of its value, the system automatically closes it to prevent further losses.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
 const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
+    const [activeTab, setActiveTab] = useState<'main' | 'moneyMarkets'>('main');
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300">
@@ -836,8 +1027,35 @@ const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
 
                         <section className="space-y-3">
                             <h3 className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                <TrendingUp size={14} /> 04. Proven Methodologies
+                                <TrendingUp size={14} /> 04. Advanced Features
                             </h3>
+                            <div className="grid grid-cols-2 gap-4 mt-4">
+                                <button 
+                                    onClick={() => setActiveTab('moneyMarkets')}
+                                    className="p-4 bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/5 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors text-left group"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:bg-blue-200 dark:group-hover:bg-blue-800/50 transition-colors">
+                                            <Coins size={20} />
+                                        </div>
+                                        <div>
+                                            <p className="font-bold text-gray-900 dark:text-white text-sm">Money Markets</p>
+                                            <p className="text-xs text-gray-500 mt-1">Advanced risk management & position scaling</p>
+                                        </div>
+                                    </div>
+                                </button>
+                                <div className="p-4 bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/5 opacity-70">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-white/10 flex items-center justify-center text-gray-400">
+                                            <Lock size={20} />
+                                        </div>
+                                        <div>
+                                            <p className="font-bold text-gray-400 text-sm">Coming Soon</p>
+                                            <p className="text-xs text-gray-400 mt-1">More features in development</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                             <div className="grid sm:grid-cols-2 gap-4">
                                 <div className="p-4 bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/5">
                                     <p className="font-bold text-gray-900 dark:text-white text-xs mb-1">The 70% Sniper</p>
@@ -851,11 +1069,13 @@ const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                         </section>
                     </div>
 
+                    {activeTab === 'moneyMarkets' && <MoneyMarketsModal onBack={() => setActiveTab('main')} />}
+
                     <button 
-                        onClick={onClose}
-                        className="mt-12 w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 uppercase tracking-widest"
+                        onClick={activeTab === 'main' ? onClose : () => setActiveTab('main')}
+                        className="mt-6 w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-xs transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 uppercase tracking-widest"
                     >
-                        I Understand the Protocols
+                        {activeTab === 'main' ? 'I Understand the Protocols' : 'Back to Main'}
                     </button>
                 </div>
             </div>

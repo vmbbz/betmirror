@@ -75,6 +75,13 @@ async function main(): Promise<void> {
           return getUsdBalanceApprox(client.wallet, env.usdcContractAddress); // Approximate
       },
       getMarketPrice: async () => 0, 
+      getMarketData: async (marketId: string) => ({
+          question: '',
+          image: '',
+          isResolved: false
+      }),
+      getDbPositions: async () => [],
+      updatePositionMetadata: async () => {},
       getOrderBook: async (tokenId: string): Promise<OrderBook> => {
           const book = await client.getOrderBook(tokenId);
           return {

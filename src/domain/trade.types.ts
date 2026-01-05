@@ -1,3 +1,10 @@
+export interface AutoCashoutConfig {
+  enabled: boolean;
+  percentage: number;
+  destinationAddress?: string;
+  sweepThreshold?: number; // Minimum balance to keep in the wallet before sweeping
+}
+
 export type TradeSignal = {
   trader: string;
   marketId: string;
@@ -7,6 +14,7 @@ export type TradeSignal = {
   sizeUsd: number;
   price: number;
   timestamp: number;
+  autoCashout?: AutoCashoutConfig;
 };
 
 export type TradeEvent = {
@@ -48,16 +56,20 @@ export interface ActivePosition {
   clobOrderId?: string; // The specific order ID on Polymarket
   marketId: string;
   conditionId?: string; // The condition ID used by Polymarket's CLOB API
-  tokenId: string;
+  tokenId: string; // The token ID for the position
   outcome: 'YES' | 'NO';
   entryPrice: number;
+  currentPrice?: number; // Current market price
   shares: number; // Exact number of shares held (Critical for selling)
+  valueUsd: number; // Current market value in USD
   sizeUsd: number; // Initial invested amount
-  investedValue?: number;
-  timestamp: number;
-  // Rich Data (Synced from Chain)
-  currentPrice?: number;
-  unrealizedPnL?: number;
+  pnl?: number; // Profit and Loss in USD
+  pnlPercentage?: number; // PnL as a percentage of investment
+  lastUpdated?: number; // Timestamp of last update
+  autoCashout?: AutoCashoutConfig; // Auto-cashout configuration
+  investedValue?: number; // Total amount invested
+  timestamp: number; // When the position was opened
+  unrealizedPnL?: number; // Unrealized PnL in USD
   unrealizedPnLPercent?: number;
   question?: string;
   image?: string;

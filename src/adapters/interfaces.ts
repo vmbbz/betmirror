@@ -116,5 +116,6 @@ export interface IExchangeAdapter {
     mergePositions(conditionId: string, amount: number): Promise<string>;
     cashout(amount: number, destination: string): Promise<string>;
     getFunderAddress(): string;
+    getCurrentPrice(tokenId: string): Promise<number>;
     redeemPosition(conditionId: string, tokenId: string): Promise<{ success: boolean; amountUsd?: number; txHash?: string; error?: string }>;
 }

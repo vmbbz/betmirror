@@ -82,6 +82,18 @@ async function main(): Promise<void> {
             asks: book.asks.map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
           };
       },
+      getCurrentPrice: async (tokenId: string): Promise<number> => {
+          try {
+              const book = await client.getOrderBook(tokenId);
+              if (book.bids && book.bids.length > 0) {
+                  return parseFloat(book.bids[0].price);
+              }
+              return 0;
+          } catch (error) {
+              console.error(`Error getting current price for token ${tokenId}:`, error);
+              return 0;
+          }
+      },
       getPositions: async (address: string): Promise<PositionData[]> => {
         try {
             // Note: In headless mode we still use data-api for simplicity unless refactored

@@ -7,6 +7,8 @@ export interface L2ApiCredentials {
     passphrase: string;
 }
 
+import { AutoCashoutConfig } from './trade.types.js';
+
 export interface TradingWalletConfig {
   address: string; // The EOA Signer Address (Controller)
   type: WalletType;
@@ -17,6 +19,9 @@ export interface TradingWalletConfig {
   // Link to the main user
   ownerAddress: string; 
   createdAt: string;
+  
+  // Auto-cashout configuration for this wallet
+  autoCashout?: AutoCashoutConfig;
 
   // L2 Auth Credentials
   l2ApiCredentials?: L2ApiCredentials;

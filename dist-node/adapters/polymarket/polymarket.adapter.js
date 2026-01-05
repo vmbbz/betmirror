@@ -482,6 +482,21 @@ export class PolymarketAdapter {
             await new Promise(r => setTimeout(r, 5000));
         }
     }
+    async getCurrentPrice(tokenId) {
+        try {
+            const orderbook = await this.getOrderBook(tokenId);
+            if (!orderbook.bids || orderbook.bids.length === 0) {
+                this.logger.warn(`No bids found for token ${tokenId}`);
+                return 0;
+            }
+            return orderbook.bids[0].price;
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(`Failed to get current price for token ${tokenId}: ${errorMessage}`, error instanceof Error ? error : undefined);
+            return 0;
+        }
+    }
     getFunderAddress() {
         return this.safeAddress || this.config.walletConfig.address;
     }

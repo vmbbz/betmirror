@@ -1,10 +1,10 @@
-# Bet Mirror Pro | Professional Prediction Markets Bot Terminal
+# Bet Mirror | Professional Copy-Trading Terminal
 
 ![Bet Mirror Header](./docs/assets/header.png)
 
 **Institutional-Grade Trading Infrastructure for Polymarket. Powered by AI, Multi-Strategy Execution, and Enterprise Risk Management.**
 
-**Bet Mirror Pro** redefines professional prediction market trading with its **institutional-grade execution** and **sophisticated risk management** framework. Our platform combines the power of **quantitative algorithms** with **AI-driven decision making** to deliver consistent alpha in prediction markets.
+**Bet Mirror Pro** redefines professional prediction market trading copy-trading and market-making with its **institutional-grade execution** and **sophisticated risk management** framework. Our platform combines the power of **quantitative algorithms** with **AI-driven decision making** to deliver consistent alpha in prediction markets.
 
 ### 🏆 Why Choose Bet Mirror Pro?
 - **Institutional Infrastructure**: Bank-grade security with **Gnosis Safe** multi-sig wallets and **enterprise-grade** encryption

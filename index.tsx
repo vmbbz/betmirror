@@ -14,7 +14,7 @@ Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLe
 Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
 Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle,
 Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown, Sliders, Bell, ShieldAlert,
-Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark, ArrowLeft
+Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark, ArrowLeft, ArrowRight
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_BRIDGED_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -2021,7 +2021,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 <div className="mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
                     <span className="px-4 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/50 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase tracking-widest">
                         Polymarket Trading Live
-                    </span>
+                        </span>
                 </div>
 
                 <h1 className="text-5xl md:text-7xl font-black tracking-tight text-gray-900 dark:text-white mb-6 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-200">
@@ -2029,8 +2029,8 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 </h1>
 
                 <p className="text-lg text-gray-500 dark:text-gray-400 font-medium max-w-lg mx-auto leading-relaxed animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
-                    Professional Copy-Trading Terminal.<br/>
-                    Risk-Managed Execution. Lightning-Fast. 24/7 Cloud Automation.
+                    Advanced Copy-Trading & Money-Market Terminal<br/>
+                    Advanced order execution. Smart monitoring. 24/7 Automation.
                 </p>
 
                 <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-400 w-full max-w-xs">
@@ -2049,8 +2049,8 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
                         <ZapIcon size={12}/> Fast
                     </div>
-                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
-                        <Globe size={12}/> Global
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-50 dark:bg-white/5 text-[10px] font-bold uppercase tracking-widest text-gray-600 dark:text-gray-300">
+                        <Globe size={12}/> Multi-Chain
                     </div>
                 </div>
 
@@ -2088,30 +2088,41 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                             <span className="text-[10px] font-bold text-green-600 dark:text-green-400 uppercase tracking-wider">Live Integration</span>
                         </div>
                         <div className="flex items-center gap-5 mb-6">
-                            {/* REPLACED BROKEN POLYMARKET LOGO WITH LOCAL POLYGON LOGO */}
-                            <img src="https://cryptologos.cc/logos/polygon-matic-logo.svg?v=026" alt="Polymarket" className="w-14 h-14 rounded-full" referrerPolicy="no-referrer" />
+                            <div className="relative">
+                                <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center">
+                                    <Activity size={24} className="text-white" />
+                                </div>
+                                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center border-2 border-white dark:border-[#0a0a0a]">
+                                    <Zap size={10} className="text-white" />
+                                </div>
+                            </div>
+                            <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Money Market</h3>
+                        </div>
+                        <p className="text-base text-gray-500 dark:text-gray-400 font-medium leading-relaxed mb-6">
+                            Advanced liquidity provision with zero-slippage execution. Our money market module optimizes your capital efficiency across multiple assets with real-time risk management.
+                        </p>
+                    </div>
+
+                    <div className="p-10 rounded-3xl bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 shadow-lg hover:shadow-xl transition-all duration-300 group hover:-translate-y-1">
+                        <div className="flex items-center gap-3 mb-8">
+                            <span className="relative flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
+                            </span>
+                            <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Live Integration</span>
+                        </div>
+                        <div className="flex items-center gap-5 mb-6">
+                            <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full flex items-center justify-center">
+                                <Users size={24} className="text-white" />
+                            </div>
                             <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Polymarket</h3>
                         </div>
                         <p className="text-base text-gray-500 dark:text-gray-400 font-medium leading-relaxed mb-6">
-                            The most active market for blockchain wallets trading. Copy any top trader instantly.
+                            Mirror top traders or trade manually with advanced order types. Our execution engine ensures optimal fills across all market conditions.
                         </p>
                         <div className="inline-flex items-center gap-2 text-xs font-bold text-blue-600 dark:text-blue-500 uppercase tracking-wider group-hover:translate-x-1 transition-transform">
-                            Start Copying <ArrowRightLeft size={12}/>
+                            Start Trading <ArrowRight size={12}/>
                         </div>
-                    </div>
-
-                    <div className="p-10 rounded-3xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/5 opacity-60 hover:opacity-100 transition-all duration-300 group">
-                        <div className="flex items-center gap-3 mb-8">
-                            <span className="w-2.5 h-2.5 rounded-full bg-yellow-500"></span>
-                            <span className="text-[10px] font-bold text-yellow-600 dark:text-yellow-500 uppercase tracking-wider">Coming Soon</span>
-                        </div>
-                        <div className="flex items-center gap-5 mb-6">
-                            <div className="w-14 h-14 rounded-full bg-gray-200 dark:bg-gray-800 flex items-center justify-center font-bold text-gray-500 text-2xl">pb</div>
-                            <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Limitless</h3>
-                        </div>
-                        <p className="text-base text-gray-500 dark:text-gray-400 font-medium leading-relaxed">
-                            Next-generation sports & crypto markets with high-frequency liquidity.
-                        </p>
                     </div>
 
                 </div>
@@ -2130,8 +2141,8 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
 
             <div className="w-full max-w-7xl mx-auto pb-32 px-6 border-t border-gray-200 dark:border-white/5 pt-32">
                 <div className="text-center mb-24">
-                    <span className="text-blue-600 dark:text-blue-500 text-xs font-bold uppercase tracking-widest">Architecture</span>
-                    <h2 className="text-4xl md:text-5xl font-black text-gray-900 dark:text-white mt-4 tracking-tight">How It Works</h2>
+                    <span className="text-blue-600 dark:text-blue-500 text-xs font-bold uppercase tracking-widest">Dual-Mode Platform</span>
+                    <h2 className="text-4xl md:text-5xl font-black text-gray-900 dark:text-white mt-4 tracking-tight">Copy or Trade Your Way</h2>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
@@ -2157,11 +2168,11 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
 
                     <div className="p-10 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-[2rem] hover:border-green-500/30 transition-all shadow-sm group">
                         <div className="w-16 h-16 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
-                            <Server size={32}/>
+                            <Globe size={32}/>
                         </div>
-                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">3. Passive Alpha</h3>
+                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">3. Prediction Markets Money Printer</h3>
                         <p className="text-gray-500 text-sm leading-relaxed">
-                            Find the best trader in the Registry and hit Copy. Our Node.js engine monitors signals 24/7 so you can <strong>earn while you sleep</strong>. Dont shy away this Christmas.
+                            Find the best wallets to copy, or best markets to provide liquidity. Our Node.js engine monitors  and opportunities 24/7 so you can <strong>earn while you sleep</strong>.
                         </p>
                     </div>
                 </div>
@@ -2190,7 +2201,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                     </div>
 
                     <div className="text-[10px] text-gray-400 font-medium">
-                        © 2025 PolyCafe Labs. All rights reserved.
+                        © 2026 PolyCafe Labs. All rights reserved.
                     </div>
                 </div>
             </footer>

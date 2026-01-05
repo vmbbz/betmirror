@@ -44,6 +44,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
     readonly exchangeName = 'Polymarket';
     
     private client?: ClobClient;
+    private invalidTokenIds = new Set<string>();
+    private lastTokenIdCheck = new Map<string, number>();
+    private readonly TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000; // 5 minutes
     private wallet?: WalletV6; 
     private walletV5?: WalletV5; 
     private walletService?: EvmWalletService;
@@ -51,8 +54,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private usdcContract?: Contract;
     private provider?: JsonRpcProvider;
     private safeAddress?: string;
-
-    private marketMetadataCache: Map<string, any> = new Map();
 
     constructor(
         private config: PolymarketAdapterConfig,
@@ -192,15 +193,40 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getMarketPrice(marketId: string, tokenId: string, side: 'BUY' | 'SELL' = 'BUY'): Promise<number> {
-        if (!this.client) return 0;
+        if (!this.client) {
+            this.logger.warn('Client not initialized when getting market price');
+            return 0;
+        }
+
+        // Check if market is tradeable before attempting to fetch price
+        const isTradeable = await this.isMarketTradeable(marketId);
+        if (!isTradeable) {
+            this.logger.debug(`Market ${marketId} is not tradeable, returning 0 as price`);
+            return 0;
+        }
+
         try {
+            // First try to get the price directly
             const priceRes = await this.client.getPrice(tokenId, side);
             return parseFloat(priceRes.price) || 0;
-        } catch (e) {
+        } catch (e: any) {
+            // If direct price fails, try to get the midpoint
             try {
                 const mid = await this.client.getMidpoint(tokenId);
                 return parseFloat(mid.mid) || 0;
-            } catch (midErr) {
+            } catch (midErr: any) {
+                const errorMessage = midErr instanceof Error ? midErr.message : 'Unknown error';
+                
+                // Handle 404 specifically
+                if (midErr.response?.status === 404 || errorMessage.includes('404') || 
+                    errorMessage.includes('No orderbook') || errorMessage.includes('not found')) {
+                    this.logger.warn(`No orderbook exists for token ${tokenId} - returning 0 as price`);
+                    this.invalidTokenIds.add(tokenId);
+                    this.lastTokenIdCheck.set(tokenId, Date.now());
+                    return 0;
+                }
+                
+                this.logger.error(`Error getting midpoint for token ${tokenId}: ${errorMessage}`);
                 return 0;
             }
         }
@@ -231,9 +257,80 @@ export class PolymarketAdapter implements IExchangeAdapter {
             );
     }
 
+    private async getMarket(marketId: string): Promise<any> {
+        if (!this.client) return null;
+        try {
+            return await this.client.getMarket(marketId);
+        } catch (error) {
+            this.logger.warn(`Failed to fetch market ${marketId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+        }
+    }
+
+    private isTokenIdValid(tokenId: string): boolean {
+        const now = Date.now();
+        const lastCheck = this.lastTokenIdCheck.get(tokenId) || 0;
+        
+        // If we've recently checked this token ID and it was invalid, skip
+        if (this.invalidTokenIds.has(tokenId) && (now - lastCheck < this.TOKEN_ID_CHECK_COOLDOWN)) {
+            return false;
+        }
+        
+        // Reset the invalid status if cooldown has passed
+        if (this.invalidTokenIds.has(tokenId)) {
+            this.invalidTokenIds.delete(tokenId);
+        }
+        
+        return true;
+    }
+
+    private async isMarketTradeable(conditionId: string): Promise<boolean> {
+        try {
+            if (!this.isTokenIdValid(conditionId)) {
+                this.logger.debug(`Token ID ${conditionId} is in cooldown or marked as invalid`);
+                return false;
+            }
+
+            const market = await this.getMarket(conditionId);
+            if (!market) {
+                this.logger.debug(`Market not found for condition ID: ${conditionId}`);
+                this.invalidTokenIds.add(conditionId);
+                this.lastTokenIdCheck.set(conditionId, Date.now());
+                return false;
+            }
+
+            const isTradeable = !!(market && 
+                                 market.active && 
+                                 !market.closed && 
+                                 market.accepting_orders && 
+                                 market.enable_order_book);
+
+            if (!isTradeable) {
+                this.logger.debug(`Market ${conditionId} is not tradeable. ` +
+                               `active: ${market.active}, closed: ${market.closed}, ` +
+                               `accepting_orders: ${market.accepting_orders}, ` +
+                               `enable_order_book: ${market.enable_order_book}`);
+                this.invalidTokenIds.add(conditionId);
+                this.lastTokenIdCheck.set(conditionId, Date.now());
+            }
+
+            return isTradeable;
+        } catch (error) {
+            this.logger.warn(`Error checking if market ${conditionId} is tradeable: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return false;
+        }
+    }
+
     async getOrderBook(tokenId: string): Promise<OrderBook> {
         if (!this.client) {
             this.logger.warn('Client not initialized when getting order book');
+            return this.getEmptyOrderBook();
+        }
+
+        // Check if market is tradeable before attempting to fetch order book
+        const isTradeable = await this.isMarketTradeable(tokenId);
+        if (!isTradeable) {
+            this.logger.debug(`Market ${tokenId} is not tradeable, returning empty order book`);
             return this.getEmptyOrderBook();
         }
 
@@ -251,8 +348,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 tick_size: book.tick_size ? Number(book.tick_size) : 0.01,
                 neg_risk: Boolean(book.neg_risk)
             };
-        } catch (error) {
+        } catch (error: any) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            
+            // Handle 404 specifically
+            if (error.response?.status === 404 || errorMessage.includes('404') || errorMessage.includes('No orderbook')) {
+                this.logger.warn(`No orderbook exists for token ${tokenId} - market may be closed/resolved`);
+                this.invalidTokenIds.add(tokenId);
+                this.lastTokenIdCheck.set(tokenId, Date.now());
+                return this.getEmptyOrderBook();
+            }
+            
             this.logger.error(`Error fetching order book for token ${tokenId}: ${errorMessage}`, 
                             error instanceof Error ? error : undefined);
             return this.getEmptyOrderBook();
@@ -310,16 +416,27 @@ export class PolymarketAdapter implements IExchangeAdapter {
         let eventSlug = "";
         let question = marketId;
         let image = "";
+        
         if (this.client && marketId) {
             try {
+                // First check if market is tradeable before attempting to fetch
+                const isTradeable = await this.isMarketTradeable(marketId);
+                if (!isTradeable) {
+                    this.logger.debug(`Market ${marketId} is not tradeable, skipping market data fetch`);
+                    return { marketSlug, eventSlug, question, image };
+                }
+
                 const marketData = await this.client.getMarket(marketId);
                 if (marketData) {
                     marketSlug = marketData.market_slug || "";
                     question = marketData.question || question;
                     image = marketData.image || image;
                 }
-            } catch (e) { }
+            } catch (e) {
+                this.logger.warn(`Error fetching market data for ${marketId}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            }
         }
+        
         if (marketSlug) {
             try {
                 const gammaUrl = `https://gamma-api.polymarket.com/markets/slug/${marketSlug}`;
@@ -330,8 +447,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
                         eventSlug = marketData.events[0]?.slug || "";
                     }
                 }
-            } catch (e) { }
+            } catch (e) {
+                this.logger.warn(`Error fetching event slug for market ${marketId}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            }
         }
+        
         return { marketSlug, eventSlug, question, image };
     }
 
@@ -353,9 +473,25 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 let currentPrice = parseFloat(p.price) || 0;
                 if (currentPrice === 0 && this.client && tokenId) {
                     try {
-                        const mid = await this.client.getMidpoint(tokenId);
-                        currentPrice = parseFloat(mid.mid) || 0;
-                    } catch (e) {
+                        // Check if market is tradeable before attempting to get midpoint
+                        const isTradeable = await this.isMarketTradeable(conditionId);
+                        if (isTradeable) {
+                            const mid = await this.client.getMidpoint(tokenId);
+                            currentPrice = parseFloat(mid.mid) || 0;
+                        } else {
+                            currentPrice = parseFloat(p.avgPrice) || 0.5;
+                            this.logger.debug(`Market ${conditionId} is not tradeable, using avg price: ${currentPrice}`);
+                        }
+                    } catch (e: any) {
+                        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+                        if (e.response?.status === 404 || errorMessage.includes('404') || 
+                            errorMessage.includes('No orderbook') || errorMessage.includes('not found')) {
+                            this.logger.warn(`No orderbook exists for token ${tokenId} - using avg price`);
+                            this.invalidTokenIds.add(tokenId);
+                            this.lastTokenIdCheck.set(tokenId, Date.now());
+                        } else {
+                            this.logger.error(`Error getting midpoint for token ${tokenId}: ${errorMessage}`);
+                        }
                         currentPrice = parseFloat(p.avgPrice) || 0.5;
                     }
                 }
@@ -386,7 +522,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 });
             }
             return positions;
-        } catch (e) {
+        } catch (e: any) {
+            const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+            this.logger.error(`Error fetching positions: ${errorMessage}`, e instanceof Error ? e : undefined);
             return [];
         }
     }
@@ -593,22 +731,42 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getCurrentPrice(tokenId: string): Promise<number> {
+        if (!this.client) {
+            this.logger.warn('Client not initialized when getting current price');
+            return 0;
+        }
+
+        // Check if market is tradeable before attempting to get price
+        const isTradeable = await this.isMarketTradeable(tokenId);
+        if (!isTradeable) {
+            this.logger.debug(`Market ${tokenId} is not tradeable, returning 0 as price`);
+            return 0;
+        }
+
         try {
-            const orderbook = await this.getOrderBook(tokenId);
-            const bestBid = orderbook.bids[0]?.price;
+            // Try to get the best bid first
+            const book = await this.getOrderBook(tokenId);
+            if (book.bids.length > 0) {
+                return book.bids[0].price || 0;
+            }
+
+            // Fall back to midpoint if no bids
+            const mid = await this.client.getMidpoint(tokenId);
+            return parseFloat(mid.mid) || 0;
+        } catch (e: any) {
+            const errorMessage = e instanceof Error ? e.message : 'Unknown error';
             
-            if (bestBid === undefined) {
-                this.logger.warn(`No valid bids found for token ${tokenId}, trying to get market price...`);
-                // Fallback to getMarketPrice if no bids
-                return this.getMarketPrice(tokenId, tokenId, 'BUY');
+            // Handle 404 specifically
+            if (e.response?.status === 404 || errorMessage.includes('404') || 
+                errorMessage.includes('No orderbook') || errorMessage.includes('not found')) {
+                this.logger.warn(`No orderbook exists for token ${tokenId} - returning 0 as price`);
+                this.invalidTokenIds.add(tokenId);
+                this.lastTokenIdCheck.set(tokenId, Date.now());
+                return 0;
             }
             
-            return bestBid;
-        } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            this.logger.error(`Failed to get current price for token ${tokenId}: ${errorMessage}`, 
-                            error instanceof Error ? error : undefined);
-            return 0; // Return 0 as fallback
+            this.logger.error(`Error getting current price for token ${tokenId}: ${errorMessage}`);
+            return 0;
         }
     }
     

@@ -21,7 +21,7 @@ interface IPortfolioSnapshotModel extends Model<PortfolioSnapshot & Document> {
 // Portfolio Snapshot Schema
 const portfolioSnapshotSchema = new Schema<PortfolioSnapshot & Document>({
   userId: { type: String, required: true, index: true },
-  timestamp: { type: Date, required: true, index: true },
+  timestamp: { type: Date, required: true },
   totalValue: { type: Number, required: true },
   cashBalance: { type: Number, required: true },
   positionsValue: { type: Number, required: true },

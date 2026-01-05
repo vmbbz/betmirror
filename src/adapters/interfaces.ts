@@ -117,12 +117,18 @@ export interface IExchangeAdapter {
     cashout(amount: number, destination: string): Promise<string>;
     getFunderAddress(): string;
     getCurrentPrice(tokenId: string): Promise<number>;
-    redeemPosition(conditionId: string, tokenId: string): Promise<{ success: boolean; amountUsd?: number; txHash?: string; error?: string }>;
-    
-    /**
-     * Gets all positions from the database, including closed ones
-     */
-    getDbPositions(): Promise<Array<{ marketId: string; [key: string]: any }>>;
+    redeemPosition(conditionId: string, tokenId: string): Promise<{
+        success: boolean;
+        amountUsd?: number;
+        txHash?: string;
+        error?: string;
+    }>;
+
+    // Database and metadata methods
+    getDbPositions(): Promise<Array<{ 
+        marketId: string; 
+        [key: string]: any 
+    }>>;
     
     /**
      * Gets market data for a specific market

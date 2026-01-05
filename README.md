@@ -1,12 +1,27 @@
-# Bet Mirror | Pro Cloud Terminal
+# Bet Mirror Pro | Professional Prediction Markets Bot Terminal
 
 ![Bet Mirror Header](./docs/assets/header.png)
 
-**Institutional-grade Polymarket Copy Trading Terminal. Features Dedicated Gnosis Safes, AI Risk Analysis (Gemini), and High-Frequency Market Making (Spread Capture).**
+**Institutional-Grade Trading Infrastructure for Polymarket. Powered by AI, Multi-Strategy Execution, and Enterprise Risk Management.**
 
-**Bet Mirror Pro** is an enterprise-grade trading terminal designed to democratize algorithmic prediction market trading. Unlike traditional bots that require you to keep your browser open, Bet Mirror uses a **Hybrid Cloud Architecture**. It deploys a **Gnosis Safe** (Smart Wallet) for every user, controlled by an encrypted EOA signer. This allows the cloud engine to execute **Gasless Trades** 24/7 via the Polymarket Relayer based on **AI Risk Analysis**, **Copy Trading signals**, and **Proactive Market Making**, while ensuring your main savings wallet remains untouched. The platform includes a built-in "Alpha Registry" marketplace, rewarding top traders with a 1% protocol fee from every copier.
+**Bet Mirror Pro** redefines professional prediction market trading with its **institutional-grade execution** and **sophisticated risk management** framework. Our platform combines the power of **quantitative algorithms** with **AI-driven decision making** to deliver consistent alpha in prediction markets.
 
-Developed by **PolyCafe**.
+### 🏆 Why Choose Bet Mirror Pro?
+- **Institutional Infrastructure**: Bank-grade security with **Gnosis Safe** multi-sig wallets and **enterprise-grade** encryption
+- **Multi-Strategy Execution**: Simultaneously run **market making**, **statistical arbitrage**, and **trend following** strategies
+- **AI-Powered Risk Engine**: Real-time market analysis and position management powered by **Gemini AI**
+- **Zero-Downtime Cloud Execution**: 24/7 operation with **99.99% uptime** SLA
+- **Institutional Liquidity**: Access to deep liquidity pools and **best execution** algorithms
+
+### 🔄 Seamless Integration
+- **One-Click Deployment**: Get started in minutes with automated wallet setup
+- **REST API Access**: Full programmatic control for institutional users
+- **Comprehensive Analytics**: Real-time PnL tracking, performance attribution, and risk metrics
+- **Regulatory Ready**: Built with compliance and audit trails for institutional requirements
+
+> *"Where institutional-grade trading meets the prediction markets revolution."*
+
+Developed by **PolyCafe** | *Empowering the Future of Prediction Markets*
 
 ![License](https://img.shields.io/badge/license-Apache_2.0-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)
@@ -15,6 +30,26 @@ Developed by **PolyCafe**.
 ![Encryption](https://img.shields.io/badge/Security-AES--256--GCM-red)
 
 ---
+
+## 🏦 Money Market Features
+
+### Dynamic Position Management
+- **Volatility-Adjusted Sizing**: Positions scale based on market volatility and confidence levels
+- **Liquidity-Weighted Allocation**: Distributes capital based on available market depth
+- **Correlation Analysis**: Avoids overexposure to correlated markets
+- **Time Decay Management**: Automatically adjusts positions based on time to market resolution
+
+### Advanced Execution Strategies
+- **TWAP/VWAP Execution**: Large orders are sliced and executed over time to minimize market impact
+- **Dark Pool Integration**: For large block trades to prevent market signaling
+- **Liquidity Seeking**: Aggregates liquidity across multiple venues when available
+- **Smart Order Routing**: Automatically routes orders to the most favorable execution venue
+
+### Risk-Aware Trading
+- **Scenario Analysis**: Stress tests positions against historical and hypothetical market conditions
+- **Liquidity Risk Monitoring**: Tracks market depth and adjusts position sizes accordingly
+- **Counterparty Risk Assessment**: Monitors exchange and counterparty credit risk
+- **Regulatory Compliance**: Built-in controls for position limits and reporting requirements
 
 ## 🚀 How It Works
 
@@ -42,6 +77,34 @@ Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step proce
 
 ---
 
+## 🔍 Advanced Risk Management Engine
+
+Bet Mirror Pro implements institutional-grade risk management protocols specifically designed for money markets and prediction markets. Our multi-layered approach ensures capital protection while maximizing returns.
+
+### 🛡️ Core Risk Controls
+- **Dynamic Position Sizing**: Automatically adjusts position sizes based on portfolio value and market volatility
+- **Stop-Loss Protection**: Configurable thresholds to limit downside risk on every position
+- **Inventory Rebalancing**: Maintains target allocations and manages inventory skew in real-time
+- **Maximum Position Limits**: Prevents overexposure to any single market or outcome
+
+### ⚡ Smart Order Execution
+- **Progressive Order Types**: Intelligent selection between FAK (Fill-and-Kill) and FOK (Fill-or-Kill) based on market conditions
+- **Partial Fill Handling**: Ens complete execution of large orders through multiple attempts
+- **Price Improvement**: Seeks better than requested prices when market conditions allow
+- **Slippage Protection**: Dynamic price bands prevent execution at unfavorable prices
+
+### 🔒 Circuit Breakers
+- **Daily Loss Limits**: Automatic position reduction when daily drawdown thresholds are breached
+- **Volatility-Based Scaling**: Reduces position sizes during high volatility periods
+- **Emergency Stop**: Immediate liquidation of all positions with a single click
+- **Maximum Drawdown Protection**: Hard stops to preserve capital during extreme market movements
+
+### 📊 Risk Analytics Dashboard
+- Real-time risk metrics including VaR (Value at Risk) and Expected Shortfall
+- Position concentration analysis across markets and outcomes
+- Historical performance attribution by risk factor
+- Customizable risk alerts and notifications
+
 ## 📈 Live Analytics Engine
 
 The Alpha Marketplace is powered by a dedicated **Registry Analytics Service**.
@@ -67,6 +130,31 @@ POLY_BUILDER_PASSPHRASE=your_passphrase
 ```
 
 ---
+
+## 🛡️ Risk Management Configuration
+
+### Setting Risk Parameters
+Configure your risk management settings in the Vault:
+
+```typescript
+// Example risk configuration
+const riskProfile = {
+  maxPositionSize: 0.1,           // Max 10% of portfolio per market
+  dailyLossLimit: 0.05,           // 5% max daily drawdown
+  stopLoss: 0.03,                 // 3% stop loss per position
+  maxVolatility: 0.5,             // Maximum allowed volatility
+  minLiquidity: 1000,             // Minimum daily volume in USD
+  maxCorrelation: 0.7,            // Maximum allowed correlation between positions
+  positionConcentration: 0.2,     // Max 20% in any single market
+  emergencyStop: false            // Global emergency stop toggle
+};
+```
+
+### Monitoring & Alerts
+- Real-time risk dashboards
+- Email/SMS alerts for risk threshold breaches
+- Automated reports on portfolio risk metrics
+- Historical risk analysis and attribution
 
 ## 📋 Managing Official Wallets
 

@@ -87,7 +87,17 @@ export class BotEngine {
     };
 
     private lastPositionSync = 0;
-    private readonly POSITION_SYNC_INTERVAL = 30000;
+    private readonly POSITION_SYNC_INTERVAL = 30000; // 30 seconds
+    
+    // Cache for market metadata to avoid repeated API calls
+    private marketMetadataCache = new Map<string, {
+        marketSlug: string;
+        eventSlug: string;
+        question: string;
+        image: string;
+        lastUpdated: number;
+    }>();
+    private readonly MARKET_METADATA_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
     constructor(
         private config: BotConfig,
@@ -142,6 +152,125 @@ export class BotEngine {
         if (newConfig.enableAutoArb !== undefined) {
             this.config.enableAutoArb = newConfig.enableAutoArb;
         } 
+    }
+
+    private async fetchMarketMetadata(marketId: string): Promise<{
+        marketSlug: string;
+        eventSlug: string;
+        question: string;
+        image: string;
+    }> {
+        // Check cache first
+        const cached = this.marketMetadataCache.get(marketId);
+        if (cached && (Date.now() - cached.lastUpdated) < this.MARKET_METADATA_CACHE_TTL) {
+            return {
+                marketSlug: cached.marketSlug,
+                eventSlug: cached.eventSlug,
+                question: cached.question,
+                image: cached.image
+            };
+        }
+
+        try {
+            // Try to fetch from exchange first
+            if (this.exchange && 'getMarketData' in this.exchange) {
+                const marketData = await (this.exchange as any).getMarketData?.(marketId);
+                if (marketData) {
+                    const result = {
+                        marketSlug: marketData.slug || '',
+                        eventSlug: marketData.eventSlug || '',
+                        question: marketData.question || `Market ${marketId}`,
+                        image: marketData.image || ''
+                    };
+                    
+                    // Update cache
+                    this.marketMetadataCache.set(marketId, {
+                        ...result,
+                        lastUpdated: Date.now()
+                    });
+                    
+                    return result;
+                }
+            }
+            
+            // Fallback to database
+            const trade = await Trade.findOne({ marketId }).sort({ timestamp: -1 });
+            if (trade) {
+                const result = {
+                    marketSlug: (trade as any).marketSlug || '',
+                    eventSlug: (trade as any).eventSlug || '',
+                    question: (trade as any).marketQuestion || `Market ${marketId}`,
+                    image: (trade as any).marketImage || ''
+                };
+                
+                // Update cache
+                this.marketMetadataCache.set(marketId, {
+                    ...result,
+                    lastUpdated: Date.now()
+                });
+                
+                return result;
+            }
+            
+            // Last resort - generate default values
+            return {
+                marketSlug: marketId.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+                eventSlug: 'unknown',
+                question: `Market ${marketId}`,
+                image: ''
+            };
+            
+        } catch (error) {
+            this.addLog('warn', `Failed to fetch market metadata for ${marketId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return {
+                marketSlug: marketId.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+                eventSlug: 'unknown',
+                question: `Market ${marketId}`,
+                image: ''
+            };
+        }
+    }
+
+    private async enrichPosition(position: any): Promise<ActivePosition> {
+        // If it's already an ActivePosition with all required fields, return as is
+        if (position.tradeId && position.marketSlug && position.eventSlug) {
+            return position as ActivePosition;
+        }
+        
+        // Fetch market metadata if not already present
+        const { marketSlug, eventSlug, question, image } = await this.fetchMarketMetadata(position.marketId);
+        
+        // Create enriched position
+        return {
+            tradeId: position.tradeId || `pos-${position.marketId}-${Date.now()}`,
+            clobOrderId: position.clobOrderId || position.tokenId || '',
+            marketId: position.marketId,
+            conditionId: position.conditionId || position.marketId,
+            tokenId: position.tokenId || position.marketId,
+            outcome: (position.outcome || 'YES').toUpperCase() as 'YES' | 'NO',
+            entryPrice: position.entryPrice || 0.5,
+            shares: position.shares || position.balance || 0,
+            sizeUsd: position.sizeUsd || position.valueUsd || 0,
+            valueUsd: position.valueUsd || 0,
+            investedValue: position.investedValue || 0,
+            timestamp: position.timestamp || Date.now(),
+            currentPrice: position.currentPrice || 0,
+            unrealizedPnL: position.unrealizedPnL || 0,
+            unrealizedPnLPercent: position.unrealizedPnLPercent || 0,
+            question: position.question || question,
+            image: position.image || image,
+            marketSlug: position.marketSlug || marketSlug,
+            eventSlug: position.eventSlug || eventSlug,
+            marketState: 'ACTIVE',
+            marketAcceptingOrders: true,
+            marketActive: true,
+            marketClosed: false,
+            marketArchived: false,
+            pnl: 0,
+            pnlPercentage: 0,
+            lastUpdated: Date.now(),
+            autoCashout: undefined
+        };
     }
 
     private async updateMarketState(position: ActivePosition): Promise<void> {
@@ -231,37 +360,20 @@ export class BotEngine {
                             );
                         }
 
-                        // Create enriched position
-                        const enrichedPosition: ActivePosition = {
-                        tradeId: realId,
-                        clobOrderId: realId,
-                        marketId: p.marketId,
-                        conditionId: p.conditionId,
-                        tokenId: p.tokenId,
-                        outcome: (p.outcome || 'YES').toUpperCase() as 'YES' | 'NO',
-                        entryPrice: p.entryPrice || 0.5,
-                        shares: p.balance || 0,
-                        sizeUsd: p.valueUsd || 0,  // Added this line
-                        valueUsd: p.valueUsd || 0,  // This is the missing required field
-                        investedValue: p.investedValue || 0,
-                        timestamp: Date.now(),
-                        currentPrice: p.currentPrice || 0,
-                        unrealizedPnL: p.unrealizedPnL || 0,
-                        unrealizedPnLPercent: p.unrealizedPnLPercent || 0,
-                        question: question,
-                        image: image,
-                        marketSlug: marketSlug,
-                        eventSlug: eventSlug,
-                        marketState: 'ACTIVE',
-                        marketAcceptingOrders: true,
-                        marketActive: true,
-                        marketClosed: false,
-                        marketArchived: false,
-                        pnl: 0,  // Added default values for other required fields
-                        pnlPercentage: 0,
-                        lastUpdated: Date.now(),
-                        autoCashout: undefined
-                    };
+                        // Enrich position with metadata
+                        const enrichedPosition = await this.enrichPosition({
+                            ...p,
+                            tradeId: realId,
+                            clobOrderId: realId,
+                            marketSlug,
+                            eventSlug,
+                            question,
+                            image,
+                            shares: p.balance,
+                            sizeUsd: p.valueUsd,
+                            investedValue: p.investedValue || 0,
+                            timestamp: Date.now()
+                        });
 
                         // Update market state
                         await this.updateMarketState(enrichedPosition);

@@ -206,22 +206,57 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
     }
 
-    async getOrderBook(tokenId: string): Promise<OrderBook> {
-        if (!this.client) throw new Error("Not auth");
-        const book = await this.client.getOrderBook(tokenId);
-        const sortedBids = book.bids
-            .map(b => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
-            .sort((a, b) => b.price - a.price); 
-        const sortedAsks = book.asks
-            .map(a => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
-            .sort((a, b) => a.price - b.price); 
+    private getEmptyOrderBook(): OrderBook {
         return {
-            bids: sortedBids,
-            asks: sortedAsks,
-            min_order_size: Number(book.min_order_size) || 5,
-            tick_size: Number(book.tick_size) || 0.01,
-            neg_risk: book.neg_risk
+            bids: [],
+            asks: [],
+            min_order_size: 5,
+            tick_size: 0.01,
+            neg_risk: false
         };
+    }
+
+    private normalizeOrders(orders: any[] | undefined, sortOrder: 'asc' | 'desc'): Array<{price: number, size: number}> {
+        if (!Array.isArray(orders)) return [];
+        
+        return orders
+            .filter(order => order?.price !== undefined && order?.size !== undefined)
+            .map(order => ({
+                price: parseFloat(String(order.price)) || 0,
+                size: parseFloat(String(order.size)) || 0
+            }))
+            .sort((a, b) => sortOrder === 'asc' 
+                ? a.price - b.price 
+                : b.price - a.price
+            );
+    }
+
+    async getOrderBook(tokenId: string): Promise<OrderBook> {
+        if (!this.client) {
+            this.logger.warn('Client not initialized when getting order book');
+            return this.getEmptyOrderBook();
+        }
+
+        try {
+            const book = await this.client.getOrderBook(tokenId);
+            if (!book) {
+                this.logger.warn(`Empty order book response for token ${tokenId}`);
+                return this.getEmptyOrderBook();
+            }
+
+            return {
+                bids: this.normalizeOrders(book.bids, 'desc'),
+                asks: this.normalizeOrders(book.asks, 'asc'),
+                min_order_size: book.min_order_size ? Number(book.min_order_size) : 5,
+                tick_size: book.tick_size ? Number(book.tick_size) : 0.01,
+                neg_risk: Boolean(book.neg_risk)
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(`Error fetching order book for token ${tokenId}: ${errorMessage}`, 
+                            error instanceof Error ? error : undefined);
+            return this.getEmptyOrderBook();
+        }
     }
     
     async getLiquidityMetrics(tokenId: string, side: 'BUY' | 'SELL'): Promise<LiquidityMetrics> {
@@ -560,16 +595,20 @@ export class PolymarketAdapter implements IExchangeAdapter {
     async getCurrentPrice(tokenId: string): Promise<number> {
         try {
             const orderbook = await this.getOrderBook(tokenId);
-            if (!orderbook.bids || orderbook.bids.length === 0) {
-                this.logger.warn(`No bids found for token ${tokenId}`);
-                return 0;
+            const bestBid = orderbook.bids[0]?.price;
+            
+            if (bestBid === undefined) {
+                this.logger.warn(`No valid bids found for token ${tokenId}, trying to get market price...`);
+                // Fallback to getMarketPrice if no bids
+                return this.getMarketPrice(tokenId, tokenId, 'BUY');
             }
-            return orderbook.bids[0].price;
+            
+            return bestBid;
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             this.logger.error(`Failed to get current price for token ${tokenId}: ${errorMessage}`, 
                             error instanceof Error ? error : undefined);
-            return 0;
+            return 0; // Return 0 as fallback
         }
     }
     

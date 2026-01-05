@@ -391,6 +391,8 @@ export class BotEngine {
     private async handleAutoCashout(position: ActivePosition, reason: string) {
         if (!this.executor) return;
         
+        this.addLog('info', `Auto-cashing out position: ${position.marketId} (${position.outcome}) - ${reason}`);
+        
         try {
             const cashoutCfg = this.getAutoCashoutConfig();
             if (!cashoutCfg?.enabled) return;
@@ -409,6 +411,21 @@ export class BotEngine {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this.addLog('error', `Error in handleAutoCashout: ${errorMessage}`);
         }
+    }
+
+    private async handleInvalidPosition(marketId: string, reason: string): Promise<void> {
+        this.addLog('warn', `Position ${marketId} is invalid: ${reason}. Cleaning up...`);
+        
+        // Update active positions
+        this.activePositions = this.activePositions.filter(p => p.marketId !== marketId);
+        
+        // Notify callbacks
+        if (this.callbacks?.onPositionsUpdate) {
+            await this.callbacks.onPositionsUpdate([...this.activePositions]);
+        }
+        
+        // Log the cleanup
+        this.addLog('info', `Cleaned up position for market ${marketId} due to: ${reason}`);
     }
 
     public async syncStats(): Promise<void> {
@@ -521,28 +538,32 @@ export class BotEngine {
         };
 
         // Initialize Portfolio Tracker
+        // First, initialize the Position Monitor
+        this.positionMonitor = new PositionMonitorService(
+            this.exchange,
+            this.config.walletConfig?.address || '',
+            {
+                checkInterval: 30000, // 30 seconds
+                priceCheckInterval: 60000, // 1 minute
+                orderBookValidationInterval: 3600000 // 1 hour
+            },
+            logger,
+            this.handleAutoCashout.bind(this),
+            this.handleInvalidPosition.bind(this)
+        );
+
+        // Then initialize Portfolio Tracker with the position monitor
         const maxPortfolioAllocation = this.config.maxTradeAmount || 1000;
         this.portfolioTracker = new PortfolioTrackerService(
             this.exchange,
             this.config.walletConfig?.address || '',
             maxPortfolioAllocation * 10, // 10x max trade amount as buffer
             logger,
+            this.positionMonitor, // Pass the position monitor instance
             (positions) => {
                 this.activePositions = positions;
                 return this.callbacks?.onPositionsUpdate?.(positions) || Promise.resolve();
             }
-        );
-
-        // Initialize Position Monitor
-        this.positionMonitor = new PositionMonitorService(
-            this.exchange,
-            this.config.walletConfig?.address || '',
-            {
-                checkInterval: 30000, // 30 seconds
-                priceCheckInterval: 10000 // 10 seconds
-            },
-            logger,
-            this.handleAutoCashout.bind(this)
         );
 
         // Initialize portfolio tracker
@@ -842,6 +863,35 @@ export class BotEngine {
         const funder = this.exchange.getFunderAddress();
         if (!funder) throw new Error("Missing funder address.");
 
+        // Initialize PositionMonitorService with order book validation
+        this.positionMonitor = new PositionMonitorService(
+            this.exchange,
+            funder,
+            {
+                checkInterval: 30000, // 30 seconds
+                priceCheckInterval: 60000, // 1 minute
+                orderBookValidationInterval: 3600000 // 1 hour
+            },
+            logger,
+            this.handleAutoCashout.bind(this),
+            this.handleInvalidPosition.bind(this)
+        );
+
+        // Initialize PortfolioTracker with PositionMonitor
+        this.portfolioTracker = new PortfolioTrackerService(
+            this.exchange,
+            funder,
+            this.config.maxTradeAmount || 1000, // max allocation
+            logger,
+            this.positionMonitor,
+            (positions) => {
+                this.activePositions = positions;
+                if (this.callbacks?.onPositionsUpdate) {
+                    this.callbacks.onPositionsUpdate(positions);
+                }
+            }
+        );
+
         this.executor = new TradeExecutorService({
             adapter: this.exchange,
             proxyWallet: funder,
@@ -865,14 +915,26 @@ export class BotEngine {
 
         let feeDistributor: FeeDistributorService | undefined;
         try {
-             const walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
-             if (this.config.walletConfig?.encryptedPrivateKey) {
-                 const wallet = await walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
-                 feeDistributor = new FeeDistributorService(wallet, this.runtimeEnv, logger, this.registryService);
-             }
-        } catch(e) { logger.warn("Fee Distributor init failed"); }
+            const walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
+            if (this.config.walletConfig?.encryptedPrivateKey) {
+                const wallet = await walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
+                feeDistributor = new FeeDistributorService(wallet, this.runtimeEnv, logger, this.registryService);
+            }
+        } catch(e) { 
+            logger.warn("Fee Distributor init failed"); 
+        }
 
         const notifier = new NotificationService(this.runtimeEnv, logger);
+
+        // Start monitoring existing positions
+        for (const position of this.activePositions) {
+            try {
+                await this.positionMonitor.startMonitoring(position);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                logger.error(`Failed to start monitoring position ${position.marketId}: ${errorMessage}`);
+            }
+        }
 
         this.monitor = new TradeMonitorService({
             adapter: this.exchange,

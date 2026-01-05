@@ -1,10 +1,12 @@
 import { Logger } from '../utils/logger.util.js';
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
+import { PositionMonitorService } from './position-monitor.service.js';
 
 export class PortfolioTrackerService {
   private allocatedCapital: number = 0;
   private positions: Map<string, number> = new Map(); // marketId -> positionValue
+  private positionTokenIds: Map<string, string> = new Map(); // marketId -> tokenId
 
   private onPositionsUpdate?: (positions: ActivePosition[]) => void;
 
@@ -13,9 +15,15 @@ export class PortfolioTrackerService {
     private walletAddress: string,
     private maxPortfolioAllocation: number,
     private logger: Logger,
+    private positionMonitor: PositionMonitorService,
     onPositionsUpdate?: (positions: ActivePosition[]) => void
   ) {
     this.onPositionsUpdate = onPositionsUpdate;
+    
+    // Handle invalid positions from position monitor
+    this.positionMonitor.onPositionInvalid = async (marketId, reason) => {
+      await this.handleInvalidPosition(marketId, reason);
+    };
   }
 
   async initialize(): Promise<void> {
@@ -27,10 +35,16 @@ export class PortfolioTrackerService {
       const positions = await this.adapter.getPositions(this.walletAddress);
       this.allocatedCapital = positions.reduce((sum, pos) => sum + (pos.valueUsd || 0), 0);
       
-      // Update positions map
-      this.positions = new Map(
-        positions.map(pos => [pos.marketId, pos.valueUsd || 0])
-      );
+      // Update positions map and token ID mapping
+      this.positions = new Map();
+      this.positionTokenIds = new Map();
+      
+      for (const pos of positions) {
+        this.positions.set(pos.marketId, pos.valueUsd || 0);
+        if (pos.tokenId) {
+          this.positionTokenIds.set(pos.marketId, pos.tokenId);
+        }
+      }
       
       this.logger.info(`[Portfolio] Synced ${positions.length} positions. Allocated: $${this.allocatedCapital.toFixed(2)}`);
     } catch (error: unknown) {
@@ -124,5 +138,33 @@ export class PortfolioTrackerService {
         this.logger.error('Error in positions update callback:', errorMessage);
       }
     }
+  }
+
+  /**
+   * Handles cleanup when a position is detected as invalid (e.g., order book no longer exists)
+   */
+  private async handleInvalidPosition(marketId: string, reason: string): Promise<void> {
+    const positionValue = this.positions.get(marketId) || 0;
+    
+    // Release the allocation for this position
+    this.releaseAllocation(marketId, positionValue);
+    
+    // Clean up token ID mapping
+    this.positionTokenIds.delete(marketId);
+    
+    this.logger.warn(
+      `[Portfolio] Cleaned up invalid position: ${marketId}. ` +
+      `Reason: ${reason}. Released: $${positionValue.toFixed(2)}`
+    );
+    
+    // Notify listeners about the updated positions
+    await this.notifyPositionsUpdate();
+  }
+
+  /**
+   * Gets the token ID for a market if available
+   */
+  getTokenId(marketId: string): string | undefined {
+    return this.positionTokenIds.get(marketId);
   }
 }

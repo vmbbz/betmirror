@@ -12,7 +12,14 @@ export const USDC_BRIDGED_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 export const USDC_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function transfer(address to, uint256 amount) returns (bool)',
-  'function decimals() view returns (uint8)'
+  'function decimals() view returns (uint8)',
+  'function approve(address spender, uint256 amount) returns (bool)'
+];
+
+// ABI for the proxy contract's deposit function
+export const PROXY_ABI = [
+  'function deposit(address token, uint256 amount) external',
+  'event Deposit(address indexed token, address indexed user, uint256 amount, uint256 balance)'
 ];
 
 export class Web3Service {
@@ -141,6 +148,9 @@ export class Web3Service {
   async depositErc20(proxyAddress: string, amount: string, tokenAddress: string): Promise<string> {
     if (!this.provider) {
         this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
+    }
+    if (!proxyAddress) {
+        console.log("PROXY PROXY PROXY PROXY PROXY PROXY======================" + proxyAddress);
     }
     
     await this.switchToChain(137);

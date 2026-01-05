@@ -643,14 +643,19 @@ app.post('/api/bot/mm/add-market', async (req: any, res: any) => {
     const engine = ACTIVE_BOTS.get(normId);
     if (!engine) return res.status(404).json({ error: "Engine offline" });
     
-    let success = false;
-    if (conditionId) {
-        success = await engine.addMarketToMM(conditionId);
-    } else if (slug) {
-        success = await engine.addMarketBySlug(slug);
+    try {
+        const success = conditionId 
+            ? await engine.addMarketToMM(conditionId)
+            : await engine.addMarketBySlug(slug);
+        
+        res.json({ success });
+    } catch (error) {
+        console.error('Error adding market:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to add market' 
+        });
     }
-    
-    res.json({ success });
 });
 
 // In src/server/server.ts, update the /api/bot/mm/bookmark endpoint

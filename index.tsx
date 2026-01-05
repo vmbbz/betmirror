@@ -464,7 +464,6 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
         return () => console.log('🏁 MoneyMarketFeed unmounting');
     }, []);
 
-    // Add this function to handle the scan button click
     const handleScanClick = async () => {
         console.log('🔍 Scan button clicked');
         if (!userId) {
@@ -478,8 +477,8 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
         
         try {
             console.log('📡 Calling onRefresh() to fetch markets...');
-            await onRefresh(); // This should trigger the market scan
-            console.log('✅ Market scan completed');
+            await onRefresh();
+            toast.success('✅ Market scan completed');
         } catch (error) {
             console.error('❌ Error during market scan:', error);
             toast.error('Failed to scan markets');
@@ -491,7 +490,7 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
     const handleManualAdd = async () => {
         console.log('🔍 Manual market add triggered', { manualId, userId });
         if (!manualId) {
-            console.log('⚠️ No manual ID provided');
+            toast.error('Please enter a market ID or slug');
             return;
         }
         
@@ -505,15 +504,26 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
             
             console.log('📡 Sending request to add market:', payload);
             const res = await axios.post('/api/bot/mm/add-market', payload);
-            
             console.log('✅ Add market response:', res.data);
             
             if (res.data.success) {
-                toast.success("✅ Market identified and scanners attached.");
+                toast.success("✅ Market synced successfully!");
                 setManualId('');
-                console.log('🔄 Triggering refresh...');
-                await onRefresh();
-                console.log('🔄 Refresh completed');
+                
+                if (res.data.market) {
+                    setOpportunities((prev: Array<{ conditionId: string }>) => {
+                        const exists = prev.some(m => 
+                            m.conditionId === res.data.market.conditionId
+                        );
+                        
+                        if (!exists) {
+                            return [res.data.market, ...prev];
+                        }
+                        return prev;
+                    });
+                } else {
+                    await onRefresh();
+                }
             } else {
                 const errorMsg = res.data.error || "Market not found or inactive.";
                 console.error('❌ Error adding market:', errorMsg);

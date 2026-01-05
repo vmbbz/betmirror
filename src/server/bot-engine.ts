@@ -187,47 +187,151 @@ export class BotEngine {
     }
 
     public async syncPositions(forceChainSync = false): Promise<void> {
+        if (!this.exchange) return;
+        
         const now = Date.now();
         if (!forceChainSync && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
             return;
         }
-
-        if (!this.portfolioTracker || !this.positionMonitor) {
-            this.addLog('error', 'Portfolio tracker or position monitor not initialized');
-            return;
+        
+        if (forceChainSync || (now - this.lastPositionSync >= this.POSITION_SYNC_INTERVAL)) {
+            this.lastPositionSync = now;
         }
 
         try {
             // Let PortfolioTracker handle the sync
-            await this.portfolioTracker.syncPositions();
-            
-            // Get the synced positions
-            this.activePositions = this.portfolioTracker.getActivePositions();
-            
-            // Update position monitoring
-            const activeMarketIds = new Set(this.activePositions.map(p => p.marketId));
-            
-            // Stop monitoring closed positions
-            this.positionMonitor.getActivePositions()
-                .filter(p => !activeMarketIds.has(p.marketId))
-                .forEach(p => this.positionMonitor?.stopMonitoring(p.marketId));
-            
-            // Start monitoring new positions
-            for (const position of this.activePositions) {
-                if (!this.positionMonitor.getActivePositions().some(p => p.marketId === position.marketId)) {
-                    await this.positionMonitor.startMonitoring({
-                        ...position,
-                        autoCashout: this.getAutoCashoutConfig()
-                    } as ActivePosition);
+            if (this.portfolioTracker) {
+                await this.portfolioTracker.syncPositions();
+                this.activePositions = this.portfolioTracker.getActivePositions();
+            }
+            if (forceChainSync) {
+                // Get positions directly from the chain
+                const address = this.exchange.getFunderAddress();
+                if (address) {
+                    const chainPositions = await this.exchange.getPositions(address);
+                    const enrichedPositions: ActivePosition[] = [];
+
+                    for (const p of chainPositions) {
+                        const marketSlug = p.marketSlug || "";
+                        const eventSlug = p.eventSlug || "";
+                        const question = p.question || p.marketId;
+                        const image = p.image || "";
+                        const realId = p.clobOrderId || p.marketId;
+
+                        // Update database records if needed
+                        const shouldUpdate = marketSlug || eventSlug;
+                        if (shouldUpdate) {
+                            const updateData: any = {};
+                            if (marketSlug) updateData.marketSlug = marketSlug;
+                            if (eventSlug) updateData.eventSlug = eventSlug;
+                            
+                            await Trade.updateMany(
+                                { userId: this.config.userId, marketId: p.marketId },
+                                { $set: updateData }
+                            );
+                        }
+
+                        // Create enriched position
+                        const enrichedPosition: ActivePosition = {
+                        tradeId: realId,
+                        clobOrderId: realId,
+                        marketId: p.marketId,
+                        conditionId: p.conditionId,
+                        tokenId: p.tokenId,
+                        outcome: (p.outcome || 'YES').toUpperCase() as 'YES' | 'NO',
+                        entryPrice: p.entryPrice || 0.5,
+                        shares: p.balance || 0,
+                        sizeUsd: p.valueUsd || 0,  // Added this line
+                        valueUsd: p.valueUsd || 0,  // This is the missing required field
+                        investedValue: p.investedValue || 0,
+                        timestamp: Date.now(),
+                        currentPrice: p.currentPrice || 0,
+                        unrealizedPnL: p.unrealizedPnL || 0,
+                        unrealizedPnLPercent: p.unrealizedPnLPercent || 0,
+                        question: question,
+                        image: image,
+                        marketSlug: marketSlug,
+                        eventSlug: eventSlug,
+                        marketState: 'ACTIVE',
+                        marketAcceptingOrders: true,
+                        marketActive: true,
+                        marketClosed: false,
+                        marketArchived: false,
+                        pnl: 0,  // Added default values for other required fields
+                        pnlPercentage: 0,
+                        lastUpdated: Date.now(),
+                        autoCashout: undefined
+                    };
+
+                        // Update market state
+                        await this.updateMarketState(enrichedPosition);
+                        enrichedPositions.push(enrichedPosition);
+                    }
+
+                    // Update active positions
+                    this.activePositions = enrichedPositions;
+                    
+                    // Portfolio tracker already synced above
+                }
+            } else {
+                // Regular sync - update existing positions with current prices
+                for (const pos of this.activePositions) {
+                    try {
+                        const currentPrice = await this.exchange.getMarketPrice(
+                            pos.marketId, 
+                            pos.tokenId, 
+                            'SELL'
+                        );
+                        
+                        if (currentPrice && !isNaN(currentPrice) && currentPrice > 0) {
+                            pos.currentPrice = currentPrice;
+                            const currentValue = pos.shares * currentPrice;
+                            const investedValue = pos.shares * pos.entryPrice;
+                            pos.investedValue = investedValue;
+                            pos.unrealizedPnL = currentValue - investedValue;
+                            pos.unrealizedPnLPercent = investedValue > 0 
+                                ? (pos.unrealizedPnL / investedValue) * 100 
+                                : 0;
+                        }
+                    } catch (e: unknown) {
+                        // Log error but continue with other positions
+                        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+                        this.addLog('warn', `Error updating position ${pos.marketId}: ${errorMessage}`);
+                    }
                 }
             }
             
-            this.lastPositionSync = now;
+            // Update position monitoring with auto-cashout
+            if (this.positionMonitor) {
+                const activeMarketIds = new Set(this.activePositions.map(p => p.marketId));
+                
+                // Stop monitoring closed positions
+                this.positionMonitor.getActivePositions()
+                    .filter(p => !activeMarketIds.has(p.marketId))
+                    .forEach(p => this.positionMonitor?.stopMonitoring(p.marketId));
+                
+                // Start monitoring new positions with auto-cashout config
+                for (const position of this.activePositions) {
+                    if (!this.positionMonitor.getActivePositions().some(p => p.marketId === position.marketId)) {
+                        await this.positionMonitor.startMonitoring({
+                            ...position,
+                            autoCashout: this.getAutoCashoutConfig()
+                        } as ActivePosition);
+                    }
+                }
+            }
             
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.addLog('error', `Failed to sync positions: ${errorMessage}`);
-            throw error; // Re-throw to allow callers to handle the error
+            // Notify listeners
+            if (this.callbacks?.onPositionsUpdate) {
+                await this.callbacks.onPositionsUpdate(this.activePositions);
+            }
+            
+            // Update stats
+            await this.syncStats();
+
+        } catch (e: any) {
+            this.addLog('error', `Sync Positions Failed: ${e.message}\n${e.stack || 'No stack trace available'}`);
+            throw e; // Re-throw to allow callers to handle the error
         }
     }
 

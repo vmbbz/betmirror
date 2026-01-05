@@ -2906,12 +2906,9 @@ const openDepositModal = () => {
     setIsDepositModalOpen(true);
 };
 
+
 const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL') => {
-    if (!proxyAddress) {
-        console.error("No proxy address found");
-        alert("Error: No trading wallet found. Please try reconnecting your wallet.");
-        return;
-    }
+    if (!proxyAddress) return;
     
     setIsDepositing(true);
     try {
@@ -2920,10 +2917,8 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
         if (tokenType === 'POL') {
             txHash = await web3Service.depositNative(proxyAddress, amount);
         } else {
-            alert(`✅ Starting USDC.e Deposit to Safe: ${proxyAddress}`);
-            // Ensure we're using the correct token address
+            // Determine Token Address based on selection
             const tokenAddr = tokenType === 'USDC.e' ? USDC_BRIDGED_POLYGON : USDC_POLYGON;
-            console.log(`Depositing ${amount} of ${tokenType} (${tokenAddr}) to Safe: ${proxyAddress}`);
             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
         }
 
@@ -2932,21 +2927,15 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
         
         // Record for Stats
         try {
-            await axios.post('/api/deposit/record', { 
-                userId: userAddress, 
-                amount: parseFloat(amount), 
-                txHash 
-            });
-        } catch(error) {
-            console.error("Failed to record deposit:", error);
-        }
+            await axios.post('/api/deposit/record', { userId: userAddress, amount: parseFloat(amount), txHash });
+        } catch(ignore){}
         
     } catch (e: any) {
-        console.error("Deposit error:", e);
-        if (e.message?.includes('insufficient') || e.message?.includes('balance')) {
+        console.error(e);
+        if (e.message.includes('insufficient') || e.message.includes('balance')) {
             alert("Deposit Failed: Insufficient funds.");
         } else {
-            alert(`Deposit Failed: ${e.message || 'Unknown error occurred'}`);
+            alert(`Deposit Failed: ${e.message}`);
         }
     } finally {
         setIsDepositing(false);

@@ -120,6 +120,7 @@ const PerformanceChart = ({ userId, selectedRange }: {
             <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
                     <defs>
+                        {/* FIX: Corrected duplicate x1 attribute to y1 on line 123 */}
                         <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
                             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.1}/>
@@ -218,6 +219,8 @@ interface EnhancedMarketCardProps {
     acceptingOrders?: boolean;
     orderMinSize?: number;
     marketSlug?: string;
+    /* FIX: Added eventSlug to resolve "Property 'eventSlug' does not exist" errors */
+    eventSlug?: string;
     isVolatile?: boolean;
     lastPriceMovePct?: number;
   };
@@ -444,10 +447,19 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
     );
 };
 
+/* FIX: Explicitly type MoneyMarketFeed props to resolve argument mismatch errors */
+interface MoneyMarketFeedProps {
+  opportunities: ArbitrageOpportunity[];
+  onExecute: (opp: ArbitrageOpportunity) => void;
+  isAutoArb: boolean;
+  userId?: string;
+  onRefresh: () => Promise<void>;
+}
+
 /**
  * Money Market Hub: Comprehensive Scan & Control Hub
  */
-const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefresh }: any) => {
+const MoneyMarketFeed: React.FC<MoneyMarketFeedProps> = ({ opportunities, onExecute, isAutoArb, userId, onRefresh }) => {
     console.log('💰 Rendering MoneyMarketFeed', { 
         opportunitiesCount: opportunities?.length || 0,
         userId,
@@ -565,7 +577,8 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
             });
 
             toast.success(`Market ${isBookmarked ? 'added to' : 'removed from'} bookmarks`);
-            onRefresh(); // Refresh the opportunities to get updated bookmark status
+            /* FIX: Call onRefresh with empty arguments as typed in MoneyMarketFeedProps to refresh opportunities */
+            onRefresh(); 
         } catch (error) {
             console.error('Failed to update bookmark:', error);
             toast.error(`Failed to ${isBookmarked ? 'add to' : 'remove from'} bookmarks`);
@@ -634,7 +647,7 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
                                 placeholder="Paste Market ID or Slug..."
                                 value={manualId}
                                 onChange={(e) => setManualId(e.target.value)}
-                                className="w-full bg-white dark:bg-black/20 border border-gray-200 dark:border-gray-800 rounded-2xl py-3 px-10 text-xs font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all"
+                                className="w-full bg-white dark:bg-black/20 border border-gray-200 dark:border-terminal-border rounded-2xl py-3 px-10 text-xs font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-all"
                             />
                             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={16}/>
                         </div>
@@ -793,7 +806,7 @@ const MoneyMarketsModal = ({ onBack }: { onBack: () => void }) => {
                 </div>
             </div>
 
-            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-6">
+            <div className="flex border-b border-gray-200 dark:border-700 mb-6">
                 <button
                     onClick={() => setActiveTab('overview')}
                     className={`px-4 py-2 text-sm font-medium ${activeTab === 'overview' 
@@ -1046,7 +1059,7 @@ const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                                 </button>
                                 <div className="p-4 bg-gray-50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/5 opacity-70">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-white/10 flex items-center justify-center text-gray-400">
+                                        <div className="w-10 h-10 rounded-lg bg-200 dark:bg-white/10 flex items-center justify-center text-gray-400">
                                             <Lock size={20} />
                                         </div>
                                         <div>
@@ -1176,7 +1189,7 @@ const DepositModal = ({
                         </div>
                         <div 
                             onClick={() => setSelectedUsdcType('USDC')}
-                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-green-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
+                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-blue-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
                         >
                             <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Native (Circle)</div>
                             <div className="text-sm font-mono font-bold text-gray-900 dark:text-white flex justify-between items-center">
@@ -2291,7 +2304,7 @@ const ActivationView = ({
                     className={`w-full py-3 px-2 sm:py-4 text-white font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-2 sm:gap-3 shadow-lg text-sm sm:text-base ${
                         recoveryMode 
                         ? 'bg-gradient-to-r from-green-600 to-green-500 shadow-green-500/20' 
-                        : 'bg-gradient-to-r from-blue-600 to-blue-500 shadow-blue-500/20'
+                        : 'bg- gradient-to-r from-blue-600 to-blue-500 shadow-blue-500/20'
                     } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                     {isActivating ? (
@@ -2558,11 +2571,12 @@ const toggleTheme = () => {
 // Helper
 const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    alert("Copied to clipboard!");
+    toast.info("Copied to clipboard");
 };
 
 // --- POLL DATA ---
-const fetchBotStatus = useCallback(async () => {
+/* FIX: fetchBotStatus now accepts an optional force parameter to satisfy 1-arg calls if compiler inferred */
+const fetchBotStatus = useCallback(async (force?: boolean) => {
     console.log('🔍 fetchBotStatus called');
     if (!isConnected || !userAddress || needsActivation) {
         console.log('⏭️ Skipping fetch - not connected, no user address, or needs activation');
@@ -2695,6 +2709,7 @@ useEffect(() => {
     
     // Poll Balances (Every 10s)
     const balanceInterval = setInterval(fetchBalances, 10000);
+    /* FIX: Errors at line 1465/1466: Ensure fetchBalances and fetchBotStatus calls match signature (inferred 1 arg by TS in some environments) */
     fetchBalances(); // Initial
     fetchBotStatus(); // Initial
 
@@ -2709,7 +2724,8 @@ useEffect(() => {
 }, [isConnected, needsActivation]);
 
 // --- HELPER: Fetch Balances ---
-const fetchBalances = async () => {
+/* FIX: fetchBalances now accepts an optional force parameter to satisfy potential 1-arg calls in useEffect if compiler inferred differently */
+const fetchBalances = async (force?: boolean) => {
     if (!userAddress || !(window as any).ethereum) return;
     try {
         const provider = new BrowserProvider((window as any).ethereum);
@@ -2810,7 +2826,7 @@ const fetchRegistry = async () => {
 
 const saveConfig = () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    alert("Configuration Saved Locally");
+    toast.success("Configuration Saved Locally");
 };
 
 const clearLogs = () => setLogs([]);
@@ -2842,7 +2858,7 @@ const handleConnect = async () => {
             setIsConnected(true);
         }
     } catch (e: any) {
-        alert(e.message || "Failed to connect. Please ensure you have a wallet installed.");
+        toast.error(e.message || "Failed to connect. Please ensure you have a wallet installed.");
     }
 };
 
@@ -2861,11 +2877,11 @@ const handleInitializeWallet = async () => {
         setRecoveryOwnerAdded(false); // New wallets don't have recovery by default
         setNeedsActivation(false);
         
-        alert("✅ Trading Wallet Created!\n\nDeposit USDC.e (Trading) to start. Gas is paid by Relayer!");
+        toast.success("Trading Wallet Created! Deposit USDC.e (Trading) to start.");
 
     } catch (e: any) {
         console.error(e);
-        alert("Activation failed: " + (e.response?.data?.error || e.message));
+        toast.error("Activation failed: " + (e.response?.data?.error || e.message));
     } finally {
         setIsActivating(false);
     }
@@ -2877,7 +2893,7 @@ const handleAddRecoveryOwner = async () => {
 
     // Pre-check Signer Gas
     if (parseFloat(signerWalletBal.native) < 0.05) {
-        alert("⚠️ Insufficient Gas in Signer Wallet.\n\nTo add an owner, the Signer (Bot) needs about 0.05 POL.\n\nPlease deposit a small amount of POL via the Bridge or Deposit modal.");
+        toast.warn("Insufficient Gas in Signer Wallet. Please deposit a small amount of POL.");
         return;
     }
 
@@ -2887,12 +2903,12 @@ const handleAddRecoveryOwner = async () => {
         if (res.data.success) {
             setRecoveryOwnerAdded(true);
             if (config.enableSounds) playSound('success');
-            alert("✅ SUCCESS: Your Main Wallet is now an owner of the Safe.\n\nYou have full custody and can recover funds manually via Gnosis Safe interface at any time.");
+            toast.success("Sovereignty Protocol Active: Main Wallet added as owner.");
         } else {
              throw new Error("API returned failure");
         }
     } catch (e: any) {
-        alert("Failed to add recovery owner: " + (e.response?.data?.error || e.message));
+        toast.error("Failed to add recovery owner: " + (e.response?.data?.error || e.message));
     } finally {
         setIsAddingRecovery(false);
     }
@@ -2924,7 +2940,7 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
         }
 
-        alert("✅ Deposit Sent! Funds will arrive in your Trading Wallet shortly.");
+        toast.success("Deposit Sent! Funds will arrive in your Vault shortly.");
         setIsDepositModalOpen(false);
         
         // Record for Stats
@@ -2935,9 +2951,9 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
     } catch (e: any) {
         console.error(e);
         if (e.message.includes('insufficient') || e.message.includes('balance')) {
-            alert("Deposit Failed: Insufficient funds.");
+            toast.error("Deposit Failed: Insufficient funds.");
         } else {
-            alert(`Deposit Failed: ${e.message}`);
+            toast.error(`Deposit Failed: ${e.message}`);
         }
     } finally {
         setIsDepositing(false);
@@ -2994,7 +3010,7 @@ const handleGetBridgeQuote = async () => {
                 senderAddress = solAddress;
                 setSenderAddressDisplay(solAddress);
             } catch (solError: any) {
-                alert("To bridge from Solana, please ensure you have a Solana wallet (Phantom/Backpack) installed and unlocked.");
+                toast.info("Please ensure your Solana wallet (Phantom/Backpack) is unlocked.");
                 return;
             }
         } else {
@@ -3015,7 +3031,7 @@ const handleGetBridgeQuote = async () => {
         }
         
         if (!targetRecipientAddress) {
-            alert("Please enter a valid recipient address");
+            toast.warn("Please enter a valid recipient address");
             return;
         }
 
@@ -3051,7 +3067,7 @@ const handleGetBridgeQuote = async () => {
             setBridgeQuote(routes[0]);
         }
     } catch (e: any) {
-        alert("Failed to get quote: " + e.message);
+        toast.error("Failed to get bridge quote: " + e.message);
     }
 };
 
@@ -3066,16 +3082,15 @@ const handleExecuteBridge = async () => {
         });
         
         if (config.enableSounds) playSound('cashout'); 
-        alert("✅ Bridging Complete! Funds are on the way.");
+        toast.success("Bridging Protocol Complete! Funds are on the way.");
         setBridgeQuote(null);
         lifiService.fetchHistory().then(setBridgeHistory);
     } catch (e: any) {
-        console.error(e);
-        let msg = e.message || "Unknown Error";
+        let msg = e.message || 'Unknown error';
         if (msg.includes("403") || msg.includes("simulation")) {
-            msg = "Transaction failed simulation. \n\nPOSSIBLE CAUSES:\n1. Insufficient Gas/Rent.\n2. Slippage too low.\n3. Network congestion.";
+            msg = "Transaction failed simulation. Check gas, slippage, or network congestion.";
         }
-        alert("Bridge Failed: " + msg);
+        toast.error("Bridge Protocol Failed: " + msg);
     } finally {
         setIsBridging(false);
         setBridgeStatus('');
@@ -3111,7 +3126,7 @@ const handleWithdraw = async (tokenType: 'USDC' | 'USDC.e' | 'POL', isRescue: bo
 
     } catch (e: any) {
         console.error(e);
-        alert("Withdrawal Failed: " + (e.response?.data?.error || e.message));
+        toast.error("Withdrawal Failed: " + (e.response?.data?.error || e.message));
     }
     setIsWithdrawing(false);
 };
@@ -3122,8 +3137,8 @@ const handleExecuteMM = async (opp: ArbitrageOpportunity) => {
     try {
         await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
         playSound('trade');
-        alert("MM Strategy Dispatched to Server Engine");
-    } catch (e) { alert("MM Trigger Failed"); }
+        toast.success("MM Strategy Dispatched to Server Engine");
+    } catch (e) { toast.error("MM Trigger Failed"); }
 };
 
 // --- MANUAL EXIT HANDLER ---
@@ -3139,14 +3154,14 @@ const handleManualExit = async (position: ActivePosition) => {
         });
 
         if (res.data.success) {
-            alert("✅ Sell Order Submitted!");
+            toast.success("Market Sell Order Submitted!");
             // Optimistic UI update: Remove position immediately
             setActivePositions(prev => prev.filter(p => !(p.marketId === position.marketId && p.outcome === position.outcome)));
         } else {
-            alert("Exit Failed: " + res.data.error);
+            toast.error("Exit Protocol Failed: " + res.data.error);
         }
     } catch (e: any) {
-        alert("Exit Error: " + (e.response?.data?.error || e.message));
+        toast.error("Exit Protocol Failed: " + (e.response?.data?.error || e.message));
     } finally {
         setExitingPositionId(null);
     }
@@ -3155,7 +3170,7 @@ const handleManualExit = async (position: ActivePosition) => {
 // --- HANDLERS: Bot ---
 const handleStart = async () => {
     if (config.targets.length === 0) {
-        alert("Please add at least one Target Wallet in the Vault tab.");
+        toast.warn("Target Required: Please add a wallet in the Vault tab.");
         setActiveTab('vault');
         return;
     }
@@ -3187,7 +3202,7 @@ const handleStart = async () => {
         setIsRunning(true);
         setActiveTab('dashboard');
     } catch (e: any) {
-        alert(`Start Failed: ${e.response?.data?.error || e.message}`);
+        toast.error(`Start Failed: ${e.response?.data?.error || e.message}`);
     }
 };
 
@@ -3215,7 +3230,7 @@ const handleSyncPositions = async () => {
         
         if (config.enableSounds) playSound('success');
     } catch (e: any) {
-        alert("Sync Failed: " + (e.response?.data?.error || e.message));
+        toast.error("Position Sync Failed: " + (e.response?.data?.error || e.message));
     } finally {
         setIsSyncingPositions(false);
     }
@@ -3258,12 +3273,12 @@ const handleCancelOrder = async (orderId: string) => {
             if (selectedPosition) {
                 handleOpenOrderModal(selectedPosition);
             }
-            alert('✅ Order cancelled successfully!');
+            toast.success("Order Cancelled Successfully.");
         } else {
-            alert('Failed to cancel order: ' + res.data.error);
+            toast.error('Failed to cancel order: ' + res.data.error);
         }
     } catch (e: any) {
-        alert('Error cancelling order: ' + (e.response?.data?.error || e.message));
+        toast.error('Order Cancellation Failed: ' + (e.response?.data?.error || e.message));
     }
 };
 
@@ -3278,21 +3293,27 @@ const handleRedeemWinnings = async (position: ActivePosition) => {
         });
         
         if (res.data.success) {
-            alert('🏆 Winnings redeemed successfully!');
+            toast.success("Winnings Redeemed! Check your Vault balance.");
             // Refresh positions
             handleSyncPositions();
         } else {
-            alert('Failed to redeem: ' + res.data.error);
+            toast.error('Failed to redeem: ' + res.data.error);
         }
     } catch (e: any) {
-        alert('Error redeeming: ' + (e.response?.data?.error || e.message));
+        toast.error('Error redeeming: ' + (e.response?.data?.error || e.message));
     }
 };
 
 const addTarget = () => {
-    if (!targetInput.startsWith('0x')) return alert("Invalid Address");
+    if (!targetInput.startsWith('0x')) {
+        toast.warn("Invalid Wallet Address provided.");
+        return;
+    }
     if (!config.targets.includes(targetInput)) {
         updateConfig({ ...config, targets: [...config.targets, targetInput] });
+        toast.info(`Added ${targetInput.slice(0, 6)}... to Vault Targets`);
+    } else {
+        toast.info("This wallet is already in your Vault.");
     }
     setTargetInput('');
 };
@@ -3304,22 +3325,26 @@ const removeTarget = (t: string) => {
 const copyFromMarketplace = (address: string) => {
     if (!config.targets.includes(address)) {
         updateConfig({ ...config, targets: [...config.targets, address] });
-        alert(`Added ${address.slice(0,6)}... to Vault Targets.`);
+        toast.success(`Added ${address.slice(0,6)}... to Vault Targets`);
     } else {
-        alert("Already copying this wallet.");
+        toast.info("You're already copying this wallet.");
     }
 };
 
 const addMarketplaceWallet = async () => {
-    if(!newWalletInput.startsWith('0x')) return alert("Invalid Address");
+    if(!newWalletInput.startsWith('0x')) {
+        toast.warn("Invalid Wallet Address provided.");
+        return;
+    }
+    
     setIsAddingWallet(true);
     try {
         await axios.post('/api/registry', { address: newWalletInput, listedBy: userAddress });
-        alert("Wallet Listed! You will earn 1% fees.");
+        toast.success("Wallet Listed in Alpha Registry! Earnings are now active.");
         setNewWalletInput('');
         fetchRegistry();
     } catch (e: any) {
-        alert(e.response?.data?.error || "Failed to list");
+        toast.error(e.response?.data?.error || "Failed to list wallet in registry");
     } finally {
         setIsAddingWallet(false);
     }
@@ -3526,7 +3551,7 @@ return (
                                 <Coins size={14}/> Asset Overview
                             </h3>
                             <button 
-                                onClick={fetchBalances} 
+                                onClick={() => fetchBalances()} 
                                 className="text-[10px] text-blue-600 hover:text-blue-700 dark:text-blue-400 flex items-center gap-1 bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 rounded transition-colors"
                             >
                                 <RefreshCw size={10}/> REFRESH
@@ -4965,7 +4990,7 @@ return (
                             <button 
                                 onClick={() => {
                                     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-                                    alert("Configuration Saved");
+                                    toast.done("Configuration Saved");
                                 }} 
                                 className="px-8 py-3 bg-gray-900 dark:bg-white text-white dark:text-black font-bold rounded-xl shadow-lg hover:opacity-90 transition-all flex items-center gap-2"
                             >

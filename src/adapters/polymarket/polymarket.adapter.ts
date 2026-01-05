@@ -47,6 +47,7 @@ interface EnrichedPositionData {
     marketId: string;
     conditionId: string;
     tokenId: string;
+    clobOrderId?: string;
     outcome: string;
     balance: number;
     valueUsd: number;
@@ -517,6 +518,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 marketId: trade.conditionId || trade.marketId || '',
                 conditionId: trade.conditionId || trade.marketId || '',
                 tokenId: trade.tokenId || '',
+                clobOrderId: trade.clobOrderId || trade.tokenId || '',
                 outcome: trade.outcome || 'YES',
                 balance: parseFloat(trade.size) || 0,
                 valueUsd: parseFloat(trade.currentValueUsd) || 0,
@@ -685,6 +687,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     marketId: conditionId,
                     conditionId: conditionId,
                     tokenId: tokenId,
+                    clobOrderId: tokenId,
                     outcome: outcome,
                     balance: size,
                     valueUsd: currentValueUsd,

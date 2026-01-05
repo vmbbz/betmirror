@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -553,6 +552,28 @@ app.post('/api/bot/update', async (req: any, res: any) => {
     }
 });
 
+// Trigger a forced market discovery scan
+app.post('/api/bot/refresh', async (req: any, res: any) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    
+    try {
+        if (engine && (engine as any).arbScanner) {
+            await (engine as any).arbScanner.forceRefresh();
+            res.json({ success: true, message: "Manual scan triggered" });
+        } else {
+            // If bot not running, we could still trigger a global scanner refresh if one existed,
+            // but for now we just return error.
+            res.status(404).json({ error: "Bot engine not running" });
+        }
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // 7. Bot Status & Logs
 app.get('/api/bot/status/:userId', async (req: any, res: any) => {
     const { userId } = req.params;
@@ -565,7 +586,32 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         const user = await User.findOne({ address: normId }).lean();
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
         
-        const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(20).lean();
+        // --- ENHANCEMENT: DISCOVERY CACHE ---
+        // Pull latest 50 discovered markets from the scanner (if running) or DB
+        let mmOpportunities: ArbitrageOpportunity[] = [];
+        
+        if (engine && (engine as any).arbScanner) {
+            const scanner = (engine as any).arbScanner;
+            const strictOpps = scanner.getOpportunities();
+            const monitored = scanner.getMonitoredMarkets();
+            
+            // Combine strict + monitored to ensure tabs are never blank
+            const combined = [...strictOpps];
+            monitored.forEach((m: ArbitrageOpportunity) => {
+                if (!combined.some(c => c.tokenId === m.tokenId)) {
+                    combined.push(m);
+                }
+            });
+            
+            mmOpportunities = combined.sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
+        } else {
+            const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(100).lean();
+            mmOpportunities = persistedMMOpps.map((o: any) => ({
+                ...o,
+                roi: o.roi || o.spreadPct || 0,
+                capacityUsd: o.capacityUsd || o.liquidity || 0
+            }));
+        }
 
         const formattedLogs = dbLogs.map(l => ({
             id: l._id.toString(),
@@ -581,42 +627,14 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         }));
 
         let livePositions: ActivePosition[] = [];
-        // MAPPER: Ensure full metadata and volatility info is passed to the UI
-        let mmOpportunities: ArbitrageOpportunity[] = persistedMMOpps.map((o: any) => ({
-            marketId: o.marketId,
-            conditionId: o.conditionId || o.marketId,
-            tokenId: o.tokenId,
-            question: o.question || '',
-            image: o.image || '',
-            marketSlug: o.marketSlug || '',
-            bestBid: o.bestBid || 0,
-            bestAsk: o.bestAsk || 0,
-            spread: o.spread || 0,
-            spreadPct: o.spreadPct || 0,
-            spreadCents: (o.spread || 0) * 100,
-            midpoint: o.midpoint || 0,
-            volume: o.volume || 0,
-            liquidity: o.liquidity || 0,
-isNewMarket: o.isNewMarket || false,
-            timestamp: o.timestamp instanceof Date ? o.timestamp.getTime() : new Date(o.timestamp).getTime(),
-            roi: o.roi || o.spreadPct || 0,
-            combinedCost: o.combinedCost || (1 - (o.spread || 0)),
-            capacityUsd: o.capacityUsd || o.liquidity || 0,
-            status: o.status || 'active',
-            acceptingOrders: o.acceptingOrders !== false,
-            volume24hr: o.volume24hr || 0,
-            category: o.category || 'general',
-            // Pass through volatility data
-            lastPriceMovePct: o.lastPriceMovePct || 0,
-            isVolatile: o.isVolatile || false
-        }));
-        
         if (engine) {
-            livePositions = engine.getActivePositions() || [];
-            const engineOpps = engine.getArbOpportunities() || [];
-            if (engineOpps.length > 0) {
-                mmOpportunities = engineOpps; 
-            }
+            const scanner = (engine as any).arbScanner;
+            livePositions = (engine.getActivePositions() || []).map(p => ({
+                ...p,
+                // --- ENHANCEMENT: MM MANAGEMENT FLAG ---
+                // Mark if the scanner is currently providing liquidity for this token
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
+            }));
         } else if (user && user.activePositions) {
             livePositions = user.activePositions as ActivePosition[];
         }
@@ -806,7 +824,7 @@ app.get('/api/proxy/trades/:address', async (req: any, res: any) => {
 });
 
 // 9. Bridge Routes
-app.get('/api/bridge/history/:userId', async (req, res) => {
+app.get('/api/bridge/history/:userId', async (req: any, res: any) => {
     const { userId } = req.params;
     try {
         const history = await BridgeTransaction.find({ userId: userId.toLowerCase() }).sort({ timestamp: -1 }).lean();
@@ -864,7 +882,7 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
             if (!targetSafeAddress) eoaBalance = await provider.getBalance(walletConfig.address);
         } else { 
             try { 
-                balanceToWithdraw = await usdcContract.balanceOf(safeAddr); 
+                balanceToWithdraw = await usdcContract.of(safeAddr); 
                 if (!targetSafeAddress) eoaBalance = await usdcContract.balanceOf(walletConfig.address);
             } catch(e) {} 
         }

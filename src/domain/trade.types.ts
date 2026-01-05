@@ -82,6 +82,12 @@ export interface ActivePosition {
   marketActive?: boolean;
   marketClosed?: boolean;
   marketArchived?: boolean;
+  // --- NEW: MM MANAGEMENT FIELDS ---
+  managedByMM?: boolean;      // True if this position is part of a market-making strategy
+  inventorySkew?: number;     // -1.0 to 1.0 (Shows if we are heavy on YES or NO)
+  activeBidPrice?: number;    // Current resting bid
+  activeAskPrice?: number;    // Current resting ask
+  // ---
   // Resolution and Metadata
   isResolved?: boolean; // Whether the market has been resolved
   updatedAt?: Date; // When the position metadata was last updated

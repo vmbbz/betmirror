@@ -60,13 +60,16 @@ export interface MarketOpportunity {
     capacityUsd: number;
     // Inventory skew
     skew?: number;
-    // NEW: Status & Metadata for UI
+    // Status & Metadata for UI
     status: 'active' | 'closed' | 'resolved' | 'paused';
     acceptingOrders: boolean;
     volume24hr?: number;
     category?: string;
     featured?: boolean;
     isBookmarked?: boolean;
+    // Volatility metrics
+    lastPriceMovePct?: number;
+    isVolatile?: boolean;
 }
 
 interface TrackedMarket {
@@ -87,7 +90,7 @@ interface TrackedMarket {
     // Track YES/NO token mapping
     isYesToken?: boolean;
     pairedTokenId?: string;
-    // NEW: Status & metadata
+    // Status & metadata
     status: 'active' | 'closed' | 'resolved' | 'paused';
     acceptingOrders: boolean;
     volume24hr?: number;
@@ -140,6 +143,7 @@ export class MarketMakingScanner extends EventEmitter {
     // FIX: Using explicit ws.WebSocket type
     private ws?: WebSocket;
     private trackedMarkets: Map<string, TrackedMarket> = new Map();
+    private monitoredMarkets: Map<string, MarketOpportunity> = new Map(); // All discovered markets for tab filtering
     private opportunities: MarketOpportunity[] = [];
     private pingInterval?: NodeJS.Timeout;
     private refreshInterval?: NodeJS.Timeout;
@@ -399,11 +403,6 @@ export class MarketMakingScanner extends EventEmitter {
         }
     }
     
-    /**
-     * Fetch markets for a specific series
-     */
-    // Removed fetchMarketsBySeries as we're not using sports series endpoints anymore
-
     /**
      * PRODUCTION: Process a single market from API response
      * FIXED: Removed volume/liquidity pre-filtering - only filter on structural requirements
@@ -1144,20 +1143,7 @@ export class MarketMakingScanner extends EventEmitter {
             Math.max(50, this.config.minLiquidity * 0.1) : // At least $50 for new markets
             this.config.minLiquidity;
             
-        if (market.volume < effectiveMinVolume) {
-            return;
-        }
-        
-        if (market.liquidity < effectiveMinLiquidity) {
-            return;
-        }
-        
-        // 7. Calculate ROI and capacity
-        const skew = this.getInventorySkew(market.conditionId);
-        const roi = spreadPct; // ROI is just the spread percentage for now
-        const combinedCost = 1 - spread; // Cost to buy both sides
-        
-        // 8. Create opportunity object
+        // We always add to monitored list, but only opportunities get special treatment
         const opportunity: MarketOpportunity = {
             marketId: market.conditionId,
             conditionId: market.conditionId,
@@ -1177,10 +1163,10 @@ export class MarketMakingScanner extends EventEmitter {
             rewardsMaxSpread: market.rewardsMaxSpread,
             rewardsMinSize: market.rewardsMinSize,
             timestamp: Date.now(),
-            roi: roi,
-            combinedCost: combinedCost,
+            roi: spreadPct,
+            combinedCost: 1 - spread,
             capacityUsd: market.liquidity,
-            skew: skew,
+            skew: this.getInventorySkew(market.conditionId),
             status: market.status,
             acceptingOrders: market.acceptingOrders,
             volume24hr: market.volume24hr,
@@ -1188,6 +1174,13 @@ export class MarketMakingScanner extends EventEmitter {
             featured: market.featured,
             isBookmarked: this.bookmarkedMarkets.has(market.conditionId)
         };
+
+        // Always update monitored list
+        this.monitoredMarkets.set(market.tokenId, opportunity);
+
+        // Check strict MM filters for the actionable opportunities array
+        if (market.volume < effectiveMinVolume) return;
+        if (market.liquidity < effectiveMinLiquidity) return;
         
         // 9. Update opportunities
         this.updateOpportunitiesInternal(opportunity);
@@ -1282,9 +1275,18 @@ export class MarketMakingScanner extends EventEmitter {
         this.logger.warn('🛑 Scanner stopped');
     }
 
-    getOpportunities(maxAgeMs = 60000): MarketOpportunity[] {
+    getOpportunities(maxAgeMs = 600000): MarketOpportunity[] {
         const now = Date.now();
-        return this.opportunities.filter(o => now - o.timestamp < maxAgeMs);
+        // Use monitored list as fallback if strict opportunities are few
+        const actionable = this.opportunities.filter(o => now - o.timestamp < maxAgeMs);
+        if (actionable.length < 5) {
+             // Supplement with monitored markets that are active
+             const supplemental = Array.from(this.monitoredMarkets.values())
+                .filter(o => o.status === 'active' && !actionable.some(a => a.tokenId === o.tokenId))
+                .slice(0, 10);
+             return [...actionable, ...supplemental];
+        }
+        return actionable;
     }
 
     getLatestOpportunities(): MarketOpportunity[] {

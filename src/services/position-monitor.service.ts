@@ -96,7 +96,7 @@ export class PositionMonitorService {
       const updatedPosition = updatedPositions.find(p => 
         p.marketId === position.marketId && 
         p.outcome === position.outcome
-      ) as ActivePosition | undefined;
+      ) as any;
       
       if (!updatedPosition) {
         this.logger.info(`[Monitor] Position closed: ${position.marketId}`);
@@ -104,6 +104,14 @@ export class PositionMonitorService {
         return;
       }
       
+      // LIQUIDITY HEALTH CHECK
+      if (updatedPosition.managedByMM) {
+        const metrics = await this.adapter.getLiquidityMetrics?.(updatedPosition.tokenId, 'SELL');
+        if (metrics && metrics.health === 'CRITICAL') {
+           this.logger.warn(`[Monitor] Liquidity for MM position ${position.marketId} is CRITICAL. System oversight active.`);
+        }
+      }
+
       // Update position data
       this.activePositions.set(position.marketId, {
         ...position,

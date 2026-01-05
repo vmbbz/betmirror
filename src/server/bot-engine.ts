@@ -1,4 +1,3 @@
-
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -177,7 +176,7 @@ export class BotEngine {
                 const marketData = await (this.exchange as any).getMarketData?.(marketId);
                 if (marketData) {
                     const result = {
-                        marketSlug: marketData.slug || '',
+                        marketSlug: marketData.slug || marketData.marketSlug || '',
                         eventSlug: marketData.eventSlug || '',
                         question: marketData.question || `Market ${marketId}`,
                         image: marketData.image || ''
@@ -199,8 +198,8 @@ export class BotEngine {
                 const result = {
                     marketSlug: (trade as any).marketSlug || '',
                     eventSlug: (trade as any).eventSlug || '',
-                    question: (trade as any).marketQuestion || `Market ${marketId}`,
-                    image: (trade as any).marketImage || ''
+                    question: (trade as any).marketQuestion || (trade as any).question || `Market ${marketId}`,
+                    image: (trade as any).marketImage || (trade as any).image || ''
                 };
                 
                 // Update cache
@@ -382,8 +381,6 @@ export class BotEngine {
 
                     // Update active positions
                     this.activePositions = enrichedPositions;
-                    
-                    // Portfolio tracker already synced above
                 }
             } else {
                 // Regular sync - update existing positions with current prices
@@ -398,7 +395,7 @@ export class BotEngine {
                         if (currentPrice && !isNaN(currentPrice) && currentPrice > 0) {
                             pos.currentPrice = currentPrice;
                             const currentValue = pos.shares * currentPrice;
-                            const investedValue = pos.shares * pos.entryPrice;
+                            const investedValue = pos.investedValue || (pos.shares * pos.entryPrice);
                             pos.investedValue = investedValue;
                             pos.unrealizedPnL = currentValue - investedValue;
                             pos.unrealizedPnLPercent = investedValue > 0 
@@ -409,26 +406,6 @@ export class BotEngine {
                         // Log error but continue with other positions
                         const errorMessage = e instanceof Error ? e.message : 'Unknown error';
                         this.addLog('warn', `Error updating position ${pos.marketId}: ${errorMessage}`);
-                    }
-                }
-            }
-            
-            // Update position monitoring with auto-cashout
-            if (this.positionMonitor) {
-                const activeMarketIds = new Set(this.activePositions.map(p => p.marketId));
-                
-                // Stop monitoring closed positions
-                this.positionMonitor.getActivePositions()
-                    .filter(p => !activeMarketIds.has(p.marketId))
-                    .forEach(p => this.positionMonitor?.stopMonitoring(p.marketId));
-                
-                // Start monitoring new positions with auto-cashout config
-                for (const position of this.activePositions) {
-                    if (!this.positionMonitor.getActivePositions().some(p => p.marketId === position.marketId)) {
-                        await this.positionMonitor.startMonitoring({
-                            ...position,
-                            autoCashout: this.getAutoCashoutConfig()
-                        } as ActivePosition);
                     }
                 }
             }
@@ -589,7 +566,8 @@ export class BotEngine {
             
             if (success) {
                 const exitValue = position.shares * currentPrice;
-                const costBasis = position.shares * position.entryPrice;
+                // FIX: Ensure costBasis is retrieved correctly from the position's known investment
+                const costBasis = position.investedValue || (position.shares * position.entryPrice);
                 const realizedPnl = exitValue - costBasis;
 
                 if (this.callbacks?.onTradeComplete) {
@@ -615,7 +593,8 @@ export class BotEngine {
                 if (position.tradeId && !position.tradeId.startsWith('imported')) {
                     await Trade.findByIdAndUpdate(position.tradeId, {
                         status: 'CLOSED',
-                        pnl: realizedPnl
+                        pnl: realizedPnl,
+                        executedSize: exitValue
                     });
                 }
 
@@ -1192,9 +1171,14 @@ export class BotEngine {
                             if (idx !== -1) {
                                 const closingPos = this.activePositions[idx];
                                 const exitValue = result.executedAmount;
-                                const realizedPnl = exitValue - (closingPos.shares * closingPos.entryPrice);
+                                const costBasis = closingPos.investedValue || (closingPos.shares * closingPos.entryPrice);
+                                const realizedPnl = exitValue - costBasis;
 
-                                await Trade.findByIdAndUpdate(closingPos.tradeId, { status: 'CLOSED', pnl: realizedPnl });
+                                await Trade.findByIdAndUpdate(closingPos.tradeId, { 
+                                    status: 'CLOSED', 
+                                    pnl: realizedPnl,
+                                    executedSize: exitValue
+                                });
                                 
                                 if (this.callbacks?.onTradeComplete) {
                                     await this.callbacks.onTradeComplete({
@@ -1203,7 +1187,7 @@ export class BotEngine {
                                         marketId: closingPos.marketId,
                                         outcome: closingPos.outcome,
                                         side: 'SELL',
-                                        size: closingPos.shares * closingPos.entryPrice,
+                                        size: costBasis,
                                         executedSize: exitValue,
                                         price: result.priceFilled || signal.price,
                                         pnl: realizedPnl,

@@ -1,5 +1,5 @@
 
-import { BrowserProvider, Contract, parseUnits, parseEther, Eip1193Provider } from 'ethers';
+import { BrowserProvider, Contract, formatUnits, parseUnits, parseEther, Eip1193Provider } from 'ethers';
 import { createWalletClient, custom, WalletClient } from 'viem';
 import { polygon } from 'viem/chains';
 
@@ -138,27 +138,36 @@ export class Web3Service {
   /**
    * Deposits any ERC20 token (USDC Native or Bridged)
    */
-  async depositErc20(toAddress: string, amount: string, tokenAddress: string): Promise<string> {
-      if (!this.provider) {
-          this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
-      }
-      
-      await this.switchToChain(137);
-      this.signer = await this.provider.getSigner();
+  // In web3.service.ts, update the depositErc20 method to ensure proper handling of USDC.e transfers
+    async depositErc20(toAddress: string, amount: string, tokenAddress: string): Promise<string> {
+        if (!this.provider) {
+            this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
+        }
+        
+        await this.switchToChain(137);
+        this.signer = await this.provider.getSigner();
 
-      const tokenContract = new Contract(tokenAddress, USDC_ABI, this.signer);
-      const decimals = await tokenContract.decimals();
-      const amountUnits = parseUnits(amount, decimals);
-      
-      try {
-          const tx = await tokenContract.transfer(toAddress, amountUnits);
-          await tx.wait();
-          return tx.hash;
-      } catch (e: any) {
-          console.error("Deposit ERC20 Failed:", e);
-          throw this.parseError(e);
-      }
-  }
+        // Create the token contract instance
+        const tokenContract = new Contract(tokenAddress, USDC_ABI, this.signer);
+        const decimals = await tokenContract.decimals();
+        const amountUnits = parseUnits(amount, decimals);
+        
+        try {
+            // Check balance first to provide better error messages
+            const balance = await tokenContract.balanceOf(await this.signer.getAddress());
+            if (balance < amountUnits) {
+                throw new Error(`Insufficient balance. Available: ${formatUnits(balance, decimals)}`);
+            }
+
+            // For USDC.e (bridged), we need to ensure we're interacting with the correct contract
+            const tx = await tokenContract.transfer(toAddress, amountUnits);
+            await tx.wait();
+            return tx.hash;
+        } catch (e: any) {
+            console.error("Deposit ERC20 Failed:", e);
+            throw this.parseError(e);
+        }
+    }
 
   /**
    * Deposits Native Token (POL/MATIC)

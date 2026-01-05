@@ -82,4 +82,22 @@ export interface ActivePosition {
   marketActive?: boolean;
   marketClosed?: boolean;
   marketArchived?: boolean;
+  // Resolution and Metadata
+  isResolved?: boolean; // Whether the market has been resolved
+  updatedAt?: Date; // When the position metadata was last updated
+  // Additional metadata fields for display
+  description?: string;
+  category?: string;
+  resolutionSource?: string;
+  resolutionTime?: string;
+  winningOutcome?: 'YES' | 'NO' | 'INVALID' | 'CANCELED';
+  // Trading status
+  isTradable?: boolean;
+  // Volume and liquidity metrics
+  volume24h?: number;
+  openInterest?: number;
+  // Additional metadata for UI
+  metadata?: {
+    [key: string]: any; // Flexible metadata storage
+  };
 }

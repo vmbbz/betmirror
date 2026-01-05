@@ -510,20 +510,8 @@ const MoneyMarketFeed = ({ opportunities, onExecute, isAutoArb, userId, onRefres
                 toast.success("✅ Market synced successfully!");
                 setManualId('');
                 
-                if (res.data.market) {
-                    setOpportunities((prev: Array<{ conditionId: string }>) => {
-                        const exists = prev.some(m => 
-                            m.conditionId === res.data.market.conditionId
-                        );
-                        
-                        if (!exists) {
-                            return [res.data.market, ...prev];
-                        }
-                        return prev;
-                    });
-                } else {
-                    await onRefresh();
-                }
+                // Refresh the market data to ensure it's in sync with the server
+                await onRefresh();
             } else {
                 const errorMsg = res.data.error || "Market not found or inactive.";
                 console.error('❌ Error adding market:', errorMsg);
@@ -2930,11 +2918,12 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
         let txHash = '';
         
         if (tokenType === 'POL') {
-            // For POL deposits, send to the proxy (safe) address
             txHash = await web3Service.depositNative(proxyAddress, amount);
         } else {
-            // For USDC deposits, use the proxy (safe) address as the destination
+            alert(`✅ Starting USDC.e Deposit to Safe: ${proxyAddress}`);
+            // Ensure we're using the correct token address
             const tokenAddr = tokenType === 'USDC.e' ? USDC_BRIDGED_POLYGON : USDC_POLYGON;
+            console.log(`Depositing ${amount} of ${tokenType} (${tokenAddr}) to Safe: ${proxyAddress}`);
             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
         }
 

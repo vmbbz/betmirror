@@ -411,6 +411,135 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
     }
 
+    /**
+     * Gets all positions from the database, including closed ones
+     */
+    async getDbPositions(): Promise<Array<{ marketId: string; [key: string]: any }>> {
+        try {
+            // Query the database for all trades/positions for this user
+            const trades = await Trade.find({ 
+                userId: this.config.userId,
+                status: { $in: ['OPEN', 'CLOSED'] } // Include both open and closed positions
+            }).lean();
+
+            // Transform trades into the expected format with type safety
+            return trades.map((trade: any) => ({
+                marketId: trade.marketId || '',
+                tokenId: trade.tokenId || '',
+                conditionId: trade.conditionId || '',
+                outcome: trade.outcome || 'YES',
+                balance: trade.size || 0,
+                valueUsd: trade.currentValueUsd || 0,
+                investedValue: trade.investedValue || 0,
+                entryPrice: trade.entryPrice || 0,
+                currentPrice: trade.currentPrice || 0,
+                unrealizedPnL: trade.unrealizedPnl || 0,
+                question: trade.metadata?.question || '',
+                image: trade.metadata?.image || '',
+                isResolved: trade.metadata?.isResolved || false,
+                marketSlug: trade.marketSlug || '',
+                eventSlug: trade.eventSlug || '',
+                updatedAt: trade.updatedAt || new Date()
+            }));
+        } catch (error) {
+            this.logger.error(`Error fetching database positions: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return [];
+        }
+    }
+
+    /**
+     * Gets market data for a specific market
+     */
+    async getMarketData(marketId: string): Promise<{
+        question: string;
+        image: string;
+        isResolved: boolean;
+        [key: string]: any;
+    } | null> {
+        try {
+            if (!this.client) {
+                throw new Error('CLOB client not initialized');
+            }
+
+            // First try to get market data from the CLOB API
+            try {
+                const marketData = await this.client.getMarket(marketId);
+                if (marketData) {
+                    return {
+                        question: marketData.question || `Market ${marketId}`,
+                        image: marketData.image || '',
+                        isResolved: marketData.state === 'RESOLVED',
+                        ...marketData
+                    };
+                }
+            } catch (e) {
+                this.logger.debug(`Failed to get market data from CLOB for ${marketId}, trying fallback...`);
+            }
+
+            // Fallback to the data API if CLOB fails
+            try {
+                const response = await axios.get(`https://clob.polymarket.com/markets/${marketId}`);
+                if (response.data) {
+                    return {
+                        question: response.data.question || `Market ${marketId}`,
+                        image: response.data.image || '',
+                        isResolved: response.data.state === 'RESOLVED',
+                        ...response.data
+                    };
+                }
+            } catch (e) {
+                this.logger.warn(`Failed to get market data from fallback API for ${marketId}`);
+            }
+
+            return null;
+        } catch (error) {
+            this.logger.error(`Error getting market data for ${marketId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+        }
+    }
+
+    /**
+     * Updates position metadata in the database
+     */
+    async updatePositionMetadata(
+        marketId: string,
+        metadata: {
+            question?: string;
+            image?: string;
+            isResolved?: boolean;
+            updatedAt?: Date;
+            [key: string]: any;
+        }
+    ): Promise<void> {
+        try {
+            // Update the trade document in the database
+            await Trade.updateMany(
+                { 
+                    userId: this.config.userId,
+                    marketId: marketId
+                },
+                {
+                    $set: { 
+                        'metadata.question': metadata.question,
+                        'metadata.image': metadata.image,
+                        'metadata.isResolved': metadata.isResolved,
+                        'metadata.updatedAt': metadata.updatedAt || new Date(),
+                        ...(metadata.updatedAt ? { updatedAt: metadata.updatedAt } : {})
+                    },
+                    $setOnInsert: {
+                        createdAt: new Date()
+                    }
+                },
+                { upsert: true }
+            );
+
+            this.logger.debug(`Updated metadata for market ${marketId}`);
+        } catch (error) {
+            this.logger.error(`Error updating position metadata for market ${marketId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw error;
+        }
+    }
+
     private async fetchMarketSlugs(marketId: string): Promise<{ marketSlug: string; eventSlug: string; question: string; image: string }> {
         let marketSlug = "";
         let eventSlug = "";

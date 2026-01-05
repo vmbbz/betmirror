@@ -118,4 +118,33 @@ export interface IExchangeAdapter {
     getFunderAddress(): string;
     getCurrentPrice(tokenId: string): Promise<number>;
     redeemPosition(conditionId: string, tokenId: string): Promise<{ success: boolean; amountUsd?: number; txHash?: string; error?: string }>;
+    
+    /**
+     * Gets all positions from the database, including closed ones
+     */
+    getDbPositions(): Promise<Array<{ marketId: string; [key: string]: any }>>;
+    
+    /**
+     * Gets market data for a specific market
+     */
+    getMarketData(marketId: string): Promise<{
+        question: string;
+        image: string;
+        isResolved: boolean;
+        [key: string]: any;
+    } | null>;
+    
+    /**
+     * Updates position metadata in the database
+     */
+    updatePositionMetadata(
+        marketId: string, 
+        metadata: {
+            question?: string;
+            image?: string;
+            isResolved?: boolean;
+            updatedAt?: Date;
+            [key: string]: any;
+        }
+    ): Promise<void>;
 }

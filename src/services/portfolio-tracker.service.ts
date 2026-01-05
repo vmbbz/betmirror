@@ -30,23 +30,104 @@ export class PortfolioTrackerService {
     await this.syncPositions();
   }
 
-  async syncPositions(): Promise<void> {
+  /**
+   * Updates metadata for all positions, including closed ones
+   */
+  private async updateAllPositionsMetadata(positions: ActivePosition[]): Promise<void> {
     try {
-      const positions = await this.adapter.getPositions(this.walletAddress);
-      this.allocatedCapital = positions.reduce((sum, pos) => sum + (pos.valueUsd || 0), 0);
+      // Get all market IDs from the database
+      const dbPositions = await this.adapter.getDbPositions();
+      const activeMarketIds = new Set(positions.map((p: ActivePosition) => p.marketId));
+      
+      // Combine active and database positions to ensure we update all
+      const allMarketIds = new Set([...activeMarketIds, ...dbPositions.map((p: { marketId: string }) => p.marketId)]);
+      
+      this.logger.info(`[Portfolio] Updating metadata for ${allMarketIds.size} positions`);
+      
+      // Update metadata for all positions
+      for (const marketId of allMarketIds) {
+        try {
+          const marketData = await this.adapter.getMarketData(marketId);
+          if (marketData) {
+            await this.adapter.updatePositionMetadata(marketId, {
+              question: marketData.question,
+              image: marketData.image,
+              isResolved: marketData.isResolved,
+              updatedAt: new Date()
+            });
+            
+            // If this is an active position, update the in-memory data
+            if (activeMarketIds.has(marketId)) {
+              const position = positions.find((p: ActivePosition) => p.marketId === marketId);
+              if (position) {
+                position.question = marketData.question;
+                position.image = marketData.image;
+                position.isResolved = marketData.isResolved;
+              }
+            }
+          }
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          this.logger.error(`Failed to update metadata for position ${marketId}: ${errorMessage}`, error instanceof Error ? error : undefined);
+        }
+      }
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Error in updateAllPositionsMetadata: ${errorMessage}`, error instanceof Error ? error : undefined);
+    }
+  }
+
+  async syncPositions(forceMetadataUpdate = false): Promise<void> {
+    try {
+      // Get current positions from the exchange
+      const positionData = await this.adapter.getPositions(this.walletAddress);
+      
+      // Convert PositionData[] to ActivePosition[]
+      const activePositions: ActivePosition[] = positionData.map(posData => ({
+        tradeId: `tracker-${posData.marketId}-${Date.now()}`,
+        marketId: posData.marketId,
+        conditionId: posData.conditionId,
+        tokenId: posData.tokenId,
+        outcome: posData.outcome as 'YES' | 'NO',
+        entryPrice: posData.entryPrice,
+        currentPrice: posData.currentPrice,
+        shares: posData.balance,
+        valueUsd: posData.valueUsd,
+        sizeUsd: posData.investedValue || posData.valueUsd,
+        pnl: posData.unrealizedPnL,
+        pnlPercentage: posData.unrealizedPnLPercent,
+        lastUpdated: Date.now(),
+        timestamp: Date.now(),
+        question: posData.question,
+        image: posData.image,
+        marketSlug: posData.marketSlug,
+        eventSlug: posData.eventSlug,
+        // Set default values for required fields
+        investedValue: posData.investedValue || posData.valueUsd,
+        // Add any additional fields from PositionData that map to ActivePosition
+        ...(posData as any) // Spread any additional properties that might be present
+      }));
+      
+      this.allocatedCapital = activePositions.reduce((sum, pos) => sum + (pos.valueUsd || 0), 0);
       
       // Update positions map and token ID mapping
       this.positions = new Map();
       this.positionTokenIds = new Map();
       
-      for (const pos of positions) {
+      for (const pos of activePositions) {
         this.positions.set(pos.marketId, pos.valueUsd || 0);
         if (pos.tokenId) {
           this.positionTokenIds.set(pos.marketId, pos.tokenId);
         }
       }
       
-      this.logger.info(`[Portfolio] Synced ${positions.length} positions. Allocated: $${this.allocatedCapital.toFixed(2)}`);
+      // Update metadata for all positions, including closed ones
+      await this.updateAllPositionsMetadata(activePositions);
+      
+      this.logger.info(`[Portfolio] Synced ${activePositions.length} positions. Allocated: $${this.allocatedCapital.toFixed(2)}`);
+      
+      // Notify listeners about the position update
+      await this.notifyPositionsUpdate();
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`Failed to sync positions: ${errorMessage}`, error instanceof Error ? error : undefined);

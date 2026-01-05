@@ -732,7 +732,7 @@ export class BotEngine {
                     await adapter?.cancelAllOrders();
                 }
                 // Keep engine running but pause this specific scanner if needed
-                // For now, we follow user request to NOT stop the whole bot
+                // For now, we dont stop the whole bot
             });
 
             // 2. Auto Merge: If we have equal YES and NO, free up USDCe

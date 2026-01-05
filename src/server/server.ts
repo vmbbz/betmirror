@@ -247,6 +247,15 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
     try {
         let user = await User.findOne({ address: normId });
         
+        // Prevent new wallet creation in development
+        if ((!user || !user.tradingWallet || !user.tradingWallet.address) && 
+            (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'local')) {
+            console.warn(`[ACTIVATION BLOCKED] New wallet generation blocked in development mode for ${normId}`);
+            return res.status(400).json({ 
+                error: 'New wallet creation is disabled in development mode. Use an existing wallet or set NODE_ENV=production' 
+            });
+        }
+
         if (user && user.tradingWallet && user.tradingWallet.address) {
             console.log(`[ACTIVATION] User ${normId} already has wallet.`);
             
@@ -256,13 +265,12 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
             user.tradingWallet.type = 'GNOSIS_SAFE';
             await user.save();
 
-            res.json({ 
+            return res.json({ 
                 success: true, 
                 address: user.tradingWallet.address,
                 safeAddress: safeAddr,
                 restored: true 
             });
-            return;
         }
 
         console.log(`[ACTIVATION] Generating NEW keys for ${normId}...`);
@@ -292,8 +300,11 @@ app.post('/api/wallet/activate', async (req: any, res: any) => {
             safeAddress: safeAddr
         });
     } catch (e: any) {
-        console.error("[ACTIVATION DB ERROR]", e);
-        res.status(500).json({ error: e.message || 'Failed to activate' });
+        console.error("[ACTIVATION ERROR]", e);
+        res.status(500).json({ 
+            error: e.message || 'Failed to activate',
+            details: process.env.NODE_ENV === 'development' ? e.stack : undefined
+        });
     }
 });
 

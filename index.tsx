@@ -1172,10 +1172,12 @@ const WithdrawalModal = ({
                                     </div>
                                 )}
 
-                                <div className="glass-panel p-8 rounded-xl border border-gray-200 dark:border-white/10 text-center">
+                                <div className="p-4 bg-blue-50 dark:bg-blue-900/10 rounded-xl border border-blue-200 dark:border-blue-900/30 flex justify-between items-center">
                                     <div>
-                                        <div className="font-bold text-gray-900 dark:text-white">POL (Gas)</div>
-                                        <div className="text-xs text-gray-500">Network Token</div>
+                                        <div className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                            POL (MATIC) <span className="bg-blue-200 dark:bg-blue-900 text-blue-800 dark:text-blue-300 text-[8px] px-1.5 py-0.5 rounded">NATIVE</span>
+                                        </div>
+                                        <div className="text-xs text-gray-500">Network Gas Token</div>
                                     </div>
                                     <div className="text-right">
                                         <div className="font-mono font-bold text-gray-900 dark:text-white">{balances.native}</div>
@@ -1184,7 +1186,7 @@ const WithdrawalModal = ({
                                             disabled={isWithdrawing || parseFloat(balances.native) <= 0}
                                             className="text-[10px] text-blue-600 hover:underline disabled:opacity-50 disabled:no-underline font-bold mt-1"
                                         >
-                                            WITHDRAW
+                                            WITHDRAW ALL
                                         </button>
                                     </div>
                                 </div>

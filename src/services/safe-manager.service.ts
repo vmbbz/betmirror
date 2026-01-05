@@ -270,8 +270,14 @@ export class SafeManagerService {
         ];
 
         // Get current balance to determine reasonable allowance
+        // Using 10,000 USDC as default max allowance (10,000 * 1e6 = 10,000,000,000)
+        const DEFAULT_MAX_ALLOWANCE = 10_000_000_000n; // 10,000 USDC in wei (6 decimals)
         const currentBalance = await this.checkBalance(TOKENS.USDC_BRIDGED);
-        const minAllowance = currentBalance > 0n ? currentBalance * 2n : 1000000n; // 1 USDC minimum if balance is 0
+        
+        // If balance is 0, use default max allowance, otherwise use 2x current balance
+        const minAllowance = currentBalance > 0n 
+            ? currentBalance * 2n 
+            : DEFAULT_MAX_ALLOWANCE;
 
         for (const spender of usdcSpenders) {
             const allowance = await this.checkAllowance(TOKENS.USDC_BRIDGED, spender.addr);

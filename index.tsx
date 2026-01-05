@@ -2698,6 +2698,7 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
         } else {
             // Determine Token Address based on selection
             const tokenAddr = tokenType === 'USDC.e' ? USDC_BRIDGED_POLYGON : USDC_POLYGON;
+            // Parameters: toAddress, amount, tokenAddress
             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
         }
 
@@ -2757,11 +2758,13 @@ const handleSwapDirection = () => {
 };
 
 const handleGetBridgeQuote = async () => {
-    if (!bridgeAmount || !recipientAddress) return;
+    if (!bridgeAmount) return;
     setBridgeQuote(null);
     try {
         let senderAddress = userAddress;
-        // Special Handling for Solana
+        let targetRecipientAddress = recipientAddress;
+        
+        // Handle Solana as source chain
         if (selectedSourceChain === 1151111081099710) {
             try {
                 const solAddress = await web3Service.getSolanaAddress();
@@ -2774,6 +2777,24 @@ const handleGetBridgeQuote = async () => {
             }
         } else {
             setSenderAddressDisplay(userAddress);
+        }
+        
+        // Handle Solana as destination chain
+        if (selectedDestChain === 1151111081099710 && !targetRecipientAddress) {
+            try {
+                const solAddress = await web3Service.getSolanaAddress();
+                if (solAddress) {
+                    targetRecipientAddress = solAddress;
+                    setRecipientAddress(solAddress);
+                }
+            } catch (e) {
+                console.warn("Could not get Solana wallet address:", e);
+            }
+        }
+        
+        if (!targetRecipientAddress) {
+            alert("Please enter a valid recipient address");
+            return;
         }
 
         const fromToken = lifiService.getTokenAddress(selectedSourceChain, bridgeToken as any);

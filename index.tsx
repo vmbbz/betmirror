@@ -236,11 +236,13 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
   isBookmarking = false
 }) => {
     const spreadCents = (opp.spread * 100).toFixed(1);
-    const marketLink = opp.marketSlug 
-        ? `https://polymarket.com/market/${opp.marketSlug}`
-        : opp.marketId 
-            ? `https://polymarket.com/market/${opp.marketId}`
-            : null;
+    const marketLink = opp.eventSlug 
+        ? `https://polymarket.com/event/${opp.eventSlug}`
+        : opp.marketSlug 
+            ? `https://polymarket.com/market/${opp.marketSlug}`
+            : opp.marketId 
+                ? `https://polymarket.com/market/${opp.marketId}`
+                : null;
     const [isHovered, setIsHovered] = useState(false);
     const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
 

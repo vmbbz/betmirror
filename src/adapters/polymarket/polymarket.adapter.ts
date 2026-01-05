@@ -10,7 +10,7 @@ import { OrderBook, PositionData } from '../../domain/market.types.js';
 import { TradeSignal, TradeHistoryEntry } from '../../domain/trade.types.js';
 import { ClobClient, Chain, OrderType, Side } from '@polymarket/clob-client';
 import { Wallet as WalletV6, JsonRpcProvider, Contract, formatUnits, Interface, ethers } from 'ethers';
-import { Wallet as WalletV5, providers as providersV5 } from 'ethers-v5'; // V5 for SDK
+import { Wallet as WalletV5, providers as providersV5 } from 'ethers-v5';
 import { EvmWalletService } from '../../services/evm-wallet.service.js';
 import { SafeManagerService } from '../../services/safe-manager.service.js';
 import { TradingWalletConfig, L2ApiCredentials } from '../../domain/wallet.types.js';
@@ -27,6 +27,51 @@ enum SignatureType {
     EOA = 0,
     POLY_PROXY = 1,
     POLY_GNOSIS_SAFE = 2
+}
+
+// ============================================
+// INTERFACES FOR MARKET DATA & POSITIONS
+// ============================================
+
+interface MarketSlugs {
+    marketSlug: string;
+    eventSlug: string;
+    question: string;
+    image: string;
+    conditionId: string;
+    acceptingOrders: boolean;
+    closed: boolean;
+}
+
+interface EnrichedPositionData {
+    marketId: string;
+    conditionId: string;
+    tokenId: string;
+    outcome: string;
+    balance: number;
+    valueUsd: number;
+    investedValue: number;
+    entryPrice: number;
+    currentPrice: number;
+    unrealizedPnL: number;
+    question: string;
+    image: string;
+    marketSlug: string;
+    eventSlug: string;
+    isResolved: boolean;
+    acceptingOrders: boolean;
+    updatedAt?: Date;
+}
+
+interface MarketMetadata {
+    question: string;
+    image: string;
+    isResolved: boolean;
+    acceptingOrders?: boolean;
+    marketSlug?: string;
+    eventSlug?: string;
+    updatedAt?: Date;
+    [key: string]: any;
 }
 
 export interface PolymarketAdapterConfig {
@@ -198,7 +243,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
             return 0;
         }
 
-        // Check if market is tradeable before attempting to fetch price
         const isTradeable = await this.isMarketTradeable(marketId);
         if (!isTradeable) {
             this.logger.debug(`Market ${marketId} is not tradeable, returning 0 as price`);
@@ -206,18 +250,15 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
 
         try {
-            // First try to get the price directly
             const priceRes = await this.client.getPrice(tokenId, side);
             return parseFloat(priceRes.price) || 0;
         } catch (e: any) {
-            // If direct price fails, try to get the midpoint
             try {
                 const mid = await this.client.getMidpoint(tokenId);
                 return parseFloat(mid.mid) || 0;
             } catch (midErr: any) {
                 const errorMessage = midErr instanceof Error ? midErr.message : 'Unknown error';
                 
-                // Handle 404 specifically
                 if (midErr.response?.status === 404 || errorMessage.includes('404') || 
                     errorMessage.includes('No orderbook') || errorMessage.includes('not found')) {
                     this.logger.warn(`No orderbook exists for token ${tokenId} - returning 0 as price`);
@@ -271,12 +312,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
         const now = Date.now();
         const lastCheck = this.lastTokenIdCheck.get(tokenId) || 0;
         
-        // If we've recently checked this token ID and it was invalid, skip
         if (this.invalidTokenIds.has(tokenId) && (now - lastCheck < this.TOKEN_ID_CHECK_COOLDOWN)) {
             return false;
         }
         
-        // Reset the invalid status if cooldown has passed
         if (this.invalidTokenIds.has(tokenId)) {
             this.invalidTokenIds.delete(tokenId);
         }
@@ -327,7 +366,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
             return this.getEmptyOrderBook();
         }
 
-        // Check if market is tradeable before attempting to fetch order book
         const isTradeable = await this.isMarketTradeable(tokenId);
         if (!isTradeable) {
             this.logger.debug(`Market ${tokenId} is not tradeable, returning empty order book`);
@@ -351,7 +389,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
         } catch (error: any) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             
-            // Handle 404 specifically
             if (error.response?.status === 404 || errorMessage.includes('404') || errorMessage.includes('No orderbook')) {
                 this.logger.warn(`No orderbook exists for token ${tokenId} - market may be closed/resolved`);
                 this.invalidTokenIds.add(tokenId);
@@ -411,32 +448,86 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
     }
 
+    // ============================================
+    // POSITION & MARKET DATA METHODS (POLISHED)
+    // ============================================
+
+    /**
+     * Fetches market slugs and metadata from CLOB + Gamma APIs
+     * Uses conditionId as the primary identifier
+     */
+    private async fetchMarketSlugs(conditionId: string): Promise<MarketSlugs> {
+        const result: MarketSlugs = {
+            marketSlug: '',
+            eventSlug: '',
+            question: '',
+            image: '',
+            conditionId: conditionId,
+            acceptingOrders: true,
+            closed: false
+        };
+        
+        if (!this.client || !conditionId) return result;
+
+        // Step 1: Get market data from CLOB API using conditionId
+        try {
+            const marketData = await this.client.getMarket(conditionId);
+            if (marketData) {
+                result.marketSlug = marketData.market_slug || '';
+                result.question = marketData.question || '';
+                result.image = marketData.image || '';
+                result.acceptingOrders = marketData.accepting_orders ?? true;
+                result.closed = marketData.closed || false;
+            }
+        } catch (e) {
+            this.logger.debug(`Error fetching CLOB market data for ${conditionId}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+        
+        // Step 2: Get event slug from Gamma API using market_slug
+        if (result.marketSlug) {
+            try {
+                const gammaUrl = `https://gamma-api.polymarket.com/markets/slug/${result.marketSlug}`;
+                const gammaResponse = await fetch(gammaUrl);
+                if (gammaResponse.ok) {
+                    const gammaData = await gammaResponse.json();
+                    if (gammaData.events?.length > 0) {
+                        result.eventSlug = gammaData.events[0]?.slug || '';
+                    }
+                }
+            } catch (e) {
+                this.logger.debug(`Error fetching Gamma event slug for ${result.marketSlug}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            }
+        }
+        
+        return result;
+    }
+
     /**
      * Gets all positions from the database, including closed ones
+     * Returns enriched position data with proper slugs for URL construction
      */
-    async getDbPositions(): Promise<Array<{ marketId: string; [key: string]: any }>> {
+    async getDbPositions(): Promise<EnrichedPositionData[]> {
         try {
-            // Query the database for all trades/positions for this user
             const trades = await Trade.find({ 
                 userId: this.config.userId,
-                status: { $in: ['OPEN', 'CLOSED'] } // Include both open and closed positions
+                status: { $in: ['OPEN', 'CLOSED'] }
             }).lean();
 
-            // Transform trades into the expected format with type safety
             return trades.map((trade: any) => ({
-                marketId: trade.marketId || '',
+                marketId: trade.conditionId || trade.marketId || '',
+                conditionId: trade.conditionId || trade.marketId || '',
                 tokenId: trade.tokenId || '',
-                conditionId: trade.conditionId || '',
                 outcome: trade.outcome || 'YES',
-                balance: trade.size || 0,
-                valueUsd: trade.currentValueUsd || 0,
-                investedValue: trade.investedValue || 0,
-                entryPrice: trade.entryPrice || 0,
-                currentPrice: trade.currentPrice || 0,
-                unrealizedPnL: trade.unrealizedPnl || 0,
+                balance: parseFloat(trade.size) || 0,
+                valueUsd: parseFloat(trade.currentValueUsd) || 0,
+                investedValue: parseFloat(trade.investedValue) || 0,
+                entryPrice: parseFloat(trade.entryPrice) || 0,
+                currentPrice: parseFloat(trade.currentPrice) || 0,
+                unrealizedPnL: parseFloat(trade.unrealizedPnl) || 0,
                 question: trade.metadata?.question || '',
                 image: trade.metadata?.image || '',
                 isResolved: trade.metadata?.isResolved || false,
+                acceptingOrders: trade.metadata?.acceptingOrders ?? true,
                 marketSlug: trade.marketSlug || '',
                 eventSlug: trade.eventSlug || '',
                 updatedAt: trade.updatedAt || new Date()
@@ -448,208 +539,168 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     /**
-     * Gets market data for a specific market
+     * Gets market data for a specific market using conditionId
+     * Returns enriched metadata including slugs for proper URL construction
      */
-    async getMarketData(marketId: string): Promise<{
-        question: string;
-        image: string;
-        isResolved: boolean;
-        [key: string]: any;
-    } | null> {
+    async getMarketData(conditionId: string): Promise<MarketMetadata | null> {
         try {
             if (!this.client) {
                 throw new Error('CLOB client not initialized');
             }
 
-            // First try to get market data from the CLOB API
-            try {
-                const marketData = await this.client.getMarket(marketId);
-                if (marketData) {
-                    return {
-                        question: marketData.question || `Market ${marketId}`,
-                        image: marketData.image || '',
-                        isResolved: marketData.state === 'RESOLVED',
-                        ...marketData
-                    };
-                }
-            } catch (e) {
-                this.logger.debug(`Failed to get market data from CLOB for ${marketId}, trying fallback...`);
+            // Fetch full market metadata including slugs
+            const marketSlugs = await this.fetchMarketSlugs(conditionId);
+            
+            if (marketSlugs.question || marketSlugs.marketSlug) {
+                return {
+                    question: marketSlugs.question || `Market ${conditionId.slice(0, 10)}...`,
+                    image: marketSlugs.image || '',
+                    isResolved: marketSlugs.closed,
+                    acceptingOrders: marketSlugs.acceptingOrders,
+                    marketSlug: marketSlugs.marketSlug,
+                    eventSlug: marketSlugs.eventSlug,
+                    conditionId: conditionId
+                };
             }
 
-            // Fallback to the data API if CLOB fails
+            // Fallback to direct CLOB endpoint if fetchMarketSlugs returned empty
             try {
-                const response = await axios.get(`https://clob.polymarket.com/markets/${marketId}`);
+                const response = await axios.get(`https://clob.polymarket.com/markets/${conditionId}`);
                 if (response.data) {
                     return {
-                        question: response.data.question || `Market ${marketId}`,
+                        question: response.data.question || `Market ${conditionId.slice(0, 10)}...`,
                         image: response.data.image || '',
-                        isResolved: response.data.state === 'RESOLVED',
-                        ...response.data
+                        isResolved: response.data.closed || response.data.state === 'RESOLVED',
+                        acceptingOrders: response.data.accepting_orders ?? true,
+                        marketSlug: response.data.market_slug || '',
+                        eventSlug: '',
+                        conditionId: conditionId
                     };
                 }
             } catch (e) {
-                this.logger.warn(`Failed to get market data from fallback API for ${marketId}`);
+                this.logger.warn(`Failed to get market data from fallback API for ${conditionId}`);
             }
 
             return null;
         } catch (error) {
-            this.logger.error(`Error getting market data for ${marketId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            this.logger.error(`Error getting market data for ${conditionId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
             return null;
         }
     }
 
     /**
      * Updates position metadata in the database
+     * Uses conditionId as the primary identifier for consistency
      */
     async updatePositionMetadata(
-        marketId: string,
-        metadata: {
-            question?: string;
-            image?: string;
-            isResolved?: boolean;
-            updatedAt?: Date;
-            [key: string]: any;
-        }
+        conditionId: string,
+        metadata: MarketMetadata
     ): Promise<void> {
         try {
-            // Update the trade document in the database
             await Trade.updateMany(
                 { 
                     userId: this.config.userId,
-                    marketId: marketId
+                    $or: [
+                        { conditionId: conditionId },
+                        { marketId: conditionId }
+                    ]
                 },
                 {
                     $set: { 
                         'metadata.question': metadata.question,
                         'metadata.image': metadata.image,
                         'metadata.isResolved': metadata.isResolved,
+                        'metadata.acceptingOrders': metadata.acceptingOrders,
                         'metadata.updatedAt': metadata.updatedAt || new Date(),
-                        ...(metadata.updatedAt ? { updatedAt: metadata.updatedAt } : {})
-                    },
-                    $setOnInsert: {
-                        createdAt: new Date()
+                        marketSlug: metadata.marketSlug,
+                        eventSlug: metadata.eventSlug,
+                        conditionId: conditionId,
+                        updatedAt: new Date()
                     }
                 },
-                { upsert: true }
+                { upsert: false }
             );
 
-            this.logger.debug(`Updated metadata for market ${marketId}`);
+            this.logger.debug(`Updated metadata for market ${conditionId}`);
         } catch (error) {
-            this.logger.error(`Error updating position metadata for market ${marketId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            this.logger.error(`Error updating position metadata for ${conditionId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
             throw error;
         }
     }
 
-    private async fetchMarketSlugs(marketId: string): Promise<{ marketSlug: string; eventSlug: string; question: string; image: string }> {
-        let marketSlug = "";
-        let eventSlug = "";
-        let question = marketId;
-        let image = "";
-        
-        if (this.client && marketId) {
-            try {
-                // First check if market is tradeable before attempting to fetch
-                const isTradeable = await this.isMarketTradeable(marketId);
-                if (!isTradeable) {
-                    this.logger.debug(`Market ${marketId} is not tradeable, skipping market data fetch`);
-                    return { marketSlug, eventSlug, question, image };
-                }
-
-                const marketData = await this.client.getMarket(marketId);
-                if (marketData) {
-                    marketSlug = marketData.market_slug || "";
-                    question = marketData.question || question;
-                    image = marketData.image || image;
-                }
-            } catch (e) {
-                this.logger.warn(`Error fetching market data for ${marketId}: ${e instanceof Error ? e.message : 'Unknown error'}`);
-            }
-        }
-        
-        if (marketSlug) {
-            try {
-                const gammaUrl = `https://gamma-api.polymarket.com/markets/slug/${marketSlug}`;
-                const gammaResponse = await fetch(gammaUrl);
-                if (gammaResponse.ok) {
-                    const marketData = await gammaResponse.json();
-                    if (marketData.events && marketData.events.length > 0) {
-                        eventSlug = marketData.events[0]?.slug || "";
-                    }
-                }
-            } catch (e) {
-                this.logger.warn(`Error fetching event slug for market ${marketId}: ${e instanceof Error ? e.message : 'Unknown error'}`);
-            }
-        }
-        
-        return { marketSlug, eventSlug, question, image };
-    }
-
-    async getPositions(address: string): Promise<PositionData[]> {
+    /**
+     * Gets positions from Data API with enriched metadata
+     * Fetches live prices and proper slugs for URL construction
+     */
+    async getPositions(address: string): Promise<EnrichedPositionData[]> {
         try {
             const url = `https://data-api.polymarket.com/positions?user=${address}`;
             const res = await axios.get(url);
             if (!Array.isArray(res.data)) return [];
             
-            const positions = [];
+            const positions: EnrichedPositionData[] = [];
+            
             for (const p of res.data) {
                 const size = parseFloat(p.size) || 0;
                 if (size <= 0.01) continue;
                 
-                const marketId = p.market || p.conditionId;
-                const conditionId = p.conditionId || p.asset;
-                const tokenId = p.asset;
+                // Data API returns: conditionId, asset (tokenId), outcome, size, price, avgPrice
+                const conditionId = p.conditionId || '';
+                const tokenId = p.asset || '';
+                const outcome = p.outcome || 'YES';
                 
+                // Get current price - prefer live midpoint
                 let currentPrice = parseFloat(p.price) || 0;
                 if (currentPrice === 0 && this.client && tokenId) {
                     try {
-                        // Check if market is tradeable before attempting to get midpoint
                         const isTradeable = await this.isMarketTradeable(conditionId);
                         if (isTradeable) {
                             const mid = await this.client.getMidpoint(tokenId);
                             currentPrice = parseFloat(mid.mid) || 0;
-                        } else {
-                            currentPrice = parseFloat(p.avgPrice) || 0.5;
-                            this.logger.debug(`Market ${conditionId} is not tradeable, using avg price: ${currentPrice}`);
                         }
                     } catch (e: any) {
                         const errorMessage = e instanceof Error ? e.message : 'Unknown error';
                         if (e.response?.status === 404 || errorMessage.includes('404') || 
                             errorMessage.includes('No orderbook') || errorMessage.includes('not found')) {
-                            this.logger.warn(`No orderbook exists for token ${tokenId} - using avg price`);
+                            this.logger.debug(`No orderbook for token ${tokenId}, using avgPrice`);
                             this.invalidTokenIds.add(tokenId);
                             this.lastTokenIdCheck.set(tokenId, Date.now());
-                        } else {
-                            this.logger.error(`Error getting midpoint for token ${tokenId}: ${errorMessage}`);
                         }
-                        currentPrice = parseFloat(p.avgPrice) || 0.5;
                     }
                 }
                 
-                const entryPrice = parseFloat(p.avgPrice) || currentPrice || 0.5;
+                // Fallback to avgPrice if still no price
+                const entryPrice = parseFloat(p.avgPrice) || 0.5;
+                if (currentPrice === 0) currentPrice = entryPrice;
+                
+                // Calculate values
                 const currentValueUsd = size * currentPrice;
                 const investedValueUsd = size * entryPrice;
                 const unrealizedPnL = currentValueUsd - investedValueUsd;
                 
-                const { marketSlug, eventSlug, question, image } = await this.fetchMarketSlugs(marketId);
+                // Fetch rich metadata (slugs, question, image)
+                const metadata = await this.fetchMarketSlugs(conditionId);
                 
                 positions.push({
-                    marketId: marketId,
+                    marketId: conditionId,
                     conditionId: conditionId,
                     tokenId: tokenId,
-                    outcome: p.outcome || 'UNK',
+                    outcome: outcome,
                     balance: size,
                     valueUsd: currentValueUsd,
                     investedValue: investedValueUsd,
                     entryPrice: entryPrice,
                     currentPrice: currentPrice,
                     unrealizedPnL: unrealizedPnL,
-                    question: question,
-                    image: image,
-                    marketSlug: marketSlug,
-                    eventSlug: eventSlug,
-                    clobOrderId: tokenId
+                    question: metadata.question || `Market ${conditionId.slice(0, 10)}...`,
+                    image: metadata.image,
+                    marketSlug: metadata.marketSlug,
+                    eventSlug: metadata.eventSlug,
+                    isResolved: metadata.closed,
+                    acceptingOrders: metadata.acceptingOrders
                 });
             }
+            
             return positions;
         } catch (e: any) {
             const errorMessage = e instanceof Error ? e.message : 'Unknown error';

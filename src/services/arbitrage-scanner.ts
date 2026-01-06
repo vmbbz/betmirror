@@ -792,9 +792,12 @@ export class MarketMakingScanner extends EventEmitter {
      * Get bookmarked opportunities
      */
     getBookmarkedOpportunities(): MarketOpportunity[] {
-        return this.opportunities.filter(o => 
-            this.bookmarkedMarkets.has(o.conditionId)
-        );
+        return this.opportunities
+            .filter(o => this.bookmarkedMarkets.has(o.conditionId))
+            .map(opp => ({
+                ...opp,
+                isBookmarked: true  // Ensure the isBookmarked flag is set
+            }));
     }
 
     /**

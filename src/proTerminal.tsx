@@ -1,12 +1,10 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
-  Activity, Crosshair, Zap, Scale, Terminal, Trash2, ShieldCheck, 
-  Loader2, PlusCircle, Search, Star, Globe, Trophy, 
-  TrendingUp, Settings, Lock, LayoutDashboard, 
-  ArrowUpCircle, ArrowDownCircle, ExternalLink, RefreshCw,
-  Coins, LineChart, Timer, BarChart4, Cpu
+  Activity, Crosshair, Zap, Scale, Terminal, ShieldCheck, 
+  Loader2, Search, Globe, Trophy, 
+  TrendingUp, ExternalLink, RefreshCw,
+  Coins, Landmark, Star, BarChart3, PlusCircle
 } from 'lucide-react';
-import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import { toast } from 'react-toastify';
 import axios from 'axios';
 import { ActivePosition } from './domain/trade.types.js';
@@ -15,7 +13,6 @@ import { UserStats } from './domain/user.types.js';
 
 type TabValue = "dashboard" | "money-market" | "marketplace" | "history" | "vault" | "bridge" | "system" | "help";
 
-// Format numbers to compact form (1K, 1M, 1B, etc.)
 const formatCompactNumber = (num: number): string => {
   if (num < 1000) return num.toString();
   if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
@@ -23,18 +20,17 @@ const formatCompactNumber = (num: number): string => {
   return (num / 1000000000).toFixed(1) + 'B';
 };
 
-// --- Sub-Component: Inventory Skew Meter (MM Intelligence) ---
 const InventorySkewMeter = ({ skew }: { skew: number }) => {
   const isLong = skew >= 0;
   return (
-    <div className="space-y-2 mt-3">
-      <div className="flex justify-between text-[10px] font-black uppercase tracking-tighter">
-        <span className="text-gray-500">Inventory Skew</span>
+    <div className="space-y-2 mt-4 bg-black/40 p-3 rounded-xl border border-white/5">
+      <div className="flex justify-between text-[8px] font-black uppercase tracking-widest">
+        <span className="text-gray-500">Skew</span>
         <span className={isLong ? 'text-emerald-500' : 'text-rose-500'}>
           {isLong ? 'YES' : 'NO'} {Math.abs(skew * 100).toFixed(0)}%
         </span>
       </div>
-      <div className="h-2 bg-white/5 rounded-full overflow-hidden relative">
+      <div className="h-1 bg-white/10 rounded-full overflow-hidden relative">
         <div className="absolute inset-y-0 left-1/2 w-px bg-white/20 z-10"></div>
         <div 
           className={`h-full transition-all duration-700 ${isLong ? 'bg-emerald-500' : 'bg-rose-500'}`}
@@ -48,33 +44,133 @@ const InventorySkewMeter = ({ skew }: { skew: number }) => {
   );
 };
 
-// --- Sub-Component: Enhanced Sidebar Opportunity Card ---
-const SidebarOpportunityCard = ({ opp, onExecute, holdings }: any) => {
-    const spreadCents = (opp.spread * 100).toFixed(1);
-    return (
-        <div 
-            onClick={() => onExecute(opp)}
-            className={`flex items-center gap-4 p-4 bg-black/40 rounded-2xl border transition-all cursor-pointer group ${
-                holdings ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-white/5 hover:border-blue-500/40 hover:bg-white/5'
-            }`}
-        >
-            <div className="w-12 h-12 rounded-xl bg-gray-900 border border-white/5 overflow-hidden shrink-0">
-                <img src={opp.image} className="w-full h-full object-cover grayscale-[50%] group-hover:grayscale-0 transition-all" />
+// --- Sub-Component: The Scout Card (High-Fidelity Texture) ---
+const ScoutMarketCard = ({ 
+  opp, 
+  onExecute, 
+  onBookmark,
+  holdings,
+  isBookmarking = false
+}: { 
+  opp: ArbitrageOpportunity, 
+  onExecute: (o: any) => void,
+  onBookmark: (id: string, state: boolean) => void,
+  holdings?: ActivePosition,
+  isBookmarking?: boolean
+}) => {
+  const isHighVol = opp.isVolatile || (opp.lastPriceMovePct !== undefined && opp.lastPriceMovePct > 3);
+  const movePct = opp.lastPriceMovePct?.toFixed(1) || '0.0';
+  const spreadCents = (opp.spread * 100).toFixed(1);
+
+  return (
+    <div className={`relative group glass-panel rounded-3xl border transition-all duration-300 hover:-translate-y-1 overflow-hidden ${
+      holdings ? 'border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.15)]' : 'border-white/5 hover:border-blue-500/50'
+    } ${isHighVol ? 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : ''}`}>
+      
+      {/* Volatility Badge */}
+      {isHighVol && (
+          <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600 text-white text-[10px] font-black px-3 py-1 rounded-full flex items-center gap-1 z-30 shadow-lg">
+              <Zap className="w-3 h-3" fill="currentColor" /> 
+              FLASH MOVE: {movePct}%
+          </div>
+      )}
+
+      {/* Market Image Container (H-40 for Texture) */}
+      <div className="relative h-40 bg-gray-100 dark:bg-gray-800 overflow-hidden">
+          {opp.image ? (
+              <img
+                  src={opp.image}
+                  alt={opp.question}
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+              />
+          ) : (
+              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-900/20 to-black">
+                  <BarChart3 className="w-12 h-12 text-gray-700" />
+              </div>
+          )}
+          
+          <div className="absolute top-2 left-2 z-30">
+              <button 
+                onClick={(e) => { e.stopPropagation(); onBookmark(opp.marketId, !opp.isBookmarked); }}
+                className={`p-2 rounded-full backdrop-blur-md transition-all ${opp.isBookmarked ? 'bg-yellow-500/20 text-yellow-500' : 'bg-black/40 text-gray-400 hover:text-white'}`}
+              >
+                  {isBookmarking ? <Loader2 size={14} className="animate-spin" /> : <Star size={14} fill={opp.isBookmarked ? 'currentColor' : 'none'} />}
+              </button>
+          </div>
+
+          <div className="absolute top-2 right-2 flex items-center space-x-1 z-10">
+              {opp.category && (
+                  <span className="px-2 py-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-full text-[9px] font-black text-gray-300 uppercase tracking-widest">
+                      {opp.category}
+                  </span>
+              )}
+          </div>
+
+          {/* Quick Trade Hover Overlay (Texture Restore) */}
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 z-20">
+              <button
+                  onClick={() => onExecute(opp)}
+                  className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-xl transition-all hover:scale-105 mb-4"
+              >
+                  Quick Capture
+              </button>
+              <a 
+                href={`https://polymarket.com/market/${opp.marketSlug || opp.marketId}`}
+                target="_blank"
+                className="text-[10px] text-gray-400 hover:text-white uppercase font-black tracking-widest flex items-center gap-2"
+              >
+                Polymarket <ExternalLink size={10}/>
+              </a>
+          </div>
+      </div>
+
+      <div className="p-5 space-y-4">
+          <h3 className="text-[13px] font-black text-white leading-tight line-clamp-2 h-10 tracking-tight uppercase">
+              {opp.question}
+          </h3>
+
+          <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-white/[0.02] border border-white/5 rounded-2xl">
+                  <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest mb-1">Spread ROI</p>
+                  <p className="text-sm font-mono font-black text-blue-400">{spreadCents}¢</p>
+              </div>
+              <div className="p-3 bg-white/[0.02] border border-white/5 rounded-2xl">
+                  <p className="text-[8px] font-black text-gray-500 uppercase tracking-widest mb-1">Liquidity</p>
+                  <p className="text-sm font-mono font-black text-white">${formatCompactNumber(opp.liquidity || 0)}</p>
+              </div>
+          </div>
+
+          {holdings && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-1.5">
+                   <ShieldCheck size={12}/> {holdings.shares.toFixed(0)} Shares Active
+                </span>
+              </div>
+              <InventorySkewMeter skew={holdings.inventorySkew || 0} />
             </div>
-            <div className="flex-1 min-w-0">
-                <p className="text-[11px] font-bold text-white truncate uppercase tracking-tight leading-tight mb-1">{opp.question}</p>
-                <p className="text-[10px] font-black text-blue-500 font-mono">{spreadCents}¢ Spread</p>
-            </div>
-            {holdings && <ShieldCheck size={18} className="text-emerald-500"/>}
-        </div>
-    );
+          )}
+
+          <button
+              onClick={() => onExecute(opp)}
+              className={`w-full py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${
+                  holdings 
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white' 
+                  : 'bg-white/5 hover:bg-white text-gray-400 hover:text-black border border-white/10'
+              }`}
+          >
+              {holdings ? 'Adjust Strategy' : 'Dispatch HFT Engine'}
+          </button>
+      </div>
+    </div>
+  );
 };
 
 export interface ProTerminalProps {
   userId: string;
   stats: UserStats | null;
   activePositions: ActivePosition[];
-  logs: any[];
+  logs: any[]; // FIX: Added to match index.tsx requirements
   moneyMarketOpps: ArbitrageOpportunity[];
   isRunning: boolean;
   onRefresh: (force?: boolean) => Promise<void>;
@@ -87,269 +183,170 @@ export interface ProTerminalProps {
 
 const ProTerminal: React.FC<ProTerminalProps> = ({ 
   userId, 
-  stats, 
+  stats,
   activePositions, 
-  logs, 
+  logs,
   moneyMarketOpps,
-  isRunning,
   onRefresh,
   handleExecuteMM,
-  handleSyncPositions,
   openDepositModal,
   openWithdrawModal,
-  setActiveTab
+  handleSyncPositions
 }) => {
-  const [activeCategory, setActiveCategory] = useState('all');
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastHftPulse, setLastHftPulse] = useState(Date.now());
+    const [activeCategory, setActiveCategory] = useState('all');
+    const [manualId, setManualId] = useState('');
+    const [scanning, setScanning] = useState(false);
+    const [bookmarkedMarkets, setBookmarkedMarkets] = useState<Set<string>>(new Set());
+    const [isBookmarking, setIsBookmarking] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    if (logs.length > 0 && logs[0].message.includes('FILLED')) {
-      setLastHftPulse(Date.now());
-    }
-  }, [logs]);
-
-  const filteredOpps = useMemo(() => {
-    if (activeCategory === 'all') return moneyMarketOpps;
-    return moneyMarketOpps.filter((o: any) => o.category?.toLowerCase() === activeCategory.toLowerCase());
-  }, [moneyMarketOpps, activeCategory]);
-
-  const handlePhysicalRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await axios.post('/api/bot/refresh', { userId });
-      await onRefresh();
-      toast.success("HFT Scan Complete");
-    } catch (e) {
-      toast.error("Refresh failed");
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  return (
-    <div className="grid grid-cols-12 gap-8 h-full animate-in fade-in duration-700">
-      
-      {/* LEFT COLUMN: Portfolio Intelligence & Terminal Logs */}
-      <div className="col-span-12 lg:col-span-8 flex flex-col gap-8">
+    const filteredOpps = useMemo(() => {
+        if (!moneyMarketOpps) return [];
         
-        {/* Performance Dashboard */}
-        <div className="glass-panel p-10 rounded-[3rem] border-white/5 relative overflow-hidden shadow-2xl bg-gradient-to-br from-black to-blue-900/10">
-          <div className="absolute top-0 right-0 p-12 opacity-[0.03] text-blue-500 pointer-events-none">
-            <TrendingUp size={300} />
-          </div>
+        const enhanced = moneyMarketOpps.map(opp => ({
+            ...opp,
+            isBookmarked: bookmarkedMarkets.has(opp.marketId) || opp.isBookmarked
+        }));
 
-          <div className="flex justify-between items-center mb-12">
-            <div className="space-y-2">
-              <h2 className="text-2xl font-black text-white uppercase tracking-tighter flex items-center gap-3">
-                <LayoutDashboard size={24} className="text-blue-500"/> Institutional Terminal
-              </h2>
-              <div className="flex items-center gap-4">
-                <p className="text-[11px] text-gray-500 font-bold uppercase tracking-widest">
-                  Bot Engine: <span className={isRunning ? 'text-emerald-500' : 'text-gray-600'}>{isRunning ? 'ACTIVE' : 'STANDBY'}</span>
-                </p>
-                {isRunning && (
-                  <div className="flex items-center gap-2">
-                    <div key={lastHftPulse} className="w-2 h-2 rounded-full bg-blue-500 animate-ping"></div>
-                    <span className="text-[10px] font-black text-blue-500 uppercase">HFT Pulse</span>
-                  </div>
-                )}
+        if (activeCategory === 'bookmarks') {
+            return enhanced.filter(o => o.isBookmarked);
+        }
+        if (activeCategory !== 'all') {
+            return enhanced.filter(o => o.category?.toLowerCase() === activeCategory.toLowerCase());
+        }
+        return enhanced;
+    }, [moneyMarketOpps, activeCategory, bookmarkedMarkets]);
+
+    const handleManualAdd = async () => {
+        if (!manualId) return;
+        setScanning(true);
+        try {
+            // High-Fidelity Logic: Branching based on Slug vs ID
+            const isSlug = !manualId.startsWith('0x');
+            await axios.post('/api/bot/mm/add-market', { userId, [isSlug ? 'slug' : 'conditionId']: manualId });
+            toast.success("✅ HFT Intelligence Synced");
+            setManualId('');
+            onRefresh(true);
+        } catch (e) { toast.error("Sync failed"); }
+        finally { setScanning(false); }
+    };
+
+    const handleBookmark = async (marketId: string, isBookmarked: boolean) => {
+        if (!userId) { toast.error('Please connect wallet'); return; }
+        setIsBookmarking(prev => ({ ...prev, [marketId]: true }));
+        try {
+            await axios.post('/api/bot/mm/bookmark', { userId, marketId, isBookmarked });
+            setBookmarkedMarkets(prev => {
+                const next = new Set(prev);
+                if (isBookmarked) next.add(marketId);
+                else next.delete(marketId);
+                return next;
+            });
+            toast.success(isBookmarked ? "📌 Bookmarked" : "Removed");
+        } catch (e) { toast.error("Bookmark failed"); }
+        finally { setIsBookmarking(prev => ({ ...prev, [marketId]: false })); }
+    };
+
+    return (
+        <div className="space-y-12 animate-in fade-in duration-1000 pb-20">
+            {/* Portfolio Overview */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <div className="glass-panel p-8 rounded-[2rem] border-white/5 bg-gradient-to-br from-black to-blue-900/20">
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Total Equity</p>
+                <h2 className="text-3xl font-black text-white font-mono">${stats?.portfolioValue.toLocaleString() || '0.00'}</h2>
+              </div>
+              <div className="glass-panel p-8 rounded-[2rem] border-white/5 bg-gradient-to-br from-black to-emerald-900/20">
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Realized PnL</p>
+                <h2 className={`text-3xl font-black font-mono ${stats?.totalPnl && stats.totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                  ${stats?.totalPnl?.toFixed(2) || '0.00'}
+                </h2>
+              </div>
+              <div className="glass-panel p-8 rounded-[2rem] border-white/5 bg-gradient-to-br from-black to-amber-900/20">
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Vault Balance</p>
+                <h2 className="text-3xl font-black text-white font-mono">${stats?.cashBalance.toFixed(2) || '0.00'}</h2>
               </div>
             </div>
-            <div className="flex gap-3">
-               <button 
-                onClick={handlePhysicalRefresh}
-                disabled={isRefreshing}
-                className="p-4 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/10 transition-all group"
-              >
-                <RefreshCw size={22} className={`${isRefreshing ? 'animate-spin text-blue-500' : 'text-gray-400 group-hover:text-white'}`} />
-              </button>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-10 relative z-10">
-            <div className="p-8 bg-white/[0.02] border border-white/5 rounded-[2.5rem] group hover:border-blue-500/20 transition-colors">
-              <span className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-3 block">Total Liquidity</span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-black text-white font-mono tracking-tighter">
-                  ${stats?.portfolioValue.toLocaleString() || '0.00'}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-8 bg-white/[0.02] border border-white/5 rounded-[2.5rem] group hover:border-emerald-500/20 transition-colors">
-              <span className="text-[11px] font-black text-emerald-500/50 uppercase tracking-widest mb-3 block flex items-center gap-2">
-                Realized Alpha <Trophy size={12}/>
-              </span>
-              <div className="flex items-baseline gap-2">
-                <span className={`text-4xl font-black font-mono tracking-tighter ${stats?.totalPnl && stats.totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                  ${Math.abs(stats?.totalPnl || 0).toFixed(2)}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-8 bg-white/[0.02] border border-white/5 rounded-[2.5rem] group hover:border-blue-500/20 transition-colors">
-              <span className="text-[11px] font-black text-gray-500 uppercase tracking-widest mb-3 block">Vault Cash</span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-black text-white font-mono tracking-tighter">
-                  ${stats?.cashBalance.toFixed(2) || '0.00'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex gap-6 mt-12">
-            <button onClick={openDepositModal} className="flex-1 py-4 bg-blue-600 hover:bg-blue-700 text-white font-black text-[12px] uppercase tracking-widest rounded-[1.5rem] transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2">
-              <ArrowDownCircle size={18}/> Add Capital
-            </button>
-            <button onClick={openWithdrawModal} className="flex-1 py-4 bg-white/5 hover:bg-white/10 text-white font-black text-[12px] uppercase tracking-widest rounded-[1.5rem] border border-white/10 transition-all flex items-center justify-center gap-2">
-              <ArrowUpCircle size={18}/> Liquidate
-            </button>
-          </div>
-        </div>
-
-        {/* Execution Terminal (Logs) */}
-        <div className="flex-1 glass-panel rounded-[3rem] border-white/5 overflow-hidden flex flex-col min-h-[450px]">
-          <div className="px-8 py-6 border-b border-white/5 bg-black/40 flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <Terminal size={20} className="text-blue-500"/>
-              <span className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em]">HFT Execution Pulse</span>
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto p-8 space-y-2.5 font-mono text-[11px] bg-black/20 custom-scrollbar">
-            {logs.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-gray-700 opacity-20 space-y-6">
-                <Activity size={64}/>
-                <p className="uppercase tracking-[0.4em] font-black text-sm">Awaiting WebSocket Signals...</p>
-              </div>
-            ) : (
-              logs.map((log: any) => (
-                <div key={log.id} className="flex gap-4 animate-in fade-in slide-in-from-left-2 duration-300">
-                  <span className="text-gray-600 shrink-0">[{log.time}]</span>
-                  <span className={`${
-                    log.type === 'error' ? 'text-rose-500' : 
-                    log.type === 'warn' ? 'text-amber-500' : 
-                    log.type === 'success' ? 'text-emerald-500' : 'text-blue-300'
-                  }`}>
-                    {log.message}
-                  </span>
+            {/* Intelligence Scout Header */}
+            <div className="glass-panel p-12 rounded-[3.5rem] border-white/5 bg-gradient-to-br from-blue-600/[0.03] to-transparent shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-12 opacity-[0.02] text-blue-500 pointer-events-none">
+                    <Crosshair size={300} />
                 </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* RIGHT COLUMN: Exposure & Discovery */}
-      <div className="col-span-12 lg:col-span-4 flex flex-col gap-8">
-        
-        {/* Active Risk Exposure */}
-        <div className="glass-panel p-10 rounded-[3rem] border-white/5 flex-1 flex flex-col shadow-2xl max-h-[600px]">
-          <div className="flex items-center justify-between mb-10">
-            <div className="space-y-1.5">
-              <h3 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-3">
-                <Scale size={20} className="text-blue-500"/> Exposure Hub
-              </h3>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Live Inventory Positions</p>
-            </div>
-            <button onClick={handleSyncPositions} className="p-3 hover:bg-white/5 rounded-full transition-colors text-gray-500 hover:text-white">
-              <RefreshCw size={18}/>
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto space-y-5 pr-2 custom-scrollbar">
-            {activePositions.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-gray-700 opacity-20 space-y-6">
-                <Lock size={64}/>
-                <p className="uppercase tracking-[0.2em] font-black text-center text-[11px]">No active inventory<br/>in vault</p>
-              </div>
-            ) : (
-              activePositions.map((pos: ActivePosition) => {
-                const value = (pos.currentPrice || pos.entryPrice) * pos.shares;
-                const cost = pos.entryPrice * pos.shares;
-                const pnl = value - cost;
-                const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
                 
-                return (
-                  <div key={pos.marketId + pos.outcome} className={`p-5 bg-white/[0.02] rounded-[1.5rem] border transition-all hover:border-blue-500/40 ${
-                    pos.managedByMM ? 'border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.1)]' : 'border-white/5'
-                  }`}>
-                    <div className="flex gap-4 mb-4">
-                      <div className="w-12 h-12 rounded-xl bg-gray-900 shrink-0 border border-white/5 overflow-hidden flex items-center justify-center">
-                        {pos.image ? <img src={pos.image} className="w-full h-full object-cover" /> : <Activity size={20} className="text-gray-700"/>}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-black text-white truncate leading-tight uppercase tracking-tight">
-                          {pos.question}
-                        </p>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
-                            pos.outcome === 'YES' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
-                          }`}>
-                            {pos.outcome}
-                          </span>
-                          {pos.managedByMM && (
-                             <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-1.5">
-                                <Zap size={10} fill="currentColor"/> MM Active
-                             </span>
-                          )}
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-10 mb-12 relative z-10">
+                    <div>
+                        <h2 className="text-5xl font-black text-white uppercase tracking-tighter flex items-center gap-6">
+                            <Crosshair className="text-blue-500" size={56}/> Intelligence Scout
+                        </h2>
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.5em] mt-4 ml-1">Autonomous Yield Capture Protocol v4.0</p>
+                    </div>
+
+                    <div className="flex gap-4 w-full lg:w-auto">
+                        <div className="relative flex-1 lg:w-[400px]">
+                            <input 
+                                value={manualId} 
+                                onChange={(e)=>setManualId(e.target.value)} 
+                                placeholder="Sync Market ID or Slug..." 
+                                className="w-full bg-black/40 border border-white/5 rounded-[1.5rem] px-8 py-5 text-xs font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700"
+                            />
+                            <Search className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-700" size={20}/>
                         </div>
-                      </div>
+                        <button 
+                            onClick={handleManualAdd}
+                            className="bg-white text-black px-10 py-5 rounded-[1.5rem] text-[11px] font-black uppercase tracking-widest hover:scale-105 transition-all shadow-2xl shadow-blue-500/10"
+                        >
+                            {scanning ? <Loader2 size={20} className="animate-spin"/> : <PlusCircle size={20} className="inline mr-2" />}
+                            Sync Intelligence
+                        </button>
                     </div>
+                </div>
 
-                    {pos.managedByMM && <InventorySkewMeter skew={pos.inventorySkew || 0} />}
-
-                    <div className="grid grid-cols-2 gap-6 mt-5 border-t border-white/5 pt-4">
-                      <div>
-                        <p className="text-[9px] font-black text-gray-600 uppercase mb-1">Valuation</p>
-                        <p className="text-sm font-mono font-black text-white">${value.toFixed(2)}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[9px] font-black text-gray-600 uppercase mb-1">Performance</p>
-                        <p className={`text-sm font-mono font-black ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                          {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnlPct.toFixed(1)}%)
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Global Discovery Engine */}
-        <div className="glass-panel p-10 rounded-[3rem] border-white/5 bg-gradient-to-br from-blue-600/5 to-transparent flex-1">
-          <div className="flex items-center justify-between mb-10">
-            <div className="space-y-1.5">
-              <h3 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-3">
-                <Crosshair size={20} className="text-blue-500"/> Opportunity Scout
-              </h3>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Yield Captured Markets</p>
+                <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2 relative z-10">
+                    {[
+                        { id: 'all', label: 'All Discovery', icon: <Globe size={14}/> },
+                        { id: 'trending', label: 'Trending', icon: <TrendingUp size={14}/> },
+                        { id: 'sports', label: 'Sports', icon: <Trophy size={14}/> },
+                        { id: 'crypto', label: 'Crypto', icon: <Coins size={14}/> },
+                        { id: 'politics', label: 'Politics', icon: <Landmark size={14}/> },
+                        { id: 'bookmarks', label: 'Bookmarks', icon: <Star size={14}/> }
+                    ].map(cat => (
+                        <button 
+                            key={cat.id}
+                            onClick={() => setActiveCategory(cat.id)}
+                            className={`flex items-center gap-3 px-6 py-3 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${
+                                activeCategory === cat.id ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'
+                            }`}
+                        >
+                            {cat.icon} {cat.label}
+                        </button>
+                    ))}
+                </div>
             </div>
-          </div>
-          <div className="space-y-4 overflow-y-auto h-[400px] custom-scrollbar pr-2">
-            {filteredOpps.length === 0 ? (
-               <div className="h-full flex items-center justify-center text-gray-500 text-xs italic">Seeking high-yield spreads...</div>
-            ) : (
-              filteredOpps.slice(0, 20).map((opp: ArbitrageOpportunity) => {
-                const holdings = activePositions.find(p => p.marketId === opp.marketId);
-                return (
-                  <SidebarOpportunityCard 
-                    key={opp.tokenId} 
-                    opp={opp} 
-                    onExecute={handleExecuteMM} 
-                    holdings={holdings} 
-                  />
-                );
-              })
-            )}
-          </div>
-        </div>
-      </div>
 
-    </div>
-  );
+            {/* Grid Display */}
+            {filteredOpps.length === 0 ? (
+                <div className="py-48 text-center glass-panel rounded-[4rem] border-dashed border-white/10 flex flex-col items-center justify-center space-y-8 grayscale">
+                    <Activity size={80} className="text-gray-800 animate-pulse"/>
+                    <h3 className="text-2xl font-black text-gray-700 uppercase tracking-widest">No Signals in Category: {activeCategory}</h3>
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                    {filteredOpps.map((opp: any) => {
+                        const holdings = activePositions.find(p => p.marketId === opp.marketId);
+                        return (
+                            <ScoutMarketCard 
+                                key={opp.tokenId} 
+                                opp={opp} 
+                                onExecute={handleExecuteMM} 
+                                onBookmark={handleBookmark}
+                                holdings={holdings}
+                                isBookmarking={isBookmarking[opp.marketId]}
+                            />
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
 };
 
 export default ProTerminal;

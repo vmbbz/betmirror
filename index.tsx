@@ -284,143 +284,14 @@ const DiscoveryNav = ({ activeCategory, onCategoryChange, bookmarkCount }: any) 
     );
 };
 
-const EnhancedMarketCard: React.FC<{
-  opp: any;
-  onExecute: (opp: any) => void;
-  onBookmark: (marketId: string, isBookmarked: boolean) => void;
+/* FIX: Explicitly type MoneyMarketFeed props to resolve argument mismatch errors */
+interface MoneyMarketFeedProps {
+  opportunities: ArbitrageOpportunity[];
+  onExecute: (opp: ArbitrageOpportunity) => void;
   isAutoArb: boolean;
   userId?: string;
-  isBookmarking?: boolean;
-}> = ({ opp, onExecute, onBookmark, isAutoArb, userId, isBookmarking = false }) => {
-    const spreadCents = (opp.spread * 100).toFixed(1);
-    const [isHovered, setIsHovered] = useState(false);
-    const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
-
-    const isHighVol = opp.isVolatile || (opp.lastPriceMovePct !== undefined && opp.lastPriceMovePct > 3);
-    const movePct = opp.lastPriceMovePct?.toFixed(1) || '0.0';
-
-    const formatNumber = (num: number = 0) => {
-        if (num >= 1000000) return `$${(num / 1000000).toFixed(1)}M`;
-        if (num >= 1000) return `$${(num / 1000).toFixed(1)}K`;
-        return `$${num.toFixed(2)}`;
-    };
-
-    const handleBookmark = async (e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (!onBookmark || !opp.marketId || isBookmarkLoading) return;
-        setIsBookmarkLoading(true);
-        try {
-            await onBookmark(opp.marketId, !opp.isBookmarked);
-        } finally {
-            setIsBookmarkLoading(false);
-        }
-    };
-
-    return (
-        <div 
-            className={`relative group bg-white dark:bg-gray-900 border rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${
-                isHighVol ? 'border-red-500' : isHovered ? 'border-blue-500' : 'border-gray-200 dark:border-gray-800'
-            }`}
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
-        >
-            <div className="relative h-40 bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                <img src={opp.image || 'https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=2832&auto=format&fit=crop'} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                <div className="absolute top-2 right-2 flex gap-1">
-                    <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-black/50 text-white backdrop-blur-md">
-                        {opp.status?.toUpperCase()}
-                    </span>
-                </div>
-                {isHighVol && (
-                    <div className="absolute bottom-2 left-2 bg-red-600 text-white text-[9px] font-black px-2 py-1 rounded shadow-lg animate-pulse">
-                        FLASH MOVE: {movePct}%
-                    </div>
-                )}
-            </div>
-            <div className="p-4 space-y-4">
-                <div className="flex justify-between items-start gap-2">
-                    <h3 className="font-bold text-sm text-gray-900 dark:text-white line-clamp-2 h-10">{opp.question}</h3>
-                    <button onClick={handleBookmark} className={`p-1.5 rounded-full ${opp.isBookmarked ? 'text-yellow-500' : 'text-gray-400'}`}>
-                        {isBookmarkLoading ? <Loader2 size={14} className="animate-spin"/> : <Star size={16} fill={opp.isBookmarked ? "currentColor" : "none"}/>}
-                    </button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-gray-50 dark:bg-white/5 p-2 rounded-lg">
-                        <p className="text-[10px] text-gray-500 uppercase font-bold">Liquidity</p>
-                        <p className="text-xs font-mono font-bold">{formatNumber(opp.liquidity)}</p>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-white/5 p-2 rounded-lg">
-                        <p className="text-[10px] text-gray-500 uppercase font-bold">Spread</p>
-                        <p className="text-xs font-mono font-bold text-blue-500">{spreadCents}¢</p>
-                    </div>
-                </div>
-                <button onClick={() => onExecute(opp)} className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black uppercase rounded-xl transition-all">
-                    {isAutoArb ? 'Dispatch MM' : 'Trade Now'}
-                </button>
-            </div>
-        </div>
-    );
-};
-
-const MoneyMarketFeed: React.FC<any> = ({ opportunities, onExecute, isAutoArb, userId, onRefresh }) => {
-    const [activeCategory, setActiveCategory] = useState('all');
-    const [manualId, setManualId] = useState('');
-    const [scanning, setScanning] = useState(false);
-
-    const handleManualAdd = async () => {
-        if (!manualId) return;
-        setScanning(true);
-        try {
-            const isSlug = !manualId.startsWith('0x');
-            await axios.post('/api/bot/mm/add-market', { userId, [isSlug ? 'slug' : 'conditionId']: manualId });
-            toast.success("Market Synced");
-            setManualId('');
-            onRefresh();
-        } catch (e) { toast.error("Sync failed"); }
-        finally { setScanning(false); }
-    };
-
-    const handleBookmark = async (marketId: string, isBookmarked: boolean) => {
-        try {
-            await axios.post('/api/bot/mm/bookmark', { userId, marketId, isBookmarked });
-            onRefresh();
-        } catch (e) { toast.error("Bookmark error"); }
-    };
-
-    const filtered = useMemo(() => {
-        if (!opportunities) return [];
-        if (activeCategory === 'all') return opportunities;
-        if (activeCategory === 'bookmarks') return opportunities.filter((o: any) => o.isBookmarked);
-        return opportunities.filter((o: any) => o.category?.toLowerCase() === activeCategory.toLowerCase());
-    }, [opportunities, activeCategory]);
-
-    return (
-        <div className="space-y-6">
-            <div className="glass-panel p-6 rounded-[2rem] border-white/10">
-                <div className="flex flex-col md:flex-row justify-between gap-4 mb-6">
-                    <div>
-                        <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-2">
-                            <Crosshair className="text-blue-500" size={24}/> Intelligence Scout
-                        </h2>
-                        <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mt-1">Real-time yield capture engine</p>
-                    </div>
-                    <div className="flex gap-2">
-                        <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="bg-black/40 border border-white/10 rounded-xl px-4 py-2 text-xs font-mono text-white outline-none w-64"/>
-                        <button onClick={handleManualAdd} className="bg-white text-black px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-2">
-                            {scanning ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>} Sync
-                        </button>
-                    </div>
-                </div>
-                <DiscoveryNav activeCategory={activeCategory} onCategoryChange={setActiveCategory} bookmarkCount={opportunities?.filter((o:any)=>o.isBookmarked).length || 0} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {filtered.map((opp: any) => (
-                    <EnhancedMarketCard key={opp.tokenId} opp={opp} onExecute={onExecute} onBookmark={handleBookmark} isAutoArb={isAutoArb} userId={userId} />
-                ))}
-            </div>
-        </div>
-    );
-};
+  onRefresh: () => Promise<void>;
+}
 
 // --- Types ---
 interface Log {
@@ -3722,22 +3593,23 @@ return (
 
         {/* --- Money Market Tab --- */}
         {activeTab === 'money-market' && (
-            <div className="h-full">
-                <ProTerminal 
-                    userId={userAddress}
-                    stats={stats}
-                    activePositions={activePositions}
-                    logs={logs}
-                    moneyMarketOpps={moneyMarketOpps}
-                    isRunning={isRunning}
-                    onRefresh={() => fetchBotStatus(true)}
-                    handleExecuteMM={handleExecuteMM}
-                    handleSyncPositions={handleSyncPositions}
-                    openDepositModal={openDepositModal}
-                    openWithdrawModal={openWithdrawModal}
-                    setActiveTab={setActiveTab}
-                />
-            </div>
+            <ProTerminal 
+                userId={userAddress}
+                stats={stats}
+                activePositions={activePositions}
+                logs={logs}
+                moneyMarketOpps={moneyMarketOpps}
+                isRunning={isRunning}
+                onRefresh={fetchBotStatus}
+                handleExecuteMM={async (opp) => {
+                    await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
+                    toast.success("Liquidity Mining + HFT Strategy Dispatched");
+                }}
+                handleSyncPositions={() => axios.post('/api/trade/sync', { userId: userAddress, force: true }).then(() => fetchBotStatus())}
+                openDepositModal={() => {}}
+                openWithdrawModal={() => {}}
+                setActiveTab={setActiveTab}
+            />
         )}
         
         {/* BRIDGE */}

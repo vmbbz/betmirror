@@ -2142,7 +2142,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
             <div className="w-full max-w-7xl mx-auto pb-32 px-6 border-t border-gray-200 dark:border-white/5 pt-32">
                 <div className="text-center mb-24">
                     <span className="text-blue-600 dark:text-blue-500 text-xs font-bold uppercase tracking-widest">Dual-Mode Platform</span>
-                    <h2 className="text-4xl md:text-5xl font-black text-gray-900 dark:text-white mt-4 tracking-tight">Copy or Trade Your Way</h2>
+                    <h2 className="text-4xl md:text-5xl font-black text-gray-900 dark:text-white mt-4 tracking-tight">Earn Your Way</h2>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
@@ -2172,7 +2172,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                         </div>
                         <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">3. Prediction Markets Printer</h3>
                         <p className="text-gray-500 text-sm leading-relaxed">
-                            Find the best wallets to copy, or best markets to provide liquidity. Our Node.js engine monitors  and opportunities 24/7 so you can <strong>earn while you sleep</strong>.
+                            Find the Best Wallets to copy, or Rewarding Markets to provide liquidity. Our Node.js engine monitors  and opportunities 24/7 so you can <strong>earn while you sleep</strong>.
                         </p>
                     </div>
                 </div>

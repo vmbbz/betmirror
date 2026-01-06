@@ -1272,21 +1272,34 @@ export class MarketMakingScanner extends EventEmitter {
             this.reconnectTimeout = undefined;
         }
 
-        this.logger.warn('🛑 Scanner stopped');
+        this.logger.warn(' Scanner stopped');
     }
 
     getOpportunities(maxAgeMs = 600000): MarketOpportunity[] {
         const now = Date.now();
-        // Use monitored list as fallback if strict opportunities are few
-        const actionable = this.opportunities.filter(o => now - o.timestamp < maxAgeMs);
-        if (actionable.length < 5) {
-             // Supplement with monitored markets that are active
-             const supplemental = Array.from(this.monitoredMarkets.values())
-                .filter(o => o.status === 'active' && !actionable.some(a => a.tokenId === o.tokenId))
-                .slice(0, 10);
-             return [...actionable, ...supplemental];
+        const maxAge = now - maxAgeMs;
+        
+        // Get fresh opportunities first
+        const actionable = this.opportunities.filter(o => o.timestamp > maxAge);
+        
+        // If we have enough fresh opportunities, return them
+        if (actionable.length >= 5) {
+            return actionable;
         }
-        return actionable;
+        
+        // Otherwise, supplement with monitored markets that are active
+        const supplemental = Array.from(this.monitoredMarkets.values())
+            .filter(o => o.status === 'active' && !actionable.some(a => a.tokenId === o.tokenId))
+            .slice(0, 10);
+            
+        return [...actionable, ...supplemental];
+    }
+    
+    /**
+     * Get all monitored markets (both active and inactive)
+     */
+    getMonitoredMarkets(): MarketOpportunity[] {
+        return Array.from(this.monitoredMarkets.values());
     }
 
     getLatestOpportunities(): MarketOpportunity[] {

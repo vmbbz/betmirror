@@ -2029,8 +2029,8 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                 </h1>
 
                 <p className="text-lg text-gray-500 dark:text-gray-400 font-medium max-w-lg mx-auto leading-relaxed animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
-                    Advanced Copy-Trading & Money-Market Terminal<br/>
-                    Advanced order execution. Smart monitoring. 24/7 Automation.
+                    Polymarket Copy-Trading & Money-Market Terminal<br/>
+                    Advanced discovery. Smart monitoring. 24/7 Automation.
                 </p>
 
                 <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-400 w-full max-w-xs">
@@ -2115,7 +2115,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                             <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full flex items-center justify-center">
                                 <Users size={24} className="text-white" />
                             </div>
-                            <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Polymarket</h3>
+                            <h3 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Copy-Trading</h3>
                         </div>
                         <p className="text-base text-gray-500 dark:text-gray-400 font-medium leading-relaxed mb-6">
                             Mirror top traders or trade manually with advanced order types. Our execution engine ensures optimal fills across all market conditions.
@@ -2170,7 +2170,7 @@ const Landing = ({ onConnect, theme, toggleTheme }: { onConnect: () => void, the
                         <div className="w-16 h-16 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform">
                             <Globe size={32}/>
                         </div>
-                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">3. Prediction Markets Money Printer</h3>
+                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">3. Prediction Markets Printer</h3>
                         <p className="text-gray-500 text-sm leading-relaxed">
                             Find the best wallets to copy, or best markets to provide liquidity. Our Node.js engine monitors  and opportunities 24/7 so you can <strong>earn while you sleep</strong>.
                         </p>

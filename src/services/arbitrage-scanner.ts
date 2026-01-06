@@ -170,6 +170,9 @@ export class MarketMakingScanner extends EventEmitter {
         this.logger.info(`Initialized ${this.bookmarkedMarkets.size} bookmarked markets`);
     }
 
+    // Track active quotes to solve TypeError in server.ts
+    private activeQuoteTokens: Set<string> = new Set();
+
     // Default config (EXTENDED)
     private config: MarketMakerConfig = {
         minSpreadCents: 1, 
@@ -246,6 +249,20 @@ export class MarketMakingScanner extends EventEmitter {
             this.isScanning = false;
             throw err;
         }
+    }
+
+    /**
+     * Implementation of hasActiveQuotes to solve TypeError in server.ts
+     */
+    public hasActiveQuotes(tokenId: string): boolean {
+        return this.activeQuoteTokens.has(tokenId);
+    }
+
+    /**
+     * Updates the internal set of tokens that have active quotes
+     */
+    public setActiveQuotes(tokenIds: string[]): void {
+        this.activeQuoteTokens = new Set(tokenIds);
     }
 
     /**
@@ -1272,7 +1289,7 @@ export class MarketMakingScanner extends EventEmitter {
             this.reconnectTimeout = undefined;
         }
 
-        this.logger.warn(' Scanner stopped');
+        this.logger.warn('🛑 Scanner stopped');
     }
 
     getOpportunities(maxAgeMs = 600000): MarketOpportunity[] {

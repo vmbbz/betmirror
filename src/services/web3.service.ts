@@ -1,4 +1,3 @@
-
 import { BrowserProvider, Contract, formatUnits, parseUnits, parseEther, Eip1193Provider } from 'ethers';
 import { createWalletClient, custom, WalletClient } from 'viem';
 import { polygon } from 'viem/chains';
@@ -24,206 +23,156 @@ export const PROXY_ABI = [
 
 export class Web3Service {
   private provider: BrowserProvider | null = null;
-  private signer: any = null;
   private viemClient: WalletClient | null = null;
 
   async connect(): Promise<string> {
     if (!(window as any).ethereum) {
-      throw new Error("No wallet found. Please install MetaMask, Rabbit, or Coinbase Wallet.");
+      throw new Error("No wallet found. Please install MetaMask or Phantom.");
     }
 
-    // FIX: Use native EIP-1193 request instead of Ethers provider.send() for initial connection.
-    // This prevents "Could not coalesce error" (-32603) when Ethers tries to wrap JSON-RPC errors.
     try {
-        await (window as any).ethereum.request({ method: "eth_requestAccounts" });
+        const accounts = await (window as any).ethereum.request({ method: "eth_requestAccounts" });
+        this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
+        
+        try {
+            await this.switchToChain(137);
+        } catch (e) {
+            console.warn("Auto-switch failed on connect:", e);
+        }
+
+        return accounts[0];
     } catch (e: any) {
-        // Handle common wallet errors explicitly
-        if (e.code === -32002) {
-            throw new Error("Connection request already pending. Please check your wallet extension.");
-        }
-        if (e.code === 4001) {
-            throw new Error("Connection rejected by user.");
-        }
+        if (e.code === -32002) throw new Error("Connection request already pending.");
+        if (e.code === 4001) throw new Error("Connection rejected by user.");
         throw e;
     }
-
-    // Initialize Ethers provider after successful permission grant
-    this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
-    this.signer = await this.provider.getSigner();
-    
-    // Auto-switch to Polygon on connect for best UX
-    try {
-        await this.switchToChain(137);
-    } catch (e) {
-        console.warn("Auto-switch failed on connect (non-critical):", e);
-    }
-
-    return await this.signer.getAddress();
   }
 
-  /**
-   * Returns a Viem Wallet Client (Required for ZeroDev / AA)
-   * Automatically enforces the correct chain context with robust polling.
-   */
   async getViemWalletClient(targetChainId: number = 137): Promise<WalletClient> {
       if (!(window as any).ethereum) throw new Error("No Wallet");
-
       const provider = (window as any).ethereum;
-
-      // 1. Strict Chain Check with Retry
       await this.ensureChain(provider, targetChainId);
-      
       const [account] = await provider.request({ method: 'eth_requestAccounts' });
-          
-      // Always recreate the client to ensure it binds to the freshly switched provider context
-      // Cast to unknown then WalletClient to avoid "Type instantiation is excessively deep" error
       this.viemClient = createWalletClient({
         account,
-        chain: polygon, // ZeroDev expects Polygon
+        chain: polygon,
         transport: custom(provider as any)
       }) as unknown as WalletClient;
-      
       return this.viemClient;
   }
 
-  /**
-   * Polling mechanism to ensure provider is actually on the target chain
-   * preventing 'Provider is not connected to requested chain' errors.
-   */
   private async ensureChain(provider: any, targetChainId: number): Promise<void> {
-      const hexTarget = "0x" + targetChainId.toString(16);
-      
-      // Try up to 5 times to verify chain
-      for (let i = 0; i < 5; i++) {
-          const currentChainIdHex = await provider.request({ method: 'eth_chainId' });
-          if (parseInt(currentChainIdHex, 16) === targetChainId) {
-              return; // We are good
-          }
-
-          if (i === 0 || i === 2) {
-              // Trigger switch on first and third attempt (aggressive retry)
-              await this.switchToChain(targetChainId);
-          }
-          
-          // Wait 500ms before checking again
-          await new Promise(r => setTimeout(r, 500));
+      const currentChainIdHex = await provider.request({ method: 'eth_chainId' });
+      if (parseInt(currentChainIdHex, 16) !== targetChainId) {
+          await this.switchToChain(targetChainId);
       }
-      
-      throw new Error(`Failed to switch network. Please manually switch to Polygon (Chain ID ${targetChainId}) in your wallet.`);
   }
 
   async switchToChain(chainId: number) {
-      if(!this.provider) {
-          this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
-      }
+      const provider = (window as any).ethereum;
+      if (!provider) return;
       
       const hexChainId = "0x" + chainId.toString(16);
-      
       try {
-          await this.provider!.send("wallet_switchEthereumChain", [{ chainId: hexChainId }]);
+          await provider.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: hexChainId }],
+          });
       } catch (switchError: any) {
-          // Error 4902: Chain not added. Add it.
-          // Also catch generic -32603 which sometimes happens on mobile wallets
-          if (switchError.code === 4902 || switchError.code === -32603 || switchError.data?.originalError?.code === 4902 || switchError.message?.includes("Unrecognized chain")) {
+          if (switchError.code === 4902 || switchError.message?.includes("Unrecognized chain")) {
              const chainConfig = this.getChainConfig(chainId);
              if(chainConfig) {
-                 try {
-                    await this.provider!.send("wallet_addEthereumChain", [chainConfig]);
-                 } catch (addError: any) {
-                    throw new Error(`Failed to add network: ${addError.message}`);
-                 }
-             } else {
-                 throw new Error(`Chain ID ${chainId} configuration not found.`);
+                 await provider.request({
+                    method: "wallet_addEthereumChain",
+                    params: [chainConfig],
+                 });
              }
           } else {
-              console.error("Switch Error:", switchError);
               throw switchError;
           }
       }
   }
 
-  /**
-   * Deposits any ERC20 token (USDC Native or Bridged)
-   */
     async depositErc20(toAddress: string, amount: string, tokenAddress: string): Promise<string> {
-        if (!this.provider) {
-            this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
-        }
+        console.log(`[Web3Service] Initiating ERC20 deposit: ${amount} to ${toAddress}`);
         
+        if (!(window as any).ethereum) throw new Error("Wallet not detected");
+        
+        // 1. Ensure fresh provider/signer
+        const browserProvider = new BrowserProvider((window as any).ethereum);
         await this.switchToChain(137);
-        this.signer = await this.provider.getSigner();
+        const signer = await browserProvider.getSigner();
 
-        // Create the token contract instance
-        const tokenContract = new Contract(tokenAddress, USDC_ABI, this.signer);
-        const decimals = await tokenContract.decimals();
-        const amountUnits = parseUnits(amount, decimals);
+        // 2. Setup contract
+        const tokenContract = new Contract(tokenAddress, USDC_ABI, signer);
         
         try {
-            // Check balance first
-            const balance = await tokenContract.balanceOf(await this.signer.getAddress());
+            const decimals = await tokenContract.decimals();
+            const amountUnits = parseUnits(amount, decimals);
+            
+            // 3. Balance Check
+            const balance = await tokenContract.balanceOf(await signer.getAddress());
             if (balance < amountUnits) {
-                throw new Error(`Insufficient balance. Available: ${formatUnits(balance, decimals)}`);
+                throw new Error(`Insufficient balance. You have ${formatUnits(balance, decimals)} USDC`);
             }
 
-            console.log(`Transferring ${amount} tokens to ${toAddress}...`);
-            const tx = await tokenContract.transfer(toAddress, amountUnits);
-            console.log('Transfer transaction hash:', tx.hash);
-            await tx.wait();
-            console.log('Transfer confirmed');
+            // 4. Polygon Gas Optimization
+            // Polygon RPCs often under-estimate gas prices. We fetch current and add a 20% buffer.
+            const feeData = await browserProvider.getFeeData();
+            const gasPrice = feeData.gasPrice ? (feeData.gasPrice * 120n) / 100n : undefined;
+
+            console.log(`[Web3Service] Sending transfer transaction...`);
+            const tx = await tokenContract.transfer(toAddress, amountUnits, {
+                gasPrice: gasPrice
+            });
             
+            console.log(`[Web3Service] Transaction sent: ${tx.hash}. Waiting for confirmation...`);
+            const receipt = await tx.wait();
+            
+            if (receipt.status === 0) throw new Error("Transaction reverted on-chain.");
+            
+            console.log('[Web3Service] Deposit confirmed successfully.');
             return tx.hash;
         } catch (e: any) {
-            console.error("Transfer failed:", e);
+            console.error("[Web3Service] Deposit failed:", e);
             throw this.parseError(e);
         }
     }
-  /**
-   * Deposits Native Token (POL/MATIC)
-   */
-  async depositNative(toAddress: string, amount: string): Promise<string> {
-      if (!this.provider) {
-          this.provider = new BrowserProvider((window as any).ethereum as Eip1193Provider);
-      }
-      
-      await this.switchToChain(137);
-      this.signer = await this.provider.getSigner();
 
-      const amountUnits = parseEther(amount);
+  async depositNative(toAddress: string, amount: string): Promise<string> {
+      if (!(window as any).ethereum) throw new Error("Wallet not detected");
       
+      const browserProvider = new BrowserProvider((window as any).ethereum);
+      await this.switchToChain(137);
+      const signer = await browserProvider.getSigner();
+
       try {
-          const tx = await this.signer.sendTransaction({
+          const amountUnits = parseEther(amount);
+          const feeData = await browserProvider.getFeeData();
+          const gasPrice = feeData.gasPrice ? (feeData.gasPrice * 120n) / 100n : undefined;
+
+          const tx = await signer.sendTransaction({
               to: toAddress,
-              value: amountUnits
+              value: amountUnits,
+              gasPrice: gasPrice
           });
           await tx.wait();
           return tx.hash;
       } catch (e: any) {
-          console.error("Deposit Native Failed:", e);
           throw this.parseError(e);
       }
   }
 
-  // Legacy wrapper for backward compatibility (defaults to Native USDC)
   async deposit(toAddress: string, amount: string): Promise<string> {
       return this.depositErc20(toAddress, amount, USDC_POLYGON);
   }
 
-  /**
-   * Special handling for Solana wallets (Phantom/Backpack)
-   * Returns the Base58 address
-   */
   async getSolanaAddress(): Promise<string | null> {
     try {
-        // Check for Phantom/Solana injection
         const solana = (window as any).solana;
         if (solana) {
-            if (!solana.isConnected) {
-                // Trigger popup if not connected
-                await solana.connect(); 
-            }
-            if (solana.publicKey) {
-                return solana.publicKey.toString();
-            }
+            if (!solana.isConnected) await solana.connect(); 
+            if (solana.publicKey) return solana.publicKey.toString();
         }
         return null;
     } catch (e) {
@@ -238,7 +187,7 @@ export class Web3Service {
           chainId: "0x89",
           chainName: "Polygon Mainnet",
           nativeCurrency: { name: "POL", symbol: "POL", decimals: 18 },
-          rpcUrls: [process.env.RPC_URL || "https://polygon-rpc.com/"],
+          rpcUrls: ["https://polygon-rpc.com/"],
           blockExplorerUrls: ["https://polygonscan.com/"]
       };
       if (chainId === 56) return {
@@ -266,8 +215,10 @@ export class Web3Service {
   }
 
   private parseError(e: any): Error {
-      if (e.code === 'CALL_EXCEPTION' || e.message?.includes('estimateGas') || e.message?.includes('missing revert data')) {
-          return new Error("Transaction failed during gas estimation. You likely have insufficient funds (POL or USDC) on Polygon to cover the transfer.");
+      if (e.code === 'ACTION_REJECTED') return new Error("Transaction rejected in wallet.");
+      if (e.code === 'INSUFFICIENT_FUNDS') return new Error("Insufficient POL (Matic) for gas fees.");
+      if (e.message?.includes('estimateGas') || e.message?.includes('revert')) {
+          return new Error("Transaction would fail. Check your USDC balance and try again.");
       }
       return e;
   }

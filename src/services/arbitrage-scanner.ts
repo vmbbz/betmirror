@@ -67,7 +67,7 @@ export interface MarketOpportunity {
     category?: string;
     featured?: boolean;
     isBookmarked?: boolean;
-    // Volatility metrics
+    // NEW: Volatility metrics
     lastPriceMovePct?: number;
     isVolatile?: boolean;
 }
@@ -140,8 +140,8 @@ export class MarketMakingScanner extends EventEmitter {
     // Core state
     private isScanning = false;
     private isConnected = false;
-    // FIX: Using explicit ws.WebSocket type
     private ws?: WebSocket;
+    private userWs?: WebSocket; // NEW: Private User Channel
     private trackedMarkets: Map<string, TrackedMarket> = new Map();
     private monitoredMarkets: Map<string, MarketOpportunity> = new Map(); // All discovered markets for tab filtering
     private opportunities: MarketOpportunity[] = [];
@@ -169,9 +169,6 @@ export class MarketMakingScanner extends EventEmitter {
         this.bookmarkedMarkets = new Set(bookmarks);
         this.logger.info(`Initialized ${this.bookmarkedMarkets.size} bookmarked markets`);
     }
-
-    // Track active quotes to solve TypeError in server.ts
-    private activeQuoteTokens: Set<string> = new Set();
 
     // Default config (EXTENDED)
     private config: MarketMakerConfig = {
@@ -218,8 +215,9 @@ export class MarketMakingScanner extends EventEmitter {
             
             this.logger.info(`✅ Initial discovery complete. Tracking ${this.trackedMarkets.size} markets`);
             
-            this.logger.info('🔌 Connecting to WebSocket...');
+            this.logger.info('🔌 Connecting to WebSockets (Market + User Channels)...');
             this.connect();
+            this.connectUserChannel(); // NEW: Hook into private fill feed
             
             this.refreshInterval = setInterval(async () => {
                 try {
@@ -249,20 +247,6 @@ export class MarketMakingScanner extends EventEmitter {
             this.isScanning = false;
             throw err;
         }
-    }
-
-    /**
-     * Implementation of hasActiveQuotes to solve TypeError in server.ts
-     */
-    public hasActiveQuotes(tokenId: string): boolean {
-        return this.activeQuoteTokens.has(tokenId);
-    }
-
-    /**
-     * Updates the internal set of tokens that have active quotes
-     */
-    public setActiveQuotes(tokenIds: string[]): void {
-        this.activeQuoteTokens = new Set(tokenIds);
     }
 
     /**
@@ -322,6 +306,16 @@ export class MarketMakingScanner extends EventEmitter {
         this.logger.info('📡 Discovering markets from Gamma API...');
         
         try {
+            // HFT SCOUT: Check sampling markets first for reward eligibility
+            let samplingTokens = new Set<string>();
+            try {
+                const sampling = await this.adapter.getSamplingMarkets?.();
+                if (sampling && Array.isArray(sampling)) {
+                    sampling.forEach(m => samplingTokens.add(m.token_id));
+                    this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools via getSamplingMarkets.`);
+                }
+            } catch (e) {}
+
             // Step 1: Fetch available tags to get tag IDs
             const tagIds = await this.fetchTagIds();
             
@@ -792,12 +786,9 @@ export class MarketMakingScanner extends EventEmitter {
      * Get bookmarked opportunities
      */
     getBookmarkedOpportunities(): MarketOpportunity[] {
-        return this.opportunities
-            .filter(o => this.bookmarkedMarkets.has(o.conditionId))
-            .map(opp => ({
-                ...opp,
-                isBookmarked: true  // Ensure the isBookmarked flag is set
-            }));
+        return this.opportunities.filter(o => 
+            this.bookmarkedMarkets.has(o.conditionId)
+        );
     }
 
     /**
@@ -824,7 +815,7 @@ export class MarketMakingScanner extends EventEmitter {
             this.startPing();
         });
 
-        wsAny.on('message', (data: RawData) => {
+        wsAny.on('message', (data: any) => {
             try {
                 const msg = data.toString();
                 if (msg === 'PONG') return;
@@ -848,6 +839,44 @@ export class MarketMakingScanner extends EventEmitter {
 
         wsAny.on('error', (error: Error) => {
             this.logger.error(`❌ WebSocket error: ${error.message}`);
+        });
+    }
+
+    /**
+     * HFT UPGRADE: Connect to the private User Channel
+     * Listen for ORDER_FILLED events to trigger immediate re-quotes.
+     */
+    private connectUserChannel() {
+        if (!this.isScanning) return;
+        const userWsUrl = `${WS_URLS.CLOB}/ws/user`;
+        this.logger.info(`🔌 Connecting to private User Channel: ${userWsUrl}`);
+        
+        // This requires standard WebSocket logic with Auth Headers or Token
+        // Assuming the adapter has the current valid Auth token
+        this.userWs = new WebSocket(userWsUrl);
+        const wsAny = this.userWs as any;
+
+        wsAny.on('open', () => {
+            this.logger.success('✅ User Channel Connected');
+            // Heartbeat
+        });
+
+        wsAny.on('message', (data: any) => {
+            try {
+                const msg = JSON.parse(data.toString());
+                if (msg.event_type === 'order_filled') {
+                    const tokenId = msg.asset_id;
+                    const market = this.trackedMarkets.get(tokenId);
+                    if (market) {
+                        this.logger.success(`⚡ [HFT FILL] Order filled for ${market.question.slice(0, 20)}... Re-quoting immediately.`);
+                        this.evaluateOpportunity(market);
+                    }
+                }
+            } catch (e) {}
+        });
+        
+        wsAny.on('close', () => {
+            if (this.isScanning) setTimeout(() => this.connectUserChannel(), 5000);
         });
     }
 
@@ -1297,29 +1326,16 @@ export class MarketMakingScanner extends EventEmitter {
 
     getOpportunities(maxAgeMs = 600000): MarketOpportunity[] {
         const now = Date.now();
-        const maxAge = now - maxAgeMs;
-        
-        // Get fresh opportunities first
-        const actionable = this.opportunities.filter(o => o.timestamp > maxAge);
-        
-        // If we have enough fresh opportunities, return them
-        if (actionable.length >= 5) {
-            return actionable;
+        // Use monitored list as fallback if strict opportunities are few
+        const actionable = this.opportunities.filter(o => now - o.timestamp < maxAgeMs);
+        if (actionable.length < 5) {
+             // Supplement with monitored markets that are active
+             const supplemental = Array.from(this.monitoredMarkets.values())
+                .filter(o => o.status === 'active' && !actionable.some(a => a.tokenId === o.tokenId))
+                .slice(0, 10);
+             return [...actionable, ...supplemental];
         }
-        
-        // Otherwise, supplement with monitored markets that are active
-        const supplemental = Array.from(this.monitoredMarkets.values())
-            .filter(o => o.status === 'active' && !actionable.some(a => a.tokenId === o.tokenId))
-            .slice(0, 10);
-            
-        return [...actionable, ...supplemental];
-    }
-    
-    /**
-     * Get all monitored markets (both active and inactive)
-     */
-    getMonitoredMarkets(): MarketOpportunity[] {
-        return Array.from(this.monitoredMarkets.values());
+        return actionable;
     }
 
     getLatestOpportunities(): MarketOpportunity[] {

@@ -327,13 +327,11 @@ export class BotEngine {
         }
 
         try {
-            // Let PortfolioTracker handle the sync
             if (this.portfolioTracker) {
                 await this.portfolioTracker.syncPositions();
                 this.activePositions = this.portfolioTracker.getActivePositions();
             }
             if (forceChainSync) {
-                // Get positions directly from the chain
                 const address = this.exchange.getFunderAddress();
                 if (address) {
                     const chainPositions = await this.exchange.getPositions(address);
@@ -346,7 +344,6 @@ export class BotEngine {
                         const image = p.image || "";
                         const realId = p.clobOrderId || p.marketId;
 
-                        // Update database records if needed
                         const shouldUpdate = marketSlug || eventSlug;
                         if (shouldUpdate) {
                             const updateData: any = {};
@@ -359,7 +356,6 @@ export class BotEngine {
                             );
                         }
 
-                        // Enrich position with metadata
                         const enrichedPosition = await this.enrichPosition({
                             ...p,
                             tradeId: realId,
@@ -374,16 +370,13 @@ export class BotEngine {
                             timestamp: Date.now()
                         });
 
-                        // Update market state
                         await this.updateMarketState(enrichedPosition);
                         enrichedPositions.push(enrichedPosition);
                     }
 
-                    // Update active positions
                     this.activePositions = enrichedPositions;
                 }
             } else {
-                // Regular sync - update existing positions with current prices
                 for (const pos of this.activePositions) {
                     try {
                         const currentPrice = await this.exchange.getMarketPrice(
@@ -403,34 +396,29 @@ export class BotEngine {
                                 : 0;
                         }
                     } catch (e: unknown) {
-                        // Log error but continue with other positions
                         const errorMessage = e instanceof Error ? e.message : 'Unknown error';
                         this.addLog('warn', `Error updating position ${pos.marketId}: ${errorMessage}`);
                     }
                 }
             }
             
-            // Notify listeners
             if (this.callbacks?.onPositionsUpdate) {
                 await this.callbacks.onPositionsUpdate(this.activePositions);
             }
             
-            // Update stats
             await this.syncStats();
 
         } catch (e: any) {
             this.addLog('error', `Sync Positions Failed: ${e.message}\n${e.stack || 'No stack trace available'}`);
-            throw e; // Re-throw to allow callers to handle the error
+            throw e; 
         }
     }
 
     private getAutoCashoutConfig(): AutoCashoutConfig | undefined {
-        // First check the root config
         if (this.config.autoCashout) {
             return this.config.autoCashout;
         }
         
-        // Then check the wallet config
         const walletAutoCashout = (this.config.walletConfig as any)?.autoCashout as AutoCashoutConfig | undefined;
         if (walletAutoCashout?.enabled && walletAutoCashout.destinationAddress) {
             return {
@@ -449,7 +437,6 @@ export class BotEngine {
             if (!this.exchange || !this.config.walletConfig?.address) return;
             
             const cashoutCfg = this.getAutoCashoutConfig();
-            // Ensure all required properties are defined and valid
             if (!cashoutCfg?.enabled || 
                 !cashoutCfg.destinationAddress || 
                 cashoutCfg.sweepThreshold === undefined) {
@@ -459,16 +446,12 @@ export class BotEngine {
             const balance = await this.exchange.fetchBalance(this.config.walletConfig.address);
             if (balance <= 0) return;
             
-            // Only proceed if balance is above the threshold
             if (balance > cashoutCfg.sweepThreshold) {
                 const amountToSweep = balance - cashoutCfg.sweepThreshold;
                 if (amountToSweep <= 0) return;
                 
                 this.addLog('info', `Initiating profit sweep of $${amountToSweep.toFixed(2)} to ${cashoutCfg.destinationAddress}`);
-                
-                // Use the exchange's cashout method to transfer funds
                 await this.exchange.cashout(amountToSweep, cashoutCfg.destinationAddress);
-                
                 this.addLog('success', `Successfully swept $${amountToSweep.toFixed(2)} to ${cashoutCfg.destinationAddress}`);
             }
         } catch (error) {
@@ -487,9 +470,7 @@ export class BotEngine {
             if (!cashoutCfg?.enabled) return;
             
             this.addLog('info', `[AutoCashout] Initiating auto-cashout for position: ${position.marketId} (${reason})`);
-            
-            // Execute the auto-cashout
-            const result = await this.executor.executeManualExit(position, 0); // 0 for market price
+            const result = await this.executor.executeManualExit(position, 0); 
             
             if (result) {
                 this.addLog('success', `Successfully executed auto-cashout for position: ${position.marketId}`);
@@ -504,16 +485,10 @@ export class BotEngine {
 
     private async handleInvalidPosition(marketId: string, reason: string): Promise<void> {
         this.addLog('warn', `Position ${marketId} is invalid: ${reason}. Cleaning up...`);
-        
-        // Update active positions
         this.activePositions = this.activePositions.filter(p => p.marketId !== marketId);
-        
-        // Notify callbacks
         if (this.callbacks?.onPositionsUpdate) {
-            await this.callbacks.onPositionsUpdate([...this.activePositions]);
+            await this.callbacks.onPositionsUpdate(this.activePositions);
         }
-        
-        // Log the cleanup
         this.addLog('info', `Cleaned up position for market ${marketId} due to: ${reason}`);
     }
 
@@ -566,7 +541,6 @@ export class BotEngine {
             
             if (success) {
                 const exitValue = position.shares * currentPrice;
-                // FIX: Ensure costBasis is retrieved correctly from the position's known investment
                 const costBasis = position.investedValue || (position.shares * position.entryPrice);
                 const realizedPnl = exitValue - costBasis;
 
@@ -628,36 +602,32 @@ export class BotEngine {
             success: (m: string) => this.addLog('success', m)
         };
 
-        // Initialize Portfolio Tracker
-        // First, initialize the Position Monitor
         this.positionMonitor = new PositionMonitorService(
             this.exchange,
             this.config.walletConfig?.address || '',
             {
-                checkInterval: 30000, // 30 seconds
-                priceCheckInterval: 60000, // 1 minute
-                orderBookValidationInterval: 3600000 // 1 hour
+                checkInterval: 30000, 
+                priceCheckInterval: 60000, 
+                orderBookValidationInterval: 3600000 
             },
             logger,
             this.handleAutoCashout.bind(this),
             this.handleInvalidPosition.bind(this)
         );
 
-        // Then initialize Portfolio Tracker with the position monitor
         const maxPortfolioAllocation = this.config.maxTradeAmount || 1000;
         this.portfolioTracker = new PortfolioTrackerService(
             this.exchange,
             this.config.walletConfig?.address || '',
-            maxPortfolioAllocation * 10, // 10x max trade amount as buffer
+            maxPortfolioAllocation * 10, 
             logger,
-            this.positionMonitor, // Pass the position monitor instance
+            this.positionMonitor, 
             (positions) => {
                 this.activePositions = positions;
                 return this.callbacks?.onPositionsUpdate?.(positions) || Promise.resolve();
             }
         );
 
-        // Initialize portfolio tracker
         await this.portfolioTracker.initialize();
     }
     
@@ -676,7 +646,6 @@ export class BotEngine {
                 success: (m: string) => { console.log(`${m}`); this.addLog('success', m); }
             };
 
-            // Initialize the exchange first
             this.exchange = new PolymarketAdapter({
                 rpcUrl: this.config.rpcUrl,
                 walletConfig: this.config.walletConfig!,
@@ -691,30 +660,22 @@ export class BotEngine {
             await this.exchange.initialize();
             await this.exchange.authenticate();
 
-            // Now initialize services that depend on the exchange
             await this.initializeServices();
 
-            // Initialize the real-time arbitrage scanner instance (Actually Market Making)
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
             
-            // --- MARKET MAKING EVENT WIREUP ---
-            // 1. Modified: Log spikes but don't stop the engine for normal volatility
             this.arbScanner.on('volatilityAlert', async ({ question, movePct }) => {
                 await this.addLog('warn', `⚡ VOLATILITY ALERT: ${movePct.toFixed(1)}% move on ${question.slice(0, 20)}... Engine continuing execution.`);
             });
 
-            // 2. Kill Switch: Only triggered for extreme safety events (e.g. > 25% move)
             this.arbScanner.on('killSwitch', async ({ reason }) => {
                 await this.addLog('error', `🚨 EMERGENCY STOP: ${reason}`);
                 if (this.executor) {
                     const adapter = this.executor.getAdapter();
                     await adapter?.cancelAllOrders();
                 }
-                // Keep engine running but pause this specific scanner if needed
-                // For now, we dont stop the whole bot
             });
 
-            // 2. Auto Merge: If we have equal YES and NO, free up USDCe
             this.arbScanner.on('mergeOpportunity', async ({ conditionId, amount }) => {
                 await this.addLog('info', `📦 Auto-Merging ${amount} pairs for ${conditionId}`);
                 try {
@@ -730,10 +691,8 @@ export class BotEngine {
                 }
             });
 
-            // 3. Instant Redemption
             this.arbScanner.on('marketResolved', async ({ conditionId, question }) => {
                 await this.addLog('info', `🏁 Market Resolved: ${question}`);
-                // Force a position sync to find winning shares
                 await this.syncPositions(true);
                 const winner = this.activePositions.find(p => p.conditionId === conditionId);
                 if (winner) {
@@ -742,7 +701,6 @@ export class BotEngine {
                 }
             });
 
-            // 4. Standard Quote Signal
             this.arbScanner.on('opportunity', async (opp: MarketOpportunity) => {
                 if (this.callbacks?.onArbUpdate) {
                     const arbOpps = this.arbScanner!.getOpportunities().map(o => ({
@@ -759,7 +717,6 @@ export class BotEngine {
                 }
             });
 
-            // 5. Re-quote on price movement
             this.arbScanner.on('tickSizeChange', async (data) => {
                 const opps = this.arbScanner?.getOpportunities();
                 const target = opps?.find(o => o.tokenId === data.tokenId);
@@ -818,16 +775,13 @@ export class BotEngine {
         if (!this.executor) return false;
         
         const opps = this.arbScanner?.getOpportunities() || [];
-        // Support searching by both conditionId and tokenId for UI resilience
         let target = opps.find(o => o.conditionId === marketId || o.tokenId === marketId);
         
         if (!target) {
             this.addLog('info', `🔍 Fetching direct data for MM Strategy: ${marketId}`);
             try {
-                // If not in scanner, try to find in current tracking
                 const tracked = this.arbScanner?.getTrackedMarket(marketId);
                 if (tracked) {
-                    // Create synthetic opportunity for immediate execution
                     target = {
                         marketId: tracked.conditionId,
                         conditionId: tracked.conditionId,
@@ -954,25 +908,23 @@ export class BotEngine {
         const funder = this.exchange.getFunderAddress();
         if (!funder) throw new Error("Missing funder address.");
 
-        // Initialize PositionMonitorService with order book validation
         this.positionMonitor = new PositionMonitorService(
             this.exchange,
             funder,
             {
-                checkInterval: 30000, // 30 seconds
-                priceCheckInterval: 60000, // 1 minute
-                orderBookValidationInterval: 3600000 // 1 hour
+                checkInterval: 30000, 
+                priceCheckInterval: 60000, 
+                orderBookValidationInterval: 3600000 
             },
             logger,
             this.handleAutoCashout.bind(this),
             this.handleInvalidPosition.bind(this)
         );
 
-        // Initialize PortfolioTracker with PositionMonitor
         this.portfolioTracker = new PortfolioTrackerService(
             this.exchange,
             funder,
-            this.config.maxTradeAmount || 1000, // max allocation
+            this.config.maxTradeAmount || 1000, 
             logger,
             this.positionMonitor,
             (positions) => {
@@ -1017,7 +969,6 @@ export class BotEngine {
 
         const notifier = new NotificationService(this.runtimeEnv, logger);
 
-        // Start monitoring existing positions
         for (const position of this.activePositions) {
             try {
                 await this.positionMonitor.startMonitoring(position);
@@ -1035,7 +986,6 @@ export class BotEngine {
             onDetectedTrade: async (signal: TradeSignal) => {
                 if (!this.isRunning) return;
 
-                // --- MM EXCLUSION ZONE ---
                 const isManagedByMM = this.arbScanner?.getOpportunities().some(o => o.tokenId === signal.tokenId);
                 if (isManagedByMM && this.config.enableAutoArb) {
                     this.addLog('info', `🛡️ Signal Skipped: Market ${signal.marketId.slice(0,8)} is managed by MM Strategy.`);
@@ -1152,7 +1102,7 @@ export class BotEngine {
                                 entryPrice: result.priceFilled || signal.price,
                                 shares: result.executedShares, 
                                 sizeUsd: result.executedAmount,
-                                valueUsd: result.executedAmount, // Initial value same as executedAmount
+                                valueUsd: result.executedAmount, 
                                 investedValue: result.executedAmount,
                                 timestamp: Date.now(),
                                 currentPrice: result.priceFilled || signal.price,
@@ -1230,9 +1180,6 @@ export class BotEngine {
         return this.callbacks;
     }
 
-    /**
-     * Manually add a market to MM scanner by condition ID
-     */
     public async addMarketToMM(conditionId: string): Promise<boolean> {
         if (!this.arbScanner) {
             this.addLog('warn', 'MM Scanner not initialized');
@@ -1241,9 +1188,6 @@ export class BotEngine {
         return this.arbScanner.addMarketByConditionId(conditionId);
     }
 
-    /**
-     * Manually add a market to MM scanner by slug
-     */
     public async addMarketBySlug(slug: string): Promise<boolean> {
         if (!this.arbScanner) {
             this.addLog('warn', 'MM Scanner not initialized');
@@ -1252,30 +1196,18 @@ export class BotEngine {
         return this.arbScanner.addMarketBySlug(slug);
     }
 
-    /**
-     * Bookmark a market for priority tracking
-     */
     public bookmarkMarket(conditionId: string): void {
         this.arbScanner?.bookmarkMarket(conditionId);
     }
 
-    /**
-     * Remove bookmark a market
-     */
     public unbookmarkMarket(conditionId: string): void {
         this.arbScanner?.unbookmarkMarket(conditionId);
     }
 
-    /**
-     * Get bookmarked opportunities
-     */
     public getBookmarkedOpportunities(): ArbitrageOpportunity[] {
         return this.arbScanner?.getBookmarkedOpportunities() || [];
     }
 
-    /**
-     * Get opportunities by category
-     */
     public getOpportunitiesByCategory(category: string): ArbitrageOpportunity[] {
         return this.arbScanner?.getOpportunities()
             .filter(o => o.category === category) || [];

@@ -105,6 +105,11 @@ export interface IExchangeAdapter {
     getOrderBook(tokenId: string): Promise<OrderBook>;
     getLiquidityMetrics?(tokenId: string, side: 'BUY' | 'SELL'): Promise<LiquidityMetrics>;
     getNegRiskMarkets?(): Promise<any[]>;
+    getSamplingMarkets?(): Promise<Array<{
+        token_id: string;
+        market_id: string;
+        rewards_max_spread?: number;
+    }>>;
     getPositions(address: string): Promise<PositionData[]>;
     fetchPublicTrades(address: string, limit?: number): Promise<TradeSignal[]>;
     getTradeHistory(address: string, limit?: number): Promise<TradeHistoryEntry[]>;

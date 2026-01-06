@@ -339,6 +339,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 return false;
             }
 
+            // INSTUCTIONAL: Corrected tradeability check per HFT discussion
             const isTradeable = !!(market && 
                                  market.active && 
                                  !market.closed && 
@@ -445,6 +446,30 @@ export class PolymarketAdapter implements IExchangeAdapter {
             const markets = res.data?.data || [];
             return markets.filter((m: any) => m.neg_risk === true && m.tokens?.length > 1);
         } catch (e) {
+            return [];
+        }
+    }
+
+    /**
+     * Fetches markets that are currently eligible for rewards in the sampling period
+     * @returns Array of markets that are eligible for rewards with their token and market IDs
+     */
+    async getSamplingMarkets(): Promise<Array<{ token_id: string; market_id: string; rewards_max_spread?: number }>> {
+        if (!this.client) throw new Error("Not authenticated");
+        
+        try {
+            const response = await this.client.getSamplingMarkets();
+            // Extract the data array from the pagination response
+            const markets = response?.data || [];
+            
+            return markets.map((market: any) => ({
+                token_id: market.token_id || market.tokenId,
+                market_id: market.market_id || market.conditionId,
+                rewards_max_spread: market.rewards_max_spread || market.maxSpread
+            }));
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+            this.logger.error(`[Scout] Failed to fetch sampling markets: ${errorMessage}`);
             return [];
         }
     }

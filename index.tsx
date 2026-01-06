@@ -22,6 +22,7 @@ import { TradeHistoryEntry, ActivePosition } from './src/domain/trade.types';
 import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/alpha.types';
 import { UserStats } from './src/domain/user.types';
 import { ArbitrageOpportunity } from './src/adapters/interfaces';
+import ProTerminal from './src/proTerminal';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -50,6 +51,85 @@ const CHAIN_NAMES: Record<number, string> = {
     42161: "Arbitrum One",
     56: "BNB Chain",
     1151111081099710: "Solana"
+};
+
+
+// --- Sub-Component: Revenue Tracker Dashboard (Alpha Rewards) ---
+/**
+ * Visualizes the 1% fees earned by the user for listing whales.
+ * Part of the "Lister/Hunter" economy discussed with Polymarket support.
+ */
+const RevenueTracker = ({ userId }: { userId: string }) => {
+  const [earnings, setEarnings] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchRevenue = async () => {
+      try {
+        const res = await axios.get(`/api/registry/${userId}/earnings`);
+        setEarnings(res.data);
+      } catch (e) {
+        console.error("Failed to load revenue tracker", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (userId) fetchRevenue();
+  }, [userId]);
+
+  if (loading) return <div className="p-10 text-center"><Loader2 className="animate-spin mx-auto text-blue-500" /></div>;
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="glass-panel p-8 rounded-3xl border-emerald-500/20 bg-emerald-500/[0.02]">
+          <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-2">Passive Fee Revenue</p>
+          <div className="text-4xl font-black text-white font-mono">${earnings?.totalEarned?.toFixed(2) || '0.00'}</div>
+          <p className="text-xs text-gray-500 mt-2">Aggregated 1% cut from all followers</p>
+        </div>
+        <div className="glass-panel p-8 rounded-3xl border-white/5">
+          <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-2">Active Following</p>
+          <div className="text-4xl font-black text-white font-mono">{earnings?.uniqueCopiers || 0}</div>
+          <p className="text-xs text-gray-500 mt-2">Wallets mirroring your discoveries</p>
+        </div>
+        <div className="glass-panel p-8 rounded-3xl border-white/5">
+          <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-2">Total Fee Events</p>
+          <div className="text-4xl font-black text-white font-mono">{earnings?.totalTrades || 0}</div>
+          <p className="text-xs text-gray-500 mt-2">Total times you printed money from alpha</p>
+        </div>
+      </div>
+
+      <div className="glass-panel rounded-3xl border-white/5 overflow-hidden">
+        <div className="px-6 py-4 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
+          <h3 className="text-xs font-black text-white uppercase tracking-widest">Incoming Reward Feed</h3>
+          <span className="text-[10px] text-emerald-500 font-bold uppercase animate-pulse">Live Tracking Enabled</span>
+        </div>
+        <div className="max-h-[400px] overflow-y-auto p-4 space-y-2 custom-scrollbar">
+          {earnings?.recentEarnings?.length > 0 ? (
+            earnings.recentEarnings.map((e: any, idx: number) => (
+              <div key={idx} className="flex justify-between items-center p-4 bg-white/[0.01] border border-white/[0.03] rounded-2xl hover:bg-white/[0.03] transition-colors">
+                <div className="flex items-center gap-4">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-500">
+                    <DollarSign size={16} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-white uppercase">1% Alpha Fee Captured</div>
+                    <div className="text-[10px] text-gray-500 font-mono">Whale: {e.sourceWallet.slice(0,10)}...</div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-black text-emerald-500">+${e.hunterFeeUsd.toFixed(2)}</div>
+                  <div className="text-[9px] text-gray-600 uppercase">{new Date(e.timestamp).toLocaleDateString()}</div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="py-20 text-center text-gray-600 text-xs italic">No rewards detected. List a whale in the Marketplace to start earning fees.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // --- Performance Chart Component ---
@@ -2341,21 +2421,20 @@ const [userAddress, setUserAddress] = useState<string>('');
 const [chainId, setChainId] = useState<number>(137);
 
 const [proxyAddress, setProxyAddress] = useState<string>('');
-// NEW: Track Signer Address separately for rescue missions
+// Track Signer Address separately for rescue missions
 const [signerAddress, setSignerAddress] = useState<string>('');
 
 // --- STATE: Balances ---
 const [mainWalletBal, setMainWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 // This is now SAFE balances
 const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
-// NEW: This is EOA balances (for rescue)
+// This is EOA balances (for rescue)
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
 const [activeTab, setActiveTab] = useState<'dashboard' | 'money-market' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help'>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
-// RENAMED from history to tradeHistory to prevent collision with History component from lucide-react
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
 const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); 
 const [moneyMarketOpps, setMoneyMarketOpps] = useState<ArbitrageOpportunity[]>([]);
@@ -2392,7 +2471,8 @@ const [openOrders, setOpenOrders] = useState<any[]>([]);
 const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
 const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
 
-
+// --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
+const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
 // --- STATE: Bridging (Updated for Bidirectional Flow) ---
 const [bridgeMode, setBridgeMode] = useState<'IN' | 'OUT'>('IN');
 const [selectedSourceChain, setSelectedSourceChain] = useState<number>(8453); // Default Base for IN
@@ -4002,57 +4082,21 @@ return (
 
         {/* --- Money Market Tab --- */}
         {activeTab === 'money-market' && (
-            <div className="space-y-12 animate-in fade-in slide-in-from-right-4 duration-500">
-                <div className="relative p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-lg">
-                    <div className="relative z-10">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="p-2 bg-white/20 rounded-xl">
-                                <Scale size={20} className="text-white"/>
-                            </div>
-                            <h2 className="text-2xl sm:text-3xl font-bold">Market Making Engine</h2>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                            <div className="bg-white/10 p-3 rounded-xl">
-                                <div className="font-medium text-emerald-100">Strategy</div>
-                                <div className="text-white font-mono">Spread Capture (GTC)</div>
-                            </div>
-                            <div className="bg-white/10 p-3 rounded-xl">
-                                <div className="font-medium text-emerald-100">Market Focus</div>
-                                <div className="text-white font-mono">High-Vol / New Listings</div>
-                            </div>
-                            <div className="bg-white/10 p-3 rounded-xl">
-                                <div className="font-medium text-emerald-100">Rewards</div>
-                                <div className="text-white font-mono">Liquidity Incentives</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex items-center justify-between px-2">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 bg-emerald-500/10 rounded-2xl text-emerald-500"><Zap size={24}/></div>
-                        <div>
-                            <h3 className="text-xl font-black text-white">Live Yield Opportunities</h3>
-                            <p className="text-xs text-slate-500">Real-time orderbook spread monitoring</p>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-6">
-                        <button 
-                            onClick={() => { fetchBotStatus(); setIsPolling(true); setTimeout(() => setIsPolling(false), 2000); }} 
-                            className="p-3 hover:bg-white/5 rounded-2xl transition-all border border-white/10"
-                        >
-                            <RefreshCw size={18} className={isPolling ? "animate-spin text-emerald-500" : "text-slate-500"}/>
-                        </button>
-                    </div>
-                </div>
-
-                <MoneyMarketFeed 
-    opportunities={moneyMarketOpps} 
-    onExecute={handleExecuteMM} 
-    isAutoArb={config.enableAutoArb}
-    userId={userAddress}
-    onRefresh={fetchBotStatus}
-/>
+            <div className="h-full">
+                <ProTerminal 
+                    userId={userAddress}
+                    stats={stats}
+                    activePositions={activePositions}
+                    logs={logs}
+                    moneyMarketOpps={moneyMarketOpps}
+                    isRunning={isRunning}
+                    onRefresh={() => fetchBotStatus(true)}
+                    handleExecuteMM={handleExecuteMM}
+                    handleSyncPositions={handleSyncPositions}
+                    openDepositModal={openDepositModal}
+                    openWithdrawModal={openWithdrawModal}
+                    setActiveTab={setActiveTab}
+                />
             </div>
         )}
         

@@ -1342,6 +1342,10 @@ export class MarketMakingScanner extends EventEmitter {
         return this.getOpportunities();
     }
 
+    getMonitoredMarkets(): MarketOpportunity[] {
+        return this.getOpportunities();
+    }
+
     getInventorySkew(conditionId: string): number {
         const balance = this.inventoryBalances.get(conditionId);
         if (!balance) return 0;

@@ -23,23 +23,6 @@ const formatCompactNumber = (num: number): string => {
   return (num / 1000000000).toFixed(1) + 'B';
 };
 
-// --- Sub-Component: Reward Scoring Indicator (HFT Specific) ---
-/**
- * Shows if the current MM position is within the reward-eligible band.
- * This is the 'printer' indicator.
- */
-const RewardScoringBadge = ({ spread, maxSpread }: { spread: number, maxSpread?: number }) => {
-  const isScoring = maxSpread ? (spread <= maxSpread) : true;
-  return (
-    <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest ${
-      isScoring ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-gray-500/10 text-gray-500 border border-white/5'
-    }`}>
-      <Cpu size={10} className={isScoring ? 'animate-pulse' : ''} />
-      {isScoring ? 'Scoring Rewards' : 'Outside Band'}
-    </div>
-  );
-};
-
 // --- Sub-Component: Inventory Skew Meter (MM Intelligence) ---
 const InventorySkewMeter = ({ skew }: { skew: number }) => {
   const isLong = skew >= 0;
@@ -65,77 +48,26 @@ const InventorySkewMeter = ({ skew }: { skew: number }) => {
   );
 };
 
-// --- Sub-Component: Enhanced Terminal Market Card ---
-const TerminalMarketCard = ({ 
-  opp, 
-  onExecute, 
-  holdings 
-}: { 
-  opp: ArbitrageOpportunity, 
-  onExecute: (o: any) => void,
-  holdings?: ActivePosition 
-}) => {
-  const isHighVol = opp.isVolatile || (opp.lastPriceMovePct !== undefined && opp.lastPriceMovePct > 3);
-  const spreadCents = opp.spreadCents || (opp.spread * 100);
-  
-  return (
-    <div className={`relative group glass-panel rounded-2xl border transition-all duration-500 hover:-translate-y-2 ${
-      holdings ? 'border-emerald-500/40 ring-1 ring-emerald-500/10' : 'border-white/5'
-    } ${isHighVol ? 'border-rose-500/50 shadow-[0_0_30px_rgba(244,63,94,0.2)]' : ''}`}>
-      
-      <div className="absolute top-4 left-4 flex flex-col gap-2 z-20">
-        {holdings && (
-          <div className="bg-emerald-600 text-white text-[9px] font-black px-2.5 py-1 rounded shadow-lg flex items-center gap-1.5 animate-in slide-in-from-left-2">
-            <ShieldCheck size={12} /> HOLDING: {holdings.shares.toFixed(0)} SHS
-          </div>
-        )}
-        {isHighVol && (
-          <div className="bg-rose-600 text-white text-[9px] font-black px-2.5 py-1 rounded shadow-lg flex items-center gap-1.5 animate-pulse">
-            <Zap size={12} fill="currentColor" /> FLASH MOVE: {opp.lastPriceMovePct?.toFixed(1)}%
-          </div>
-        )}
-      </div>
-
-      <div className="h-40 bg-black/40 relative overflow-hidden rounded-t-2xl">
-        <img 
-          src={opp.image || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMTgiIGZpbGw9IiMzMzMiLz48L3N2Zz4='} 
-          className="w-full h-full object-cover opacity-70 group-hover:scale-110 group-hover:opacity-100 transition-all duration-700 grayscale-[40%] group-hover:grayscale-0" 
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent"></div>
-      </div>
-
-      <div className="p-5 space-y-5">
-        <div className="flex justify-between items-start gap-2">
-          <h4 className="text-[12px] font-black text-white uppercase leading-tight line-clamp-2 h-8 tracking-tight flex-1">
-            {opp.question}
-          </h4>
-          <RewardScoringBadge spread={spreadCents} maxSpread={opp.rewardsMaxSpread} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-black/30 p-2.5 rounded-lg border border-white/5">
-            <p className="text-[9px] font-bold text-gray-500 uppercase">Spread ROI</p>
-            <p className="text-sm font-mono font-bold text-blue-400">{spreadCents.toFixed(1)}¢</p>
-          </div>
-          <div className="bg-black/30 p-2.5 rounded-lg border border-white/5">
-            <p className="text-[9px] font-bold text-gray-500 uppercase">Liquidity</p>
-            <p className="text-sm font-mono font-bold text-white">${((opp.liquidity || 0) / 1000).toFixed(1)}K</p>
-          </div>
-        </div>
-
-        {holdings && <InventorySkewMeter skew={holdings.inventorySkew || 0} />}
-
-        <button 
-          onClick={() => onExecute(opp)}
-          className={`w-full py-3 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] transition-all shadow-lg ${
-            holdings ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-blue-600 hover:bg-blue-500'
-          } text-white shadow-blue-900/20`}
+// --- Sub-Component: Enhanced Sidebar Opportunity Card ---
+const SidebarOpportunityCard = ({ opp, onExecute, holdings }: any) => {
+    const spreadCents = (opp.spread * 100).toFixed(1);
+    return (
+        <div 
+            onClick={() => onExecute(opp)}
+            className={`flex items-center gap-4 p-4 bg-black/40 rounded-2xl border transition-all cursor-pointer group ${
+                holdings ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-white/5 hover:border-blue-500/40 hover:bg-white/5'
+            }`}
         >
-          {holdings ? 'Manage Strategy' : 'Post GTC Quotes'}
-        </button>
-      </div>
-    </div>
-  );
+            <div className="w-12 h-12 rounded-xl bg-gray-900 border border-white/5 overflow-hidden shrink-0">
+                <img src={opp.image} className="w-full h-full object-cover grayscale-[50%] group-hover:grayscale-0 transition-all" />
+            </div>
+            <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-bold text-white truncate uppercase tracking-tight leading-tight mb-1">{opp.question}</p>
+                <p className="text-[10px] font-black text-blue-500 font-mono">{spreadCents}¢ Spread</p>
+            </div>
+            {holdings && <ShieldCheck size={18} className="text-emerald-500"/>}
+        </div>
+    );
 };
 
 export interface ProTerminalProps {
@@ -171,7 +103,6 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastHftPulse, setLastHftPulse] = useState(Date.now());
 
-  // Trigger heart-beat animation when logs update (simulating HFT fills)
   useEffect(() => {
     if (logs.length > 0 && logs[0].message.includes('FILLED')) {
       setLastHftPulse(Date.now());
@@ -188,9 +119,9 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
     try {
       await axios.post('/api/bot/refresh', { userId });
       await onRefresh();
-      toast.success("HFT Discovery Scan Complete");
+      toast.success("HFT Scan Complete");
     } catch (e) {
-      toast.error("Manual refresh trigger failed");
+      toast.error("Refresh failed");
     } finally {
       setIsRefreshing(false);
     }
@@ -220,7 +151,7 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                 {isRunning && (
                   <div className="flex items-center gap-2">
                     <div key={lastHftPulse} className="w-2 h-2 rounded-full bg-blue-500 animate-ping"></div>
-                    <span className="text-[10px] font-black text-blue-500 uppercase">HFT Heartbeat</span>
+                    <span className="text-[10px] font-black text-blue-500 uppercase">HFT Pulse</span>
                   </div>
                 )}
               </div>
@@ -230,7 +161,6 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                 onClick={handlePhysicalRefresh}
                 disabled={isRefreshing}
                 className="p-4 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/10 transition-all group"
-                title="Force HFT Market Discovery"
               >
                 <RefreshCw size={22} className={`${isRefreshing ? 'animate-spin text-blue-500' : 'text-gray-400 group-hover:text-white'}`} />
               </button>
@@ -284,12 +214,6 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
             <div className="flex items-center gap-3">
               <Terminal size={20} className="text-blue-500"/>
               <span className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em]">HFT Execution Pulse</span>
-            </div>
-            <div className="flex items-center gap-4">
-               <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                  <span className="text-[10px] font-black text-emerald-500/60 uppercase">Live User Channel Feed</span>
-               </div>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto p-8 space-y-2.5 font-mono text-[11px] bg-black/20 custom-scrollbar">
@@ -401,11 +325,7 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
               <h3 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-3">
                 <Crosshair size={20} className="text-blue-500"/> Opportunity Scout
               </h3>
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Reward-Eligible Markets</p>
-            </div>
-            <div className="flex gap-2 bg-black/20 p-1 rounded-xl">
-               <button onClick={() => setActiveCategory('all')} className={`text-[9px] font-black uppercase px-3 py-1.5 rounded-lg transition-all ${activeCategory === 'all' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-gray-500 hover:text-white'}`}>All</button>
-               <button onClick={() => setActiveCategory('crypto')} className={`text-[9px] font-black uppercase px-3 py-1.5 rounded-lg transition-all ${activeCategory === 'crypto' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-gray-500 hover:text-white'}`}>Crypto</button>
+              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Yield Captured Markets</p>
             </div>
           </div>
           <div className="space-y-4 overflow-y-auto h-[400px] custom-scrollbar pr-2">
@@ -415,25 +335,12 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
               filteredOpps.slice(0, 20).map((opp: ArbitrageOpportunity) => {
                 const holdings = activePositions.find(p => p.marketId === opp.marketId);
                 return (
-                  <div 
+                  <SidebarOpportunityCard 
                     key={opp.tokenId} 
-                    onClick={() => handleExecuteMM(opp)}
-                    className={`flex items-center gap-5 p-4 bg-black/40 rounded-[1.5rem] border transition-all cursor-pointer group ${
-                      holdings ? 'border-emerald-500/40 bg-emerald-500/[0.02]' : 'border-white/5 hover:border-blue-500/40 hover:bg-white/[0.02]'
-                    }`}
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-gray-900 border border-white/5 overflow-hidden shrink-0">
-                      <img src={opp.image} className="w-full h-full object-cover grayscale-[50%] group-hover:grayscale-0 group-hover:scale-110 transition-all duration-500" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[11px] font-bold text-white truncate uppercase tracking-tight">{opp.question}</p>
-                      <div className="flex items-center gap-3 mt-1.5">
-                         <p className="text-[10px] font-black text-blue-500 font-mono">{(opp.spreadCents ? opp.spreadCents : (opp.spread * 100)).toFixed(1)}¢ Spread</p>
-                         <p className="text-[9px] font-bold text-gray-600 uppercase">Vol: ${formatCompactNumber(opp.volume || 0)}</p>
-                      </div>
-                    </div>
-                    {holdings && <ShieldCheck size={18} className="text-emerald-500 animate-in zoom-in duration-500"/>}
-                  </div>
+                    opp={opp} 
+                    onExecute={handleExecuteMM} 
+                    holdings={holdings} 
+                  />
                 );
               })
             )}

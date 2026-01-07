@@ -78,6 +78,7 @@ export interface ArbitrageOpportunity {
     timestamp: number;
     roi: number;
     combinedCost: number;
+    orderMinSize?: number;
     capacityUsd: number;
     // Status & Metadata for UI enrichment
     status: 'active' | 'closed' | 'resolved' | 'paused';

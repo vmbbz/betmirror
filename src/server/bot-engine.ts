@@ -1179,7 +1179,10 @@ export class BotEngine {
     public getCallbacks(): BotCallbacks | undefined {
         return this.callbacks;
     }
-
+    
+    /**
+     * Manually add a market to MM scanner by condition ID
+     */
     public async addMarketToMM(conditionId: string): Promise<boolean> {
         if (!this.arbScanner) {
             this.addLog('warn', 'MM Scanner not initialized');
@@ -1188,6 +1191,9 @@ export class BotEngine {
         return this.arbScanner.addMarketByConditionId(conditionId);
     }
 
+    /**
+     * Manually add a market to MM scanner by slug
+     */
     public async addMarketBySlug(slug: string): Promise<boolean> {
         if (!this.arbScanner) {
             this.addLog('warn', 'MM Scanner not initialized');
@@ -1196,18 +1202,30 @@ export class BotEngine {
         return this.arbScanner.addMarketBySlug(slug);
     }
 
+    /**
+     * Bookmark a market for priority tracking
+     */
     public bookmarkMarket(conditionId: string): void {
         this.arbScanner?.bookmarkMarket(conditionId);
     }
 
+    /**
+     * Remove bookmark a market
+     */
     public unbookmarkMarket(conditionId: string): void {
         this.arbScanner?.unbookmarkMarket(conditionId);
     }
 
+    /**
+     * Get bookmarked opportunities
+     */
     public getBookmarkedOpportunities(): ArbitrageOpportunity[] {
         return this.arbScanner?.getBookmarkedOpportunities() || [];
     }
 
+    /**
+     * Get opportunities by category
+     */
     public getOpportunitiesByCategory(category: string): ArbitrageOpportunity[] {
         return this.arbScanner?.getOpportunities()
             .filter(o => o.category === category) || [];

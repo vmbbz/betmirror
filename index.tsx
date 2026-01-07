@@ -192,7 +192,7 @@ const PerformanceChart = ({ userId, selectedRange }: {
             <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
                     <defs>
-                        {/* FIX: Corrected duplicate x1 attribute to y1 on line 123 */}
+                        {/* Corrected duplicate x1 attribute to y1 on line 123 */}
                         <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
                             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.1}/>
@@ -2123,7 +2123,7 @@ const copyToClipboard = (text: string) => {
 };
 
 // --- POLL DATA ---
-/* FIX: fetchBotStatus now accepts an optional force parameter to satisfy 1-arg calls if compiler inferred */
+/* fetchBotStatus now accepts an optional force parameter to satisfy 1-arg calls if compiler inferred */
 const fetchBotStatus = useCallback(async (force?: boolean) => {
     console.log('🔍 fetchBotStatus called');
     if (!isConnected || !userAddress || needsActivation) {
@@ -2178,7 +2178,7 @@ const fetchBotStatus = useCallback(async (force?: boolean) => {
             setActivePositions(res.data.positions);
         }
 
-        // FIX: Track latest ID instead of length
+        // Track latest ID instead of length
         const latestHistory = res.data.history || [];
         if (latestHistory.length > 0) {
             const latestId = latestHistory[0].id;
@@ -2257,7 +2257,7 @@ useEffect(() => {
     
     // Poll Balances (Every 10s)
     const balanceInterval = setInterval(fetchBalances, 10000);
-    /* FIX: Errors at line 1465/1466: Ensure fetchBalances and fetchBotStatus calls match signature (inferred 1 arg by TS in some environments) */
+    /* Errors at line 1465/1466: Ensure fetchBalances and fetchBotStatus calls match signature (inferred 1 arg by TS in some environments) */
     fetchBalances(); // Initial
     fetchBotStatus(); // Initial
 
@@ -2272,7 +2272,7 @@ useEffect(() => {
 }, [isConnected, needsActivation]);
 
 // --- HELPER: Fetch Balances ---
-/* FIX: fetchBalances now accepts an optional force parameter to satisfy potential 1-arg calls in useEffect if compiler inferred differently */
+/* fetchBalances now accepts an optional force parameter to satisfy potential 1-arg calls in useEffect if compiler inferred differently */
 const fetchBalances = async (force?: boolean) => {
     if (!userAddress || !(window as any).ethereum) return;
     try {
@@ -2323,7 +2323,7 @@ const fetchBalances = async (force?: boolean) => {
         });
         
         // 3. Proxy Wallet Balances
-        // CRITICAL FIX: Always use a dedicated Polygon RPC provider for the proxy wallet check.
+        // CRITICAL Always use a dedicated Polygon RPC provider for the proxy wallet check.
         // This isolates the proxy check from the user's browser wallet network state, preventing 
         // "wrong balance" issues when the user is on Ethereum Mainnet or Base.
         
@@ -2397,7 +2397,7 @@ const handleConnect = async () => {
             setNeedsActivation(true);
             setIsConnected(true);
         } else {
-            // CRITICAL FIX: Prefer Safe Address (Funder) over EOA Signer address for display and balance checks
+            // CRITICAL Prefer Safe Address (Funder) over EOA Signer address for display and balance checks
             setProxyAddress(res.data.safeAddress || res.data.address);
             setSignerAddress(res.data.address); // Track the EOA separately
             // Capture recovery status from backend
@@ -2733,7 +2733,7 @@ const handleStart = async () => {
         multiplier: config.multiplier,
         riskProfile: config.riskProfile,
         autoTp: config.autoTp,
-        maxTradeAmount: config.maxTradeAmount, // ADDED
+        maxTradeAmount: config.maxTradeAmount,
         notifications: {
             enabled: config.enableNotifications,
             phoneNumber: config.userPhoneNumber
@@ -2766,7 +2766,7 @@ const handleSyncPositions = async () => {
     if (!userAddress) return;
     setIsSyncingPositions(true);
     try {
-        // FIX: Send force: true to tell the bot to fetch from Chain/API, not just update local DB prices
+        // Send force: true to tell the bot to fetch from Chain/API, not just update local DB prices
         await axios.post('/api/trade/sync', { userId: userAddress, force: true });
         
         // Poll for update or re-fetch status

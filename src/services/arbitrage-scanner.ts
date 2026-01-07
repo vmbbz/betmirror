@@ -159,7 +159,8 @@ export class MarketMakingScanner extends EventEmitter {
     private tickSizes: Map<string, TickSizeInfo> = new Map();
     private resolvedMarkets: Set<string> = new Set();
     private killSwitchActive = false;
-    private bookmarkedMarkets: Set<string> = new Set();
+    private bookmarkedMarkets: Set<string> = new Set(); 
+    private activeQuoteTokens: Set<string> = new Set();
 
     /**
      * Initialize bookmarks from storage
@@ -249,6 +250,20 @@ export class MarketMakingScanner extends EventEmitter {
         }
     }
 
+    /**
+     * Implementation of hasActiveQuotes to solve TypeError in server.ts
+     */
+    public hasActiveQuotes(tokenId: string): boolean {
+        return this.activeQuoteTokens.has(tokenId);
+    }
+
+    /**
+     * Updates the internal set of tokens that have active quotes
+     */
+    public setActiveQuotes(tokenIds: string[]): void {
+        this.activeQuoteTokens = new Set(tokenIds);
+    }
+    
     /**
      * PRODUCTION: Fetch available tag IDs from Gamma API
      * Uses /tags endpoint to get category IDs for filtering
@@ -786,9 +801,12 @@ export class MarketMakingScanner extends EventEmitter {
      * Get bookmarked opportunities
      */
     getBookmarkedOpportunities(): MarketOpportunity[] {
-        return this.opportunities.filter(o => 
-            this.bookmarkedMarkets.has(o.conditionId)
-        );
+        return this.opportunities
+            .filter(o => this.bookmarkedMarkets.has(o.conditionId))
+            .map(opp => ({
+                ...opp,
+                isBookmarked: true  // Ensure the isBookmarked flag is set
+            }));
     }
 
     /**

@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Activity, Crosshair, Zap, Scale, Terminal, ShieldCheck, 
@@ -46,7 +47,7 @@ const InventorySkewMeter = ({ skew }: { skew: number }) => {
 };
 
 // --- Internal Component: Exposure Position Card ---
-const PositionCard = ({ position }: { position: ActivePosition }) => {
+export const PositionCard = ({ position }: { position: ActivePosition }) => {
     const value = (position.currentPrice || position.entryPrice) * position.shares;
     const cost = position.entryPrice * position.shares;
     const pnl = value - cost;
@@ -191,6 +192,8 @@ export interface ProTerminalProps {
   activePositions: ActivePosition[];
   logs: any[];
   moneyMarketOpps: ArbitrageOpportunity[];
+  // Added openOrders to props for compatibility with index.tsx usage
+  openOrders: any[];
   isRunning: boolean;
   onRefresh: (force?: boolean) => Promise<void>;
   handleExecuteMM: (opp: ArbitrageOpportunity) => Promise<void>;
@@ -206,6 +209,8 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
   activePositions, 
   logs,
   moneyMarketOpps,
+  openOrders,
+  isRunning,
   onRefresh,
   handleExecuteMM,
   handleSyncPositions
@@ -339,6 +344,35 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                             activePositions.map((pos: ActivePosition) => (
                                 <PositionCard key={pos.marketId + pos.outcome} position={pos} />
                             ))
+                        )}
+                    </div>
+                </div>
+
+                {/* Added Order Ledger section for parity with institutional terminal expectations */}
+                <div className="glass-panel p-6 rounded-3xl border-white/5 bg-gradient-to-br from-amber-600/5 to-transparent flex flex-col shadow-xl h-[300px]">
+                    <div className="flex items-center gap-2 mb-4">
+                        <BarChart3 size={16} className="text-amber-500"/>
+                        <h3 className="text-xs font-black text-white uppercase tracking-widest">Active Quotes</h3>
+                    </div>
+                    <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar font-mono">
+                        {openOrders && openOrders.length > 0 ? (
+                            openOrders.map((order, i) => (
+                                <div key={i} className="flex items-center justify-between p-3 bg-black/40 rounded-xl border border-white/5">
+                                    <div className="flex items-center gap-3">
+                                        <span className={`w-1.5 h-1.5 rounded-full ${order.side === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                                        <div>
+                                            <div className="text-[9px] text-white font-black">{order.side} {order.size}</div>
+                                            <div className="text-[8px] text-gray-500">@{order.price}¢</div>
+                                        </div>
+                                    </div>
+                                    <button onClick={async () => {
+                                        await axios.post('/api/orders/cancel', { userId, orderId: order.orderID });
+                                        toast.success("Order Purged");
+                                    }} className="text-[8px] text-gray-600 hover:text-rose-500 uppercase font-black">Cancel</button>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="h-full flex items-center justify-center text-gray-700 text-[9px] italic">No active resting orders...</div>
                         )}
                     </div>
                 </div>

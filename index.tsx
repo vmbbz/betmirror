@@ -3599,16 +3599,17 @@ return (
                 activePositions={activePositions}
                 logs={logs}
                 moneyMarketOpps={moneyMarketOpps}
+                openOrders={openOrders}
                 isRunning={isRunning}
                 onRefresh={fetchBotStatus}
                 handleExecuteMM={async (opp) => {
                     await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
-                    toast.success("Liquidity Mining + HFT Strategy Dispatched");
+                    toast.success("Strategy Dispatched");
                 }}
-                handleSyncPositions={() => axios.post('/api/trade/sync', { userId: userAddress, force: true }).then(() => fetchBotStatus())}
-                openDepositModal={() => {}}
-                openWithdrawModal={() => {}}
-                setActiveTab={setActiveTab}
+                handleSyncPositions={fetchBotStatus}
+                openDepositModal={() => setIsDepositModalOpen(true)}
+                openWithdrawModal={() => setIsWithdrawModalOpen(true)}
+                setActiveTab={setActiveTab as any}
             />
         )}
         

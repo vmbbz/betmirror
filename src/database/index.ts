@@ -1,3 +1,4 @@
+
 import mongoose, { Schema, Document } from 'mongoose';
 import { TraderProfile } from '../domain/alpha.types.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
@@ -105,6 +106,33 @@ export interface IMoneyMarketOpportunity extends Document {
   roi: number;
   capacityUsd: number;
 }
+
+/**
+ * Sports Mapping Persistence
+ */
+export interface ISportsMatch extends Document {
+    matchId: string;
+    conditionId: string;
+    homeTeam: string;
+    awayTeam: string;
+    league: string;
+    lastScore: [number, number];
+    lastMinute: number;
+    status: string;
+    updatedAt: Date;
+}
+
+const SportsMatchSchema = new Schema({
+    matchId: { type: String, required: true, unique: true },
+    conditionId: { type: String, required: true, index: true },
+    homeTeam: String,
+    awayTeam: String,
+    league: String,
+    lastScore: { type: [Number], default: [0, 0] },
+    lastMinute: { type: Number, default: 0 },
+    status: String,
+    updatedAt: { type: Date, default: Date.now }
+});
 
 const MoneyMarketOpportunitySchema = new Schema({
   marketId: { type: String, required: true, index: true },
@@ -321,6 +349,7 @@ export const BridgeTransaction = mongoose.model<IBridgeTransaction>('BridgeTrans
 export const DepositLog = mongoose.model<IDepositLog>('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model<IBotLog>('BotLog', BotLogSchema);
 export const MoneyMarketOpportunity = mongoose.model<IMoneyMarketOpportunity>('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
+export const SportsMatch = mongoose.model<ISportsMatch>('SportsMatch', SportsMatchSchema);
 
 // --- Connection ---
 

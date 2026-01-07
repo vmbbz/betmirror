@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -7,7 +8,7 @@ import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, ITrade } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, SportsMatch, ITrade } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -441,7 +442,7 @@ app.post('/api/feedback', async (req: any, res: any) => {
 
 // 5. Start Bot
 app.post('/api/bot/start', async (req: any, res: any) => {
-  const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
+  const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, enableSportsFrontrunning, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
   
   if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
   const normId = userId.toLowerCase();
@@ -466,6 +467,10 @@ app.post('/api/bot/start', async (req: any, res: any) => {
         multiplier: Number(multiplier),
         riskProfile,
         enableAutoArb,
+        enableSportsFrontrunning,
+        enableCopyTrading: true,  // Default to enabled
+        enableMoneyMarkets: true, // Default to enabled
+        enableSportsRunner: true, // Default to enabled
         autoTp: autoTp ? Number(autoTp) : undefined,
         enableNotifications: notifications?.enabled,
         userPhoneNumber: notifications?.phoneNumber,
@@ -1137,6 +1142,26 @@ app.get('/api/market/:marketId', async (req: any, res: any) => {
         } else {
             res.status(500).json({ error: e.message });
         }
+    }
+});
+
+// New: Sports Intel Map
+app.get('/api/sports/matches', async (req: any, res: any) => {
+    try {
+        const matches = await SportsMatch.find({}).sort({ updatedAt: -1 });
+        res.json(matches);
+    } catch (e) {
+        res.status(500).json({ error: 'DB Error' });
+    }
+});
+
+app.post('/api/sports/map', async (req: any, res: any) => {
+    const { matchId, conditionId } = req.body;
+    try {
+        await SportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: 'Mapping failed' });
     }
 });
 

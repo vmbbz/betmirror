@@ -23,6 +23,7 @@ import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/al
 import { UserStats } from './src/domain/user.types';
 import { ArbitrageOpportunity } from './src/adapters/interfaces';
 import ProTerminal from './src/proTerminal';
+import SportsRunner from './src/SportsRunner';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -263,6 +264,9 @@ maxTradeAmount: number;
 coldWalletAddress: string;
 enableSounds: boolean; 
 enableAutoArb: boolean;
+enableCopyTrading: boolean;
+enableMoneyMarkets: boolean;
+enableSportsRunner: boolean;
 }
 
 interface WalletBalances {
@@ -1889,7 +1893,7 @@ const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
-const [activeTab, setActiveTab] = useState<'dashboard' | 'money-market' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help'>('dashboard');
+const [activeTab, setActiveTab] = useState<'dashboard' | 'money-market' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help' | 'sports'>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
@@ -1959,6 +1963,9 @@ const [config, setConfig] = useState<AppConfig>({
     targets: [],
     rpcUrl: 'https://polygon-rpc.com',
     geminiApiKey: '',
+    enableCopyTrading: true,
+    enableMoneyMarkets: true,
+    enableSportsRunner: true,
     multiplier: 1.0,
     riskProfile: 'balanced',
     minLiquidityFilter: 'LOW',
@@ -3558,6 +3565,8 @@ return (
                 setActiveTab={setActiveTab as any}
             />
         )}
+
+        {activeTab === 'sports' && <SportsRunner userId={userAddress} isRunning={isRunning} />}
         
         {/* BRIDGE */}
         {activeTab === 'bridge' && (
@@ -4118,6 +4127,196 @@ return (
                         </div>
                     </div>
                 </div>
+                
+                {/* Strategy Hub Section */}
+                <section className="space-y-8 mt-12">
+                    <div className="flex justify-between items-end">
+                        <div className="space-y-2">
+                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Strategy Hub</h2>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">Configure Autonomous Trading Pilots</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {/* Copy-Trading Pilot */}
+                        <div className={`p-6 rounded-2xl border transition-all duration-300 flex flex-col justify-between h-full ${
+                            config.enableCopyTrading 
+                                ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-500/30' 
+                                : 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
+                        }`}>
+                            <div>
+                                <div className="flex justify-between items-start mb-4">
+                                    <div className={`p-3 rounded-xl ${
+                                        config.enableCopyTrading 
+                                            ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' 
+                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+                                    }`}>
+                                        <Users size={24} />
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={config.enableCopyTrading} 
+                                            onChange={(e) => updateConfig({ enableCopyTrading: e.target.checked })}
+                                            className="sr-only peer" 
+                                        />
+                                        <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                    </label>
+                                </div>
+                                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Alpha Mirror</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    Real-time replication of whale trades from the global registry with proportional sizing.
+                                </p>
+                            </div>
+                            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                                <div className="flex justify-between text-xs font-medium text-gray-500 mb-1">
+                                    <span>Multiplier</span>
+                                    <span className="font-bold text-blue-600 dark:text-blue-400">{config.multiplier}x</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0.1"
+                                    max="5"
+                                    step="0.1"
+                                    value={config.multiplier}
+                                    onChange={(e) => updateConfig({ multiplier: parseFloat(e.target.value) })}
+                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Money Markets Pilot */}
+                        <div className={`p-6 rounded-2xl border transition-all duration-300 flex flex-col justify-between h-full ${
+                            config.enableMoneyMarkets
+                                ? 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-500/30'
+                                : 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
+                        }`}>
+                            <div>
+                                <div className="flex justify-between items-start mb-4">
+                                    <div className={`p-3 rounded-xl ${
+                                        config.enableMoneyMarkets
+                                            ? 'bg-emerald-100 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400'
+                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+                                    }`}>
+                                        <Scale size={24} />
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={config.enableMoneyMarkets}
+                                            onChange={(e) => updateConfig({ enableMoneyMarkets: e.target.checked })}
+                                            className="sr-only peer"
+                                        />
+                                        <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-emerald-600"></div>
+                                    </label>
+                                </div>
+                                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Yield Scout</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    Captures cent-spreads and earns liquidity rewards through autonomous limit orders.
+                                </p>
+                            </div>
+                            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                                <div className="flex justify-between text-xs font-medium text-gray-500">
+                                    <span>Status</span>
+                                    <span className={`font-bold ${
+                                        config.enableMoneyMarkets 
+                                            ? 'text-emerald-600 dark:text-emerald-400' 
+                                            : 'text-gray-400'
+                                    }`}>
+                                        {config.enableMoneyMarkets ? 'Active' : 'Inactive'}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Sports Runner Pilot */}
+                        <div className={`p-6 rounded-2xl border transition-all duration-300 flex flex-col justify-between h-full ${
+                            config.enableSportsRunner
+                                ? 'bg-rose-50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-500/30'
+                                : 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
+                        }`}>
+                            <div>
+                                <div className="flex justify-between items-start mb-4">
+                                    <div className={`p-3 rounded-xl ${
+                                        config.enableSportsRunner
+                                            ? 'bg-rose-100 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400'
+                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+                                    }`}>
+                                        <Zap size={24} />
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={config.enableSportsRunner}
+                                            onChange={(e) => updateConfig({ enableSportsRunner: e.target.checked })}
+                                            className="sr-only peer"
+                                        />
+                                        <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-rose-600"></div>
+                                    </label>
+                                </div>
+                                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Pulse Runner</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    Latency arbitrage engine for sports markets using direct feeds.
+                                </p>
+                            </div>
+                            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                                <div className="flex justify-between text-xs font-medium text-gray-500">
+                                    <span>Feed Latency</span>
+                                    <span className="font-bold text-rose-600 dark:text-rose-400">1.2ms</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                
+                {/* Global Risk Parameters Section */}
+                <section className="mt-12 glass-panel p-8 rounded-2xl border border-gray-200 dark:border-gray-700">
+                    <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Global Risk Parameters</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Max Trade Size (USD)</label>
+                                <span className="text-sm font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                                    ${config.maxTradeAmount}
+                                </span>
+                            </div>
+                            <input
+                                type="range"
+                                min="10"
+                                max="1000"
+                                step="10"
+                                value={config.maxTradeAmount}
+                                onChange={(e) => updateConfig({ maxTradeAmount: parseInt(e.target.value) })}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                            />
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                Maximum USD amount per trade across all strategies.
+                            </p>
+                        </div>
+
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Liquidity Filter</label>
+                                <span className="text-sm font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                                    {config.minLiquidityFilter}
+                                </span>
+                            </div>
+                            <select
+                                value={config.minLiquidityFilter}
+                                onChange={(e) => updateConfig({ minLiquidityFilter: e.target.value as any })}
+                                className="w-full p-2 text-sm border border-gray-300 rounded-lg bg-white dark:bg-gray-800 dark:border-gray-600"
+                            >
+                                <option value="LOW">Low (Riskier)</option>
+                                <option value="MEDIUM">Medium (Balanced)</option>
+                                <option value="HIGH">High (Safer)</option>
+                            </select>
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                Minimum liquidity threshold for all trades.
+                            </p>
+                        </div>
+                    </div>
+                </section>
                 
                 {/* Vault Sovereignty Section */}
                 <div className="mb-8 glass-panel border-purple-500/20 dark:border-purple-500/30 rounded-2xl overflow-hidden relative group">

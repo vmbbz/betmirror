@@ -42,6 +42,7 @@ export interface MarketOpportunity {
     question: string;
     image?: string;
     marketSlug?: string;
+    eventSlug?: string;
     bestBid: number;
     bestAsk: number;
     spread: number;
@@ -55,13 +56,13 @@ export interface MarketOpportunity {
     rewardsMinSize?: number;
     orderMinSize?: number;
     timestamp: number;
-    // Compatibility fields for UI
+    // Compatibility fields for UI enrichment
     roi: number;
     combinedCost: number;
     capacityUsd: number;
     // Inventory skew
     skew?: number;
-    // Status & Metadata for UI
+    // Status & Metadata for UI enrichment
     status: 'active' | 'closed' | 'resolved' | 'paused';
     acceptingOrders: boolean;
     volume24hr?: number;
@@ -91,7 +92,7 @@ interface TrackedMarket {
     // Track YES/NO token mapping
     isYesToken?: boolean;
     pairedTokenId?: string;
-    // Status & metadata
+    // Status & metadata for UI enrichment
     status: 'active' | 'closed' | 'resolved' | 'paused';
     acceptingOrders: boolean;
     volume24hr?: number;
@@ -139,7 +140,7 @@ interface TickSizeInfo {
 
 export class MarketMakingScanner extends EventEmitter {
     // Core state
-    private isScanning = false;
+    public isScanning = false;
     private isConnected = false;
     private ws?: WebSocket;
     private userWs?: WebSocket; // NEW: Private User Channel
@@ -684,9 +685,7 @@ export class MarketMakingScanner extends EventEmitter {
             return 'mentions';
         }
         if (slug.includes('business') || slug.includes('economy') || slug.includes('company') ||
-            slug.includes('stock') || slug.includes('market') || slug.includes('gdp') ||
-            slug.includes('dow') || slug.includes('s&p') || slug.includes('nasdaq') ||
-            slug.includes('retail') || slug.includes('consumer')) {
+            slug.includes('stock') || slug.includes('market') || slug.includes('gdp')) {
             return 'business';
         }
         
@@ -851,7 +850,7 @@ export class MarketMakingScanner extends EventEmitter {
 
         const wsUrl = `${WS_URLS.CLOB}/ws/market`;
         this.logger.info(`🔌 Connecting to ${wsUrl}`);
-        // Use named imports for WebSocket to resolve constructor error in TS
+        // FIX: Use named import for WebSocket to resolve constructor error in Node.js ESM
         this.ws = new WebSocket(wsUrl);
 
         const wsAny = this.ws as any;
@@ -902,7 +901,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         // This requires standard WebSocket logic with Auth Headers or Token
         // Assuming the adapter has the current valid Auth token
-        // Fix: Use named imports for WebSocket to resolve constructor error in TS
+        // FIX: Use named import for WebSocket to resolve constructor error in Node.js ESM
         this.userWs = new WebSocket(userWsUrl);
         const wsAny = this.userWs as any;
 
@@ -1371,6 +1370,12 @@ export class MarketMakingScanner extends EventEmitter {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = undefined;
         }
+        
+        // AGGRESSIVE PURGE: When stopping the module, clear all open orders via the adapter
+        this.logger.warn('[MM] Module Standby: Sending global cancellation request to purge resting orders...');
+        this.adapter.cancelAllOrders().catch(e => {
+            this.logger.error(`Failed to purge MM orders on stop: ${e.message}`);
+        });
 
         this.logger.warn('🛑 Scanner stopped');
     }

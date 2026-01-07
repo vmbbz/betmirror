@@ -1,12 +1,12 @@
-
 import type { RuntimeEnv } from '../config/env.js';
 import type { Logger } from '../utils/logger.util.js';
 import type { TradeSignal, ActivePosition } from '../domain/trade.types.js';
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { httpGet } from '../utils/http.js';
-import { TOKENS } from '../config/env.js';
-import { IExchangeAdapter, LiquidityHealth } from '../adapters/interfaces.js';
+import { TOKENS, WS_URLS } from '../config/env.js'; // Added WS_URLS
+import { IExchangeAdapter, LiquidityHealth, OrderParams, OrderResult } from '../adapters/interfaces.js';
 import axios from 'axios';
+import WebSocket from 'ws'; // Added WebSocket
 
 // Import from arbitrage scanner
 import type { MarketOpportunity as BaseMarketOpportunity } from './arbitrage-scanner.js';
@@ -82,6 +82,10 @@ export class TradeExecutorService {
   
   private pendingSpend = 0;
   private pendingOrders: Map<string, { amount: number; timestamp: number }> = new Map();
+
+  // WebSocket fill state
+  private userWs?: WebSocket;
+  private isWsRunning = false;
 
   /**
    * Update the pending spend amount for buy orders
@@ -168,6 +172,60 @@ export class TradeExecutorService {
   constructor(deps: TradeExecutorDeps, mmConfig?: Partial<MarketMakingConfig>) {
     this.deps = deps;
     if (mmConfig) this.mmConfig = { ...this.mmConfig, ...mmConfig };
+    this.connectUserChannel(); // Start the real-time fill monitor
+  }
+
+  /**
+   * Connect to the private User Channel for real-time order fill updates.
+   * This eliminates polling latency for both MM and Copy-Trading.
+   */
+  private connectUserChannel() {
+    this.isWsRunning = true;
+    const wsUrl = `${WS_URLS.CLOB}/ws/user`;
+    this.deps.logger.info(`🔌 Connecting Executor Fill Monitor: ${wsUrl}`);
+    
+    this.userWs = new WebSocket(wsUrl);
+
+    this.userWs.on('open', () => {
+        this.deps.logger.success('✅ Executor Fill Monitor Connected.');
+        // Authenticate if required by exchange spec
+    });
+
+    this.userWs.on('message', (data) => {
+        try {
+            const msg = JSON.parse(data.toString());
+            if (msg.event_type === 'order_filled') {
+                this.handleLiveFill(msg);
+            }
+        } catch (e) {}
+    });
+
+    this.userWs.on('close', () => {
+        if (this.isWsRunning) setTimeout(() => this.connectUserChannel(), 5000);
+    });
+  }
+
+  /**
+   * Handles real-time fill events from WebSocket.
+   * Updates inventory and pending spend immediately.
+   */
+  private handleLiveFill(fill: any) {
+      const { asset_id, price, size, side, order_id } = fill;
+      const isBuy = side.toUpperCase() === 'BUY';
+      
+      this.deps.logger.success(`⚡ [LIVE FILL] ${side} ${size} units of ${asset_id.slice(0,8)}... @ ${price}`);
+      
+      // 1. Update internal inventory cache immediately
+      const currentInv = this.inventory.get(asset_id) || 0;
+      this.inventory.set(asset_id, isBuy ? currentInv + size : currentInv - size);
+
+      // 2. Clear pending spend if it was a buy
+      if (isBuy) {
+          this.updatePendingSpend(0, false, order_id);
+      }
+
+      // 3. Update quant position tracking
+      this.updatePosition(asset_id, price, size, isBuy);
   }
 
   /**
@@ -382,6 +440,7 @@ export class TradeExecutorService {
       positionScore: 50 // Neutral score
     };
     
+    const iBuy = isBuy; // Avoid shadowing if needed, but not necessary here
     const newSize = isBuy ? current.size + size : current.size - size;
     
     // Calculate new average entry price
@@ -482,6 +541,32 @@ export class TradeExecutorService {
     return this.deps.adapter;
   }
 
+  /**
+   * Create a direct order through the executor (handles pending spend tracking)
+   */
+  // FIX: Added createOrder method to allow direct order placement with pending spend tracking
+  public async createOrder(params: OrderParams): Promise<OrderResult> {
+    const { adapter, logger } = this.deps;
+    
+    try {
+      const result = await adapter.createOrder(params);
+      
+      // Update pending spend if it's a successful buy order to maintain accurate balance tracking
+      if (result.success && params.side === 'BUY') {
+        const amount = result.usdFilled || (result.sharesFilled * (result.priceFilled || 0));
+        if (amount > 0) {
+          this.updatePendingSpend(amount, true, result.orderId);
+        }
+      }
+      
+      return result;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(`[Executor] Direct order failed: ${err.message}`, err);
+      throw err;
+    }
+  }
+
   // ============================================================
   // MARKET MAKING METHODS (NEW)
   // ============================================================
@@ -494,7 +579,7 @@ export class TradeExecutorService {
   /**
    * Update market state with latest price and volume data
    */
-  private updateMarketState(
+  private updateMarketStateInternal(
     tokenId: string, 
     price: number, 
     volume: number, 
@@ -536,10 +621,13 @@ export class TradeExecutorService {
 
   async executeMarketMakingQuotes(opportunity: MarketOpportunity): Promise<QuoteResult> {
       const { logger, adapter, proxyWallet } = this.deps;
-      const { tokenId, conditionId, midpoint, spread, question, rewardsMaxSpread, rewardsMinSize, skew = 0, volume = 0 } = opportunity;
+      const { tokenId, conditionId, midpoint, spread, rewardsMaxSpread, rewardsMinSize } = opportunity;
       
+      const vol = (opportunity as any).volatility || 0.05;
+      const volume = opportunity.volume || 0;
+
       // Update market state with latest data
-      this.updateMarketState(tokenId, midpoint, volume, spread);
+      this.updateMarketStateInternal(tokenId, midpoint, volume, spread);
 
       const failResult = (reason: string): QuoteResult => ({
           tokenId,

@@ -1,3 +1,4 @@
+
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -20,6 +21,8 @@ import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
 import { AutoCashoutConfig } from '../domain/trade.types.js';
+import { SportsIntelService } from '../services/sports-intel.service.js';
+import { SportsRunnerService } from '../services/sports-runner.service.js';
 import crypto from 'crypto';
 
 export interface BotConfig {
@@ -38,7 +41,12 @@ export interface BotConfig {
     enableAutoCashout?: boolean; // Legacy compat
     maxRetentionAmount?: number; // Legacy compat
     coldWalletAddress?: string; // Legacy compat
+    // Granular Module Toggles
+    enableCopyTrading: boolean;
+    enableMoneyMarkets: boolean;
+    enableSportsRunner: boolean;
     enableAutoArb?: boolean;
+    enableSportsFrontrunning?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
     l2ApiCredentials?: L2ApiCredentials;
@@ -64,6 +72,8 @@ export class BotEngine {
     private monitor?: TradeMonitorService;
     private executor?: TradeExecutorService;
     private arbScanner?: MarketMakingScanner;
+    private sportsRunner?: SportsRunnerService;
+    private sportsIntel?: SportsIntelService;
     private exchange?: PolymarketAdapter;
     private portfolioService?: PortfolioService;
     private portfolioTracker?: PortfolioTrackerService;
@@ -118,11 +128,40 @@ export class BotEngine {
     }
 
     public updateConfig(newConfig: Partial<BotConfig>) {
+        // 1. Update Target Addresses for Monitor
         if (newConfig.userAddresses && this.monitor) {
             this.monitor.updateTargets(newConfig.userAddresses);
             this.config.userAddresses = newConfig.userAddresses;
         }
 
+        // 2. Handle Copy Trading Toggle
+        if (newConfig.enableCopyTrading === false && this.monitor?.isActive()) {
+            this.addLog('warn', '⏸️ Copy-Trading Module Standby.');
+            this.monitor.stop();
+        } else if (newConfig.enableCopyTrading === true && this.monitor && !this.monitor.isActive()) {
+            this.addLog('success', '▶️ Copy-Trading Module Online.');
+            this.monitor.start(this.config.startCursor || Math.floor(Date.now() / 1000));
+        }
+
+        // 3. Handle Money Markets Toggle (AGGRESSIVE PURGE)
+        if (newConfig.enableMoneyMarkets === false && this.arbScanner?.isScanning) {
+            this.addLog('warn', '⏸️ Money Markets Standby. Purging resting orders...');
+            this.arbScanner.stop(); // This now clears the socket AND calls cancelAll
+        } else if (newConfig.enableMoneyMarkets === true && this.arbScanner && !this.arbScanner.isScanning) {
+            this.addLog('success', '▶️ Money Markets Module Online.');
+            this.arbScanner.start();
+        }
+
+        // 4. Handle Sports Runner Toggle
+        if (newConfig.enableSportsRunner === false && this.sportsIntel?.isActive()) {
+            this.addLog('warn', '⏸️ SportsRunner Module Standby.');
+            this.sportsIntel.stop();
+        } else if (newConfig.enableSportsRunner === true && this.sportsIntel && !this.sportsIntel.isActive()) {
+            this.addLog('success', '▶️ SportsRunner Module Online.');
+            this.sportsIntel.start();
+        }
+
+        // 5. Update core numeric settings
         if (newConfig.multiplier !== undefined) {
             this.config.multiplier = newConfig.multiplier;
             if (this.runtimeEnv) this.runtimeEnv.tradeMultiplier = newConfig.multiplier;
@@ -138,19 +177,7 @@ export class BotEngine {
             if (this.runtimeEnv) this.runtimeEnv.minLiquidityFilter = newConfig.minLiquidityFilter;
         }
 
-        if (newConfig.geminiApiKey !== undefined) {
-            this.config.geminiApiKey = newConfig.geminiApiKey;
-        }
-
-        if (newConfig.riskProfile !== undefined) this.config.riskProfile = newConfig.riskProfile;
-        if (newConfig.autoTp !== undefined) this.config.autoTp = newConfig.autoTp;
-        
-        if (newConfig.autoCashout) {
-            this.config.autoCashout = newConfig.autoCashout;
-        }
-        if (newConfig.enableAutoArb !== undefined) {
-            this.config.enableAutoArb = newConfig.enableAutoArb;
-        } 
+        this.config = { ...this.config, ...newConfig };
     }
 
     private async fetchMarketMetadata(marketId: string): Promise<{
@@ -663,6 +690,10 @@ export class BotEngine {
             await this.initializeServices();
 
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
+
+            // New: Sports Frontrunning Ingestion
+            this.sportsIntel = new SportsIntelService(engineLogger);
+            this.sportsRunner = new SportsRunnerService(this.exchange, this.sportsIntel, this.executor as any, engineLogger);
             
             this.arbScanner.on('volatilityAlert', async ({ question, movePct }) => {
                 await this.addLog('warn', `⚡ VOLATILITY ALERT: ${movePct.toFixed(1)}% move on ${question.slice(0, 20)}... Engine continuing execution.`);
@@ -744,6 +775,7 @@ export class BotEngine {
     public stop() {
         this.isRunning = false;
         this.arbScanner?.stop();
+        this.sportsIntel?.stop();
         if (this.monitor) this.monitor.stop();
         if (this.portfolioService) this.portfolioService.stopSnapshotService();
         if (this.fundWatcher) {
@@ -878,6 +910,10 @@ export class BotEngine {
 
             if (this.arbScanner) {
                 await this.arbScanner.start();
+            }
+
+            if (this.config.enableSportsFrontrunning && this.sportsIntel) {
+                await this.sportsIntel.start();
             }
 
             await this.syncPositions(true); 

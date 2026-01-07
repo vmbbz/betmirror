@@ -1,4 +1,3 @@
-
 import { RuntimeEnv } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 import { TradeSignal } from '../domain/trade.types.js';
@@ -36,6 +35,7 @@ export class TradeMonitorService {
   private readonly deps: TradeMonitorDeps;
   private isPolling = false;
   private pollInterval?: NodeJS.Timeout;
+  private running = false;
   
   private targetWallets: Set<string> = new Set();
   private processedHashes: Map<string, number> = new Map();
@@ -43,6 +43,10 @@ export class TradeMonitorService {
   constructor(deps: TradeMonitorDeps) {
     this.deps = deps;
     this.updateTargets(deps.userAddresses);
+  }
+
+  public isActive(): boolean {
+    return this.running;
   }
 
   updateTargets(newTargets: string[]) {
@@ -54,6 +58,7 @@ export class TradeMonitorService {
   async start(startCursor?: number): Promise<void> {
     if (this.isPolling) return;
     this.isPolling = true;
+    this.running = true;
     
     this.deps.logger.info(`🔌 Starting High-Frequency Polling (Data API)...`);
     
@@ -64,6 +69,7 @@ export class TradeMonitorService {
 
   stop(): void {
     this.isPolling = false;
+    this.running = false;
     if (this.pollInterval) {
         clearInterval(this.pollInterval);
         this.pollInterval = undefined;
@@ -87,7 +93,6 @@ export class TradeMonitorService {
   private async checkUserActivity(user: string) {
       try {
           const url = `https://data-api.polymarket.com/activity?user=${user}&limit=5`;
-          // Added User-Agent header
           const res = await axios.get<PolyActivity[]>(url, { 
               timeout: 3000,
               headers: HTTP_HEADERS
@@ -102,9 +107,7 @@ export class TradeMonitorService {
           for (const trade of trades) {
               await this.processTrade(user, trade);
           }
-      } catch (e) {
-          // Silent fail
-      }
+      } catch (e) {}
   }
 
   private async processTrade(user: string, activity: PolyActivity) {
@@ -123,9 +126,7 @@ export class TradeMonitorService {
       this.processedHashes.set(txHash, now);
 
       const outcomeLabel = activity.outcomeIndex === 0 ? "YES" : "NO";
-      
       const side = activity.side.toUpperCase() as 'BUY' | 'SELL';
-      
       const sizeUsd = activity.usdcSize || (activity.size * activity.price);
       
       this.deps.logger.info(`🚨 [SIGNAL] ${user.slice(0,6)}... ${side} ${outcomeLabel} @ ${activity.price} ($${sizeUsd.toFixed(2)})`);

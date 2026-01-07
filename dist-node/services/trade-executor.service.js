@@ -1,14 +1,18 @@
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { httpGet } from '../utils/http.js';
-import { TOKENS } from '../config/env.js';
+import { TOKENS, WS_URLS } from '../config/env.js'; // Added WS_URLS
 import { LiquidityHealth } from '../adapters/interfaces.js';
 import axios from 'axios';
+import WebSocket from 'ws'; // Added WebSocket
 export class TradeExecutorService {
     deps;
     balanceCache = new Map();
     CACHE_TTL = 5 * 60 * 1000;
     pendingSpend = 0;
     pendingOrders = new Map();
+    // WebSocket fill state
+    userWs;
+    isWsRunning = false;
     /**
      * Update the pending spend amount for buy orders
      * @param amount - The amount to add or subtract from pending spend
@@ -41,23 +45,342 @@ export class TradeExecutorService {
     // Market Making state
     activeQuotes = new Map();
     inventory = new Map(); // tokenId -> share balance
+    // Position tracking
+    positionTracking = new Map();
+    // Market state tracking
+    marketState = new Map();
+    // Position scaling configuration
+    POSITION_SCALING = {
+        VOLATILITY_WINDOW: 20, // Number of periods for volatility calculation
+        MAX_SCALING_FACTOR: 2.0, // Maximum position size multiplier
+        MIN_SCALING_FACTOR: 0.5, // Minimum position size multiplier
+        VOLUME_WINDOW: 10, // Number of periods for volume analysis
+        LIQUIDITY_THRESHOLD: 0.1 // Min liquidity as % of position size
+    };
     mmConfig = {
+        // Core parameters
         quoteSize: 50, // $50 per side default
         spreadOffset: 0.01, // 1 cent from midpoint
         maxPositionUsd: 500, // Max $500 inventory per token
         maxOpenOrdersPerToken: 2, // 1 bid + 1 ask
-        rebalanceThreshold: 0.3 // 30% skew triggers rebalance
+        rebalanceThreshold: 0.3, // 30% skew triggers rebalance
+        // Risk management parameters
+        volatilityLookback: 20, // 20 periods for volatility calculation
+        maxDailyDrawdown: 0.05, // 5% max daily drawdown
+        stopLossPct: 0.03, // 3% stop loss
+        positionSizing: {
+            baseSize: 0.02, // 2% of portfolio per position
+            maxSize: 0.1, // 10% max position size
+            volatilityAdjustment: true
+        },
+        // Advanced controls
+        enableDynamicSpreads: true,
+        maxSpreadMultiplier: 3.0, // 3x base spread
+        minSpreadMultiplier: 0.5 // 0.5x base spread
     };
     constructor(deps, mmConfig) {
         this.deps = deps;
         if (mmConfig)
             this.mmConfig = { ...this.mmConfig, ...mmConfig };
+        this.connectUserChannel(); // Start the real-time fill monitor
+    }
+    /**
+     * Connect to the private User Channel for real-time order fill updates.
+     * This eliminates polling latency for both MM and Copy-Trading.
+     */
+    connectUserChannel() {
+        this.isWsRunning = true;
+        const wsUrl = `${WS_URLS.CLOB}/ws/user`;
+        this.deps.logger.info(`🔌 Connecting Executor Fill Monitor: ${wsUrl}`);
+        this.userWs = new WebSocket(wsUrl);
+        this.userWs.on('open', () => {
+            this.deps.logger.success('✅ Executor Fill Monitor Connected.');
+            // Authenticate if required by exchange spec
+        });
+        this.userWs.on('message', (data) => {
+            try {
+                const msg = JSON.parse(data.toString());
+                if (msg.event_type === 'order_filled') {
+                    this.handleLiveFill(msg);
+                }
+            }
+            catch (e) { }
+        });
+        this.userWs.on('close', () => {
+            if (this.isWsRunning)
+                setTimeout(() => this.connectUserChannel(), 5000);
+        });
+    }
+    /**
+     * Handles real-time fill events from WebSocket.
+     * Updates inventory and pending spend immediately.
+     */
+    handleLiveFill(fill) {
+        const { asset_id, price, size, side, order_id } = fill;
+        const isBuy = side.toUpperCase() === 'BUY';
+        this.deps.logger.success(`⚡ [LIVE FILL] ${side} ${size} units of ${asset_id.slice(0, 8)}... @ ${price}`);
+        // 1. Update internal inventory cache immediately
+        const currentInv = this.inventory.get(asset_id) || 0;
+        this.inventory.set(asset_id, isBuy ? currentInv + size : currentInv - size);
+        // 2. Clear pending spend if it was a buy
+        if (isBuy) {
+            this.updatePendingSpend(0, false, order_id);
+        }
+        // 3. Update quant position tracking
+        this.updatePosition(asset_id, price, size, isBuy);
+    }
+    /**
+     * Calculate dynamic position size based on volatility and portfolio
+     */
+    calculateDynamicPositionSize(opportunity, currentInventory) {
+        const { midpoint, volatility = 0.05 } = opportunity;
+        const { baseSize, maxSize, volatilityAdjustment } = this.mmConfig.positionSizing;
+        // Base position size as percentage of portfolio
+        let positionPct = baseSize;
+        // Adjust for volatility if enabled
+        if (volatilityAdjustment) {
+            const volAdjustment = Math.min(2, 0.1 / (volatility + 0.05)); // Cap at 2x
+            positionPct = Math.min(maxSize, baseSize * volAdjustment);
+        }
+        // Get portfolio value (simplified - you might want to implement this properly)
+        const portfolioValue = this.getPortfolioValue();
+        // Calculate max position value and size
+        const maxPositionValue = portfolioValue * positionPct;
+        const positionSize = maxPositionValue / midpoint;
+        return { maxPositionValue, positionSize };
+    }
+    /**
+     * Check if stop loss conditions are met for a position
+     */
+    async checkStopLossTriggers(tokenId, currentInventory, currentPrice) {
+        if (currentInventory <= 0)
+            return false;
+        // Get average entry price from your position tracking
+        const avgEntryPrice = await this.getAverageEntryPrice(tokenId);
+        if (!avgEntryPrice)
+            return false;
+        // Calculate PnL percentage
+        const pnlPct = (currentPrice - avgEntryPrice) / avgEntryPrice;
+        // Check stop loss
+        if (pnlPct <= -this.mmConfig.stopLossPct) {
+            this.deps.logger.warn(`[MM] Stop loss triggered for ${tokenId}: ${(pnlPct * 100).toFixed(2)}% < -${(this.mmConfig.stopLossPct * 100).toFixed(2)}%`);
+            return true;
+        }
+        return false;
+    }
+    /**
+     * Calculate dynamic bid/ask prices with inventory skew and volatility adjustment
+     */
+    calculateDynamicPrices(opportunity, currentInventory, market) {
+        const { midpoint, volatility = 0.05, skew = 0 } = opportunity;
+        const tickSize = parseFloat(market.tickSize) || 0.01;
+        // Base spread offset
+        let spreadOffset = this.mmConfig.spreadOffset;
+        // Adjust spread based on volatility if enabled
+        if (this.mmConfig.enableDynamicSpreads) {
+            const volFactor = Math.sqrt(volatility / 0.05); // Normalize to 5% vol
+            const spreadMultiplier = Math.max(this.mmConfig.minSpreadMultiplier, Math.min(this.mmConfig.maxSpreadMultiplier, volFactor));
+            spreadOffset *= spreadMultiplier;
+        }
+        // Calculate skew adjustment (more aggressive as inventory increases)
+        const maxSkewAdjustment = spreadOffset * 0.5; // Up to 50% of spread
+        const skewAdjustment = skew * maxSkewAdjustment;
+        // Calculate raw prices
+        let bidPrice = midpoint - spreadOffset - skewAdjustment;
+        let askPrice = midpoint + spreadOffset - skewAdjustment;
+        // Round to nearest tick
+        bidPrice = Math.floor(bidPrice / tickSize) * tickSize;
+        askPrice = Math.ceil(askPrice / tickSize) * tickSize;
+        // Ensure minimum spread
+        const minSpread = tickSize * 2;
+        if (askPrice - bidPrice < minSpread) {
+            const mid = (bidPrice + askPrice) / 2;
+            bidPrice = mid - minSpread / 2;
+            askPrice = mid + minSpread / 2;
+        }
+        // Ensure valid price range
+        bidPrice = Math.max(0.01, Math.min(0.99, bidPrice));
+        askPrice = Math.max(0.01, Math.min(0.99, askPrice));
+        return { bidPrice, askPrice };
+    }
+    /**
+     * Calculate optimal order sizes considering inventory and risk limits
+     */
+    async calculateOptimalSizes(opportunity, currentInventory, positionSize, prices) {
+        const { tokenId, rewardsMinSize, midpoint } = opportunity;
+        const minSize = rewardsMinSize || 5;
+        // Get position scaling factor based on market conditions
+        const scalingFactor = this.getPositionScalingFactor(tokenId);
+        // Calculate base sizes with scaling
+        let bidSize = positionSize.positionSize * scalingFactor;
+        let askSize = Math.min(positionSize.positionSize * scalingFactor, currentInventory);
+        // Get position score and adjust sizes
+        const position = this.positionTracking.get(tokenId);
+        if (position) {
+            const positionBias = (position.positionScore - 50) / 50; // -1 to 1
+            bidSize *= (1 - positionBias * 0.5); // Reduce bid size for high scores
+            askSize *= (1 + positionBias * 0.5); // Increase ask size for high scores
+        }
+        // Adjust for available balance
+        const balance = await this.deps.adapter.fetchBalance(this.deps.proxyWallet);
+        const availableForBid = Math.max(0, balance - this.pendingSpend);
+        if (availableForBid < bidSize * prices.bidPrice) {
+            const oldBidSize = bidSize;
+            bidSize = availableForBid / prices.bidPrice;
+            this.deps.logger.warn(`[MM] Reduced bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} due to insufficient balance`);
+        }
+        // Ensure minimum size requirements
+        if (bidSize < minSize) {
+            bidSize = 0;
+            this.deps.logger.debug(`[MM] Bid size below minimum (${minSize}) for ${tokenId}`);
+        }
+        if (askSize < minSize) {
+            askSize = 0;
+            this.deps.logger.debug(`[MM] Ask size below minimum (${minSize}) for ${tokenId}`);
+        }
+        // Check inventory rebalancing needs
+        const inventorySkew = currentInventory / (positionSize.positionSize * 2);
+        if (Math.abs(inventorySkew) > this.mmConfig.rebalanceThreshold) {
+            if (inventorySkew > 0) {
+                // Increase ask size to reduce long inventory
+                askSize = Math.min(askSize * 1.5, currentInventory);
+                bidSize = Math.max(0, bidSize * 0.5);
+            }
+            else {
+                // Increase bid size to reduce short inventory
+                bidSize = Math.max(bidSize * 1.5, 0);
+                askSize = Math.min(askSize * 0.5, currentInventory);
+            }
+            this.deps.logger.info(`[MM] Rebalancing inventory for ${tokenId}: skew=${inventorySkew.toFixed(2)}`);
+        }
+        // Final validation
+        if (bidSize <= 0 && askSize <= 0) {
+            return {
+                bidSize: 0,
+                askSize: 0,
+                reason: 'No valid order sizes after all adjustments'
+            };
+        }
+        return {
+            bidSize: Math.max(0, bidSize),
+            askSize: Math.max(0, askSize)
+        };
+    }
+    // Helper methods (implement these based on your existing code)
+    getPortfolioValue() {
+        // Implement based on your portfolio tracking
+        return 10000; // Example: $10,000 portfolio
+    }
+    async getAverageEntryPrice(tokenId) {
+        const position = this.positionTracking.get(tokenId);
+        return position?.entryPrice || null;
+    }
+    /**
+     * Update position tracking with new trade information
+     */
+    updatePosition(tokenId, price, size, isBuy) {
+        const current = this.positionTracking.get(tokenId) || {
+            entryPrice: 0,
+            size: 0,
+            pnl: 0,
+            lastUpdated: Date.now(),
+            positionScore: 50 // Neutral score
+        };
+        const iBuy = isBuy; // Avoid shadowing if needed, but not necessary here
+        const newSize = isBuy ? current.size + size : current.size - size;
+        // Calculate new average entry price
+        let newEntryPrice = current.entryPrice;
+        if (isBuy && newSize > 0) {
+            newEntryPrice = ((current.entryPrice * current.size) + (price * size)) / newSize;
+        }
+        // Update position tracking
+        this.positionTracking.set(tokenId, {
+            entryPrice: newEntryPrice,
+            size: newSize,
+            pnl: current.pnl + (isBuy ? 0 : (price - current.entryPrice) * size),
+            lastUpdated: Date.now(),
+            positionScore: this.calculatePositionScore(tokenId, price, newSize, newEntryPrice)
+        });
+        // Clean up if position is closed
+        if (newSize <= 0) {
+            this.positionTracking.delete(tokenId);
+        }
+    }
+    /**
+     * Calculate a position health score (0-100)
+     */
+    calculatePositionScore(tokenId, currentPrice, size, entryPrice) {
+        // Base score components (0-100)
+        const pnlPct = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
+        const positionSizeScore = Math.min(100, (Math.abs(size) / (this.mmConfig.maxPositionUsd / currentPrice)) * 100);
+        // Get market state
+        const marketState = this.marketState.get(tokenId);
+        const volatilityScore = marketState?.volatility.length
+            ? Math.min(100, (1 / (marketState.volatility[marketState.volatility.length - 1] * 100)) * 100)
+            : 50; // Neutral if no data
+        // Combine scores with weights
+        const weights = {
+            pnl: 0.4,
+            size: 0.3,
+            volatility: 0.3
+        };
+        // Normalize PnL to 0-100 scale (adjust these thresholds as needed)
+        const normalizedPnl = Math.min(100, Math.max(0, 50 + (pnlPct * 10)));
+        // Calculate weighted score
+        return Math.round((normalizedPnl * weights.pnl) +
+            (positionSizeScore * weights.size) +
+            (volatilityScore * weights.volatility));
+    }
+    /**
+     * Get position scaling factor based on market conditions
+     */
+    getPositionScalingFactor(tokenId) {
+        const market = this.marketState.get(tokenId);
+        if (!market || market.volatility.length < 2)
+            return 1.0;
+        // Calculate average volatility over window
+        const avgVolatility = market.volatility.reduce((a, b) => a + b, 0) / market.volatility.length;
+        // Calculate volume trend (simple moving average ratio)
+        const volumeAvg = market.volume.reduce((a, b) => a + b, 0) / market.volume.length;
+        const recentVolume = market.volume[market.volume.length - 1];
+        const volumeRatio = volumeAvg > 0 ? recentVolume / volumeAvg : 1.0;
+        // Calculate spread factor (wider spread = smaller position)
+        const avgSpread = market.spread.reduce((a, b) => a + b, 0) / market.spread.length;
+        const spreadFactor = Math.max(0.5, Math.min(2.0, 1 / (avgSpread * 10)));
+        // Combine factors with weights
+        const volFactor = Math.min(2.0, Math.max(0.5, 1 / (avgVolatility * 10)));
+        const volumeFactor = Math.min(1.5, Math.max(0.5, volumeRatio));
+        // Apply constraints
+        return Math.max(this.POSITION_SCALING.MIN_SCALING_FACTOR, Math.min(this.POSITION_SCALING.MAX_SCALING_FACTOR, volFactor * 0.6 + volumeFactor * 0.3 + spreadFactor * 0.1));
     }
     /**
      * Get the exchange adapter instance
      */
     getAdapter() {
         return this.deps.adapter;
+    }
+    /**
+     * Create a direct order through the executor (handles pending spend tracking)
+     */
+    // FIX: Added createOrder method to allow direct order placement with pending spend tracking
+    async createOrder(params) {
+        const { adapter, logger } = this.deps;
+        try {
+            const result = await adapter.createOrder(params);
+            // Update pending spend if it's a successful buy order to maintain accurate balance tracking
+            if (result.success && params.side === 'BUY') {
+                const amount = result.usdFilled || (result.sharesFilled * (result.priceFilled || 0));
+                if (amount > 0) {
+                    this.updatePendingSpend(amount, true, result.orderId);
+                }
+            }
+            return result;
+        }
+        catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            logger.error(`[Executor] Direct order failed: ${err.message}`, err);
+            throw err;
+        }
     }
     // ============================================================
     // MARKET MAKING METHODS (NEW)
@@ -67,9 +390,45 @@ export class TradeExecutorService {
      * Places GTC limit orders on both sides to capture spread
      * Per docs: GTC orders rest on book and earn liquidity rewards
      */
+    /**
+     * Update market state with latest price and volume data
+     */
+    updateMarketStateInternal(tokenId, price, volume, spread) {
+        const state = this.marketState.get(tokenId) || {
+            volatility: [],
+            volume: [],
+            spread: [],
+            lastMidPrice: price
+        };
+        // Calculate price change for volatility
+        if (state.lastMidPrice > 0) {
+            const priceChange = Math.abs((price - state.lastMidPrice) / state.lastMidPrice);
+            state.volatility.push(priceChange);
+            // Maintain rolling window
+            if (state.volatility.length > this.POSITION_SCALING.VOLATILITY_WINDOW) {
+                state.volatility.shift();
+            }
+        }
+        // Update volume and spread
+        state.volume.push(volume);
+        state.spread.push(spread);
+        // Maintain rolling windows
+        if (state.volume.length > this.POSITION_SCALING.VOLUME_WINDOW) {
+            state.volume.shift();
+        }
+        if (state.spread.length > this.POSITION_SCALING.VOLATILITY_WINDOW) {
+            state.spread.shift();
+        }
+        state.lastMidPrice = price;
+        this.marketState.set(tokenId, state);
+    }
     async executeMarketMakingQuotes(opportunity) {
         const { logger, adapter, proxyWallet } = this.deps;
-        const { tokenId, conditionId, midpoint, spread, question, rewardsMaxSpread, rewardsMinSize, skew = 0 } = opportunity;
+        const { tokenId, conditionId, midpoint, spread, rewardsMaxSpread, rewardsMinSize } = opportunity;
+        const vol = opportunity.volatility || 0.05;
+        const volume = opportunity.volume || 0;
+        // Update market state with latest data
+        this.updateMarketStateInternal(tokenId, midpoint, volume, spread);
         const failResult = (reason) => ({
             tokenId,
             status: 'FAILED',
@@ -83,47 +442,50 @@ export class TradeExecutorService {
             }
             // 2. Cancel existing quotes for this token before placing new ones
             await this.cancelExistingQuotes(tokenId);
-            // 3. Check inventory limits
+            // 3. Check inventory limits with dynamic position sizing
             const currentInventory = await this.getTokenInventory(tokenId);
             const inventoryValueUsd = currentInventory * midpoint;
-            if (inventoryValueUsd >= this.mmConfig.maxPositionUsd) {
-                logger.warn(`[MM] Inventory limit reached for ${tokenId}: $${inventoryValueUsd.toFixed(2)}`);
+            // Calculate dynamic position size based on volatility and portfolio
+            const positionSize = this.calculateDynamicPositionSize(opportunity, currentInventory);
+            // Check if we need to reduce position due to stop loss or drawdown
+            if (await this.checkStopLossTriggers(tokenId, currentInventory, midpoint)) {
+                logger.warn(`[MM] Stop loss triggered for ${tokenId}, reducing position`);
+                return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
+            }
+            // Check if we've hit max position size
+            if (inventoryValueUsd >= positionSize.maxPositionValue) {
+                logger.warn(`[MM] Position limit reached for ${tokenId}: $${inventoryValueUsd.toFixed(2)}`);
                 // Only post asks to reduce inventory
                 return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
             }
-            // 4. Calculate quote prices with INVENTORY SKEW
-            /**
-             * SKEW LOGIC:
-             * If skew > 0 (heavy YES), we lower BOTH prices.
-             * Lower Bid = Harder to buy more YES.
-             * Lower Ask = Easier to sell current YES shares (cheapest on book).
-             */
-            const skewAdjustment = skew * 0.02; // Max 2 cent aggressive lean
-            let bidOffset = this.mmConfig.spreadOffset;
-            let askOffset = this.mmConfig.spreadOffset;
-            // If reward-eligible, ensure we're within max_spread
-            if (rewardsMaxSpread && this.mmConfig.spreadOffset > rewardsMaxSpread / 2) {
-                bidOffset = rewardsMaxSpread / 2 - 0.001;
-                askOffset = rewardsMaxSpread / 2 - 0.001;
+            // 4. Calculate dynamic spreads with inventory skew and volatility adjustment
+            const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, market);
+            // 5. Calculate order sizes with inventory management
+            const optimalSizes = await this.calculateOptimalSizes(opportunity, currentInventory, positionSize, { bidPrice, askPrice });
+            // If no valid sizes after all adjustments, skip this market
+            if (optimalSizes.bidSize <= 0 && optimalSizes.askSize <= 0) {
+                return {
+                    tokenId,
+                    status: 'SKIPPED',
+                    reason: 'insufficient_size_after_risk_checks'
+                };
             }
-            const bidPrice = Math.max(0.01, midpoint - bidOffset - skewAdjustment);
-            const askPrice = Math.min(0.99, midpoint + askOffset - skewAdjustment);
-            // 5. Determine quote sizes
-            let bidSize = this.mmConfig.quoteSize / bidPrice;
-            let askSize = Math.min(this.mmConfig.quoteSize / askPrice, currentInventory);
+            // 6. Final size adjustments
+            let finalBidSize = optimalSizes.bidSize;
+            let finalAskSize = optimalSizes.askSize;
             // Check rewards min_size requirement
             const minSize = rewardsMinSize || market.minOrderSize || 5;
-            if (bidSize < minSize)
-                bidSize = minSize;
-            if (askSize < minSize && currentInventory >= minSize)
-                askSize = minSize;
+            if (finalBidSize > 0 && finalBidSize < minSize)
+                finalBidSize = minSize;
+            if (finalAskSize > 0 && finalAskSize < minSize && currentInventory >= minSize)
+                finalAskSize = minSize;
             // 6. Check balance for bid
             const balance = await adapter.fetchBalance(proxyWallet);
             const availableForBid = Math.max(0, balance - this.pendingSpend);
-            if (availableForBid < bidSize * bidPrice) {
-                bidSize = availableForBid / bidPrice;
+            if (availableForBid < finalBidSize * bidPrice) {
+                finalBidSize = availableForBid / bidPrice;
             }
-            // 7. Place orders using GTC (required for rewards)
+            // 7. Place orders using GTC
             const result = {
                 tokenId,
                 status: 'POSTED',
@@ -131,37 +493,37 @@ export class TradeExecutorService {
                 askPrice
             };
             // Place BID (buy order)
-            if (bidSize >= minSize) {
-                const bidResult = await this.placeGTCOrder({
+            if (finalBidSize >= minSize) {
+                const bidOrder = await this.placeGTCOrder({
                     tokenId,
                     conditionId,
                     side: 'BUY',
                     price: bidPrice,
-                    size: bidSize,
+                    size: finalBidSize,
                     negRisk: market.negRisk,
                     tickSize: market.tickSize
                 });
-                if (bidResult.success) {
-                    result.bidOrderId = bidResult.orderId;
-                    this.pendingSpend += bidSize * bidPrice;
+                if (bidOrder.success) {
+                    result.bidOrderId = bidOrder.orderId;
+                    this.pendingSpend += finalBidSize * bidPrice;
                 }
                 else {
                     result.status = 'PARTIAL';
                 }
             }
             // Place ASK (sell order)
-            if (askSize >= minSize && currentInventory >= minSize) {
-                const askResult = await this.placeGTCOrder({
+            if (finalAskSize >= minSize && currentInventory >= minSize) {
+                const askOrder = await this.placeGTCOrder({
                     tokenId,
                     conditionId,
                     side: 'SELL',
                     price: askPrice,
-                    size: askSize,
+                    size: finalAskSize,
                     negRisk: market.negRisk,
                     tickSize: market.tickSize
                 });
-                if (askResult.success) {
-                    result.askOrderId = askResult.orderId;
+                if (askOrder.success) {
+                    result.askOrderId = askOrder.orderId;
                 }
                 else {
                     if (!result.bidOrderId)

@@ -2,7 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 // Portfolio Snapshot Schema
 const portfolioSnapshotSchema = new Schema({
     userId: { type: String, required: true, index: true },
-    timestamp: { type: Date, required: true, index: true },
+    timestamp: { type: Date, required: true },
     totalValue: { type: Number, required: true },
     cashBalance: { type: Number, required: true },
     positionsValue: { type: Number, required: true },

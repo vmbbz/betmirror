@@ -7,11 +7,15 @@ export class TradeMonitorService {
     deps;
     isPolling = false;
     pollInterval;
+    running = false;
     targetWallets = new Set();
     processedHashes = new Map();
     constructor(deps) {
         this.deps = deps;
         this.updateTargets(deps.userAddresses);
+    }
+    isActive() {
+        return this.running;
     }
     updateTargets(newTargets) {
         this.deps.userAddresses = newTargets;
@@ -22,12 +26,14 @@ export class TradeMonitorService {
         if (this.isPolling)
             return;
         this.isPolling = true;
+        this.running = true;
         this.deps.logger.info(`🔌 Starting High-Frequency Polling (Data API)...`);
         await this.poll();
         this.pollInterval = setInterval(() => this.poll(), 10000); // 10 seconds 
     }
     stop() {
         this.isPolling = false;
+        this.running = false;
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
             this.pollInterval = undefined;
@@ -48,7 +54,6 @@ export class TradeMonitorService {
     async checkUserActivity(user) {
         try {
             const url = `https://data-api.polymarket.com/activity?user=${user}&limit=5`;
-            // Added User-Agent header
             const res = await axios.get(url, {
                 timeout: 3000,
                 headers: HTTP_HEADERS
@@ -61,9 +66,7 @@ export class TradeMonitorService {
                 await this.processTrade(user, trade);
             }
         }
-        catch (e) {
-            // Silent fail
-        }
+        catch (e) { }
     }
     async processTrade(user, activity) {
         const txHash = activity.transactionHash;

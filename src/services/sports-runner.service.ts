@@ -1,11 +1,9 @@
-
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { Logger } from '../utils/logger.util.js';
 import { SportsIntelService, SportsMatch } from './sports-intel.service.js';
 import { TradeExecutorService } from './trade-executor.service.js';
-import { SportsMatch as DbSportsMatch, Trade as DbTrade } from '../database/index.js';
+import { SportsMatch as DbSportsMatch } from '../database/index.js';
 import axios from 'axios';
-import crypto from 'crypto';
 
 interface ActiveChase {
     matchId: string;
@@ -83,7 +81,7 @@ export class SportsRunnerService {
                 }
 
             } catch (e) {
-                this.logger.error(`Exit Monitor Error for ${chase.matchKey}`, e instanceof Error ? e : new Error(String(e)));
+                this.logger.debug(`Exit Monitor Error for ${chase.matchKey}`);
             }
         }
     }
@@ -102,7 +100,7 @@ export class SportsRunnerService {
                 side: 'SELL',
                 sizeUsd: 0,
                 sizeShares: chase.shares,
-                priceLimit: 0.01, // Sweep down to book floor to ensure exit
+                priceLimit: 0.01,
                 orderType: 'FAK'
             });
 
@@ -126,29 +124,27 @@ export class SportsRunnerService {
         this.logger.info(`🎯 Evaluating Frontrunning Edge for ${matchKey}...`);
 
         try {
-            const conditionId = await this.findConditionId(match);
-            if (!conditionId) {
-                this.logger.warn(`❌ No Polymarket mapping found for ${matchKey}`);
-                return;
-            }
+            const conditionId = await this.findPolymarketCondition(match);
+            if (!conditionId) return;
 
             const market = await (this.adapter as any).getRawClient().getMarket(conditionId);
             const targetToken = market.clobTokenIds[0]; 
-            const scoringTeamSide = match.score[0] > match.score[1] ? 'HOME' : 'AWAY';
-            const fairValue = this.calculateFairValue(match.score, match.minute, scoringTeamSide);
+            
+            const fairValue = this.calculateFairValue(match.score, match.minute);
             const marketPrice = await this.adapter.getMarketPrice(conditionId, targetToken, 'BUY');
 
             const edge = fairValue - marketPrice;
             
-            if (edge >= 0.15) {
-                this.logger.success(`🚀 [ALPHA WINDOW] Frontrunning Goal for ${matchKey}!`);
+            // World-Class Alpha Check: Minimum 12 cent edge required for taker fees & slippage
+            if (edge >= 0.12) {
+                this.logger.success(`🚀 [ALPHA WINDOW] Frontrunning Goal for ${matchKey}! Edge: ${edge.toFixed(2)} | Fair: ${fairValue.toFixed(2)}`);
                 
                 const execution = await this.executor.createOrder({
                     marketId: conditionId,
                     tokenId: targetToken,
                     outcome: 'YES',
                     side: 'BUY',
-                    sizeUsd: 100, 
+                    sizeUsd: 100,
                     orderType: 'FOK' 
                 });
 
@@ -159,7 +155,7 @@ export class SportsRunnerService {
                         conditionId,
                         tokenId: targetToken,
                         entryPrice: execution.priceFilled,
-                        targetPrice: fairValue * 0.98, // Exit slightly before theoretical fair
+                        targetPrice: fairValue * 0.98,
                         startTime: Date.now(),
                         lastBid: marketPrice,
                         stallTicks: 0,
@@ -179,14 +175,14 @@ export class SportsRunnerService {
     private handleVAR(match: SportsMatch) {
         const matchKey = `${match.homeTeam}-${match.awayTeam}`;
         if (this.activeChases.has(matchKey)) {
-            this.logger.warn(`🚨 [VAR PANIC] ${matchKey} Goal under review. Triggering Emergency Exit...`);
+            this.logger.warn(`🚨 [VAR EMERGENCY] Review in progress for ${matchKey}. DUMPING POSITION.`);
             this.liquidateScalp(matchKey, 0, "VAR Panic").catch(() => {});
         }
     }
 
-    private async findConditionId(match: SportsMatch): Promise<string | null> {
-        const dbMapping = await DbSportsMatch.findOne({ matchId: match.id });
-        if (dbMapping) return dbMapping.conditionId;
+    private async findPolymarketCondition(match: SportsMatch): Promise<string | null> {
+        const cached = await DbSportsMatch.findOne({ matchId: match.id });
+        if (cached) return cached.conditionId;
 
         try {
             const query = encodeURIComponent(`${match.homeTeam} ${match.awayTeam}`);
@@ -206,10 +202,40 @@ export class SportsRunnerService {
         return null;
     }
 
-    private calculateFairValue(score: [number, number], minute: number, side: string): number {
+    /**
+     * WORLD-CLASS FAIR VALUE ENGINE
+     * Implements a Dynamic Power-Curve Decay model for Soccer.
+     * P(win) = Base + (1 - Base) * (t^Decay)
+     */
+    private calculateFairValue(score: [number, number], minute: number): number {
         const [h, a] = score;
-        if (h > a) return 0.78; 
-        if (h === a) return 0.45; 
-        return 0.15;
+        const absoluteDiff = Math.abs(h - a);
+        
+        // Normalize time to a 0.0 -> 1.0 scale (Cap at 95m for injury time)
+        const timeFactor = Math.min(minute / 95, 0.99);
+
+        // Case 1: One side is leading
+        if (absoluteDiff > 0) {
+            // A 1-goal lead starts at 65% win probability (industry standard)
+            // A 2-goal lead starts at 88% win probability
+            const baseProb = absoluteDiff === 1 ? 0.65 : 0.88;
+            
+            // Power Factor (2.5) ensures the probability accelerates 
+            // exponentially as the match enters the 'Kill Zone' (70m+)
+            const decaySensitivity = 2.5;
+            const fairValue = baseProb + (1 - baseProb) * Math.pow(timeFactor, decaySensitivity);
+            
+            return Math.min(fairValue, 0.99);
+        }
+
+        // Case 2: Match is a Draw
+        if (absoluteDiff === 0) {
+            // Draws start at 33% (1/3rd) and climb to 100% at the whistle
+            const baseDraw = 0.33;
+            const drawFairValue = baseDraw + (1 - baseDraw) * Math.pow(timeFactor, 3.0);
+            return Math.min(drawFairValue, 0.99);
+        }
+
+        return 0.5;
     }
 }

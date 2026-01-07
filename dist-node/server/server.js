@@ -6,7 +6,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, SportsMatch } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -221,6 +221,14 @@ app.post('/api/wallet/activate', async (req, res) => {
     const normId = userId.toLowerCase();
     try {
         let user = await User.findOne({ address: normId });
+        // Prevent new wallet creation in development
+        if ((!user || !user.tradingWallet || !user.tradingWallet.address) &&
+            (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'local')) {
+            console.warn(`[ACTIVATION BLOCKED] New wallet generation blocked in development mode for ${normId}`);
+            return res.status(400).json({
+                error: 'New wallet creation is disabled in development mode. Use an existing wallet or set NODE_ENV=production'
+            });
+        }
         if (user && user.tradingWallet && user.tradingWallet.address) {
             console.log(`[ACTIVATION] User ${normId} already has wallet.`);
             // Force SDK-aligned derivation
@@ -228,13 +236,12 @@ app.post('/api/wallet/activate', async (req, res) => {
             user.tradingWallet.safeAddress = safeAddr;
             user.tradingWallet.type = 'GNOSIS_SAFE';
             await user.save();
-            res.json({
+            return res.json({
                 success: true,
                 address: user.tradingWallet.address,
                 safeAddress: safeAddr,
                 restored: true
             });
-            return;
         }
         console.log(`[ACTIVATION] Generating NEW keys for ${normId}...`);
         const walletConfig = await evmWalletService.createTradingWallet(normId);
@@ -256,8 +263,11 @@ app.post('/api/wallet/activate', async (req, res) => {
         });
     }
     catch (e) {
-        console.error("[ACTIVATION DB ERROR]", e);
-        res.status(500).json({ error: e.message || 'Failed to activate' });
+        console.error("[ACTIVATION ERROR]", e);
+        res.status(500).json({
+            error: e.message || 'Failed to activate',
+            details: process.env.NODE_ENV === 'development' ? e.stack : undefined
+        });
     }
 });
 // 2b. Add Recovery Owner (Multi-Owner Safe)
@@ -382,7 +392,7 @@ app.post('/api/feedback', async (req, res) => {
 });
 // 5. Start Bot
 app.post('/api/bot/start', async (req, res) => {
-    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
+    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, enableSportsFrontrunning, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
     if (!userId) {
         res.status(400).json({ error: 'Missing userId' });
         return;
@@ -405,6 +415,10 @@ app.post('/api/bot/start', async (req, res) => {
             multiplier: Number(multiplier),
             riskProfile,
             enableAutoArb,
+            enableSportsFrontrunning,
+            enableCopyTrading: true, // Default to enabled
+            enableMoneyMarkets: true, // Default to enabled
+            enableSportsRunner: true, // Default to enabled
             autoTp: autoTp ? Number(autoTp) : undefined,
             enableNotifications: notifications?.enabled,
             userPhoneNumber: notifications?.phoneNumber,
@@ -492,6 +506,28 @@ app.post('/api/bot/update', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+// Trigger a forced market discovery scan
+app.post('/api/bot/refresh', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId)
+        return res.status(400).json({ error: "Missing userId" });
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    try {
+        if (engine && engine.arbScanner) {
+            await engine.arbScanner.forceRefresh();
+            res.json({ success: true, message: "Manual scan triggered" });
+        }
+        else {
+            // If bot not running, we could still trigger a global scanner refresh if one existed,
+            // but for now we just return error.
+            res.status(404).json({ error: "Bot engine not running" });
+        }
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 // 7. Bot Status & Logs
 app.get('/api/bot/status/:userId', async (req, res) => {
     const { userId } = req.params;
@@ -501,7 +537,33 @@ app.get('/api/bot/status/:userId', async (req, res) => {
         const tradeHistory = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
         const user = await User.findOne({ address: normId }).lean();
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
-        const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(20).lean();
+        // --- ENHANCEMENT: DISCOVERY CACHE ---
+        // Pull latest 50 discovered markets from the scanner (if running) or DB
+        let mmOpportunities = [];
+        if (engine && engine.arbScanner) {
+            const scanner = engine.arbScanner;
+            const strictOpps = scanner.getOpportunities();
+            const monitored = scanner.getMonitoredMarkets();
+            // Combine strict + monitored to ensure tabs are never blank
+            const combined = [...strictOpps];
+            monitored.forEach((m) => {
+                if (!combined.some(c => c.tokenId === m.tokenId)) {
+                    combined.push(m);
+                }
+            });
+            mmOpportunities = combined.sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
+        }
+        else {
+            const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(100).lean();
+            mmOpportunities = persistedMMOpps.map((o) => ({
+                ...o,
+                roi: o.roi || o.spreadPct || 0,
+                capacityUsd: o.capacityUsd || o.liquidity || 0,
+                volume24hr: o.volume24hr || 0,
+                liquidity: o.liquidity || 0,
+                orderMinSize: o.orderMinSize || 5
+            }));
+        }
         const formattedLogs = dbLogs.map(l => ({
             id: l._id.toString(),
             time: l.timestamp.toLocaleTimeString(),
@@ -514,41 +576,14 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             id: t._id.toString()
         }));
         let livePositions = [];
-        // MAPPER: Ensure full metadata and volatility info is passed to the UI
-        let mmOpportunities = persistedMMOpps.map((o) => ({
-            marketId: o.marketId,
-            conditionId: o.conditionId || o.marketId,
-            tokenId: o.tokenId,
-            question: o.question || '',
-            image: o.image || '',
-            marketSlug: o.marketSlug || '',
-            bestBid: o.bestBid || 0,
-            bestAsk: o.bestAsk || 0,
-            spread: o.spread || 0,
-            spreadPct: o.spreadPct || 0,
-            spreadCents: (o.spread || 0) * 100,
-            midpoint: o.midpoint || 0,
-            volume: o.volume || 0,
-            liquidity: o.liquidity || 0,
-            isNewMarket: o.isNewMarket || false,
-            timestamp: o.timestamp instanceof Date ? o.timestamp.getTime() : new Date(o.timestamp).getTime(),
-            roi: o.roi || o.spreadPct || 0,
-            combinedCost: o.combinedCost || (1 - (o.spread || 0)),
-            capacityUsd: o.capacityUsd || o.liquidity || 0,
-            status: o.status || 'active',
-            acceptingOrders: o.acceptingOrders !== false,
-            volume24hr: o.volume24hr || 0,
-            category: o.category || 'general',
-            // Pass through volatility data
-            lastPriceMovePct: o.lastPriceMovePct || 0,
-            isVolatile: o.isVolatile || false
-        }));
         if (engine) {
-            livePositions = engine.getActivePositions() || [];
-            const engineOpps = engine.getArbOpportunities() || [];
-            if (engineOpps.length > 0) {
-                mmOpportunities = engineOpps;
-            }
+            const scanner = engine.arbScanner;
+            livePositions = (engine.getActivePositions() || []).map(p => ({
+                ...p,
+                // --- ENHANCEMENT: MM MANAGEMENT FLAG ---
+                // Mark if the scanner is currently providing liquidity for this token
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
+            }));
         }
         else if (user && user.activePositions) {
             livePositions = user.activePositions;
@@ -575,14 +610,19 @@ app.post('/api/bot/mm/add-market', async (req, res) => {
     const engine = ACTIVE_BOTS.get(normId);
     if (!engine)
         return res.status(404).json({ error: "Engine offline" });
-    let success = false;
-    if (conditionId) {
-        success = await engine.addMarketToMM(conditionId);
+    try {
+        const success = conditionId
+            ? await engine.addMarketToMM(conditionId)
+            : await engine.addMarketBySlug(slug);
+        res.json({ success });
     }
-    else if (slug) {
-        success = await engine.addMarketBySlug(slug);
+    catch (error) {
+        console.error('Error adding market:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to add market'
+        });
     }
-    res.json({ success });
 });
 // In src/server/server.ts, update the /api/bot/mm/bookmark endpoint
 app.post('/api/bot/mm/bookmark', async (req, res) => {
@@ -795,7 +835,7 @@ app.post('/api/wallet/withdraw', async (req, res) => {
         }
         else {
             try {
-                balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
+                balanceToWithdraw = await usdcContract.of(safeAddr);
                 if (!targetSafeAddress)
                     eoaBalance = await usdcContract.balanceOf(walletConfig.address);
             }
@@ -1055,6 +1095,26 @@ app.get('/api/market/:marketId', async (req, res) => {
         else {
             res.status(500).json({ error: e.message });
         }
+    }
+});
+// New: Sports Intel Map
+app.get('/api/sports/matches', async (req, res) => {
+    try {
+        const matches = await SportsMatch.find({}).sort({ updatedAt: -1 });
+        res.json(matches);
+    }
+    catch (e) {
+        res.status(500).json({ error: 'DB Error' });
+    }
+});
+app.post('/api/sports/map', async (req, res) => {
+    const { matchId, conditionId } = req.body;
+    try {
+        await SportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
+        res.json({ success: true });
+    }
+    catch (e) {
+        res.status(500).json({ error: 'Mapping failed' });
     }
 });
 app.get('*', (req, res) => {

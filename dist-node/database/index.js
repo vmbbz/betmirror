@@ -2,6 +2,17 @@ import mongoose, { Schema } from 'mongoose';
 import { DatabaseEncryptionService } from '../services/database-encryption.service.js';
 // Initialize the encryption service immediately with the environment key
 DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
+const SportsMatchSchema = new Schema({
+    matchId: { type: String, required: true, unique: true },
+    conditionId: { type: String, required: true, index: true },
+    homeTeam: String,
+    awayTeam: String,
+    league: String,
+    lastScore: { type: [Number], default: [0, 0] },
+    lastMinute: { type: Number, default: 0 },
+    status: String,
+    updatedAt: { type: Date, default: Date.now }
+});
 const MoneyMarketOpportunitySchema = new Schema({
     marketId: { type: String, required: true, index: true },
     tokenId: { type: String, required: true, unique: true },
@@ -203,6 +214,7 @@ export const BridgeTransaction = mongoose.model('BridgeTransaction', BridgeTrans
 export const DepositLog = mongoose.model('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model('BotLog', BotLogSchema);
 export const MoneyMarketOpportunity = mongoose.model('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
+export const SportsMatch = mongoose.model('SportsMatch', SportsMatchSchema);
 // --- Connection ---
 export const connectDB = async () => {
     const uri = process.env.MONGODB_URI;

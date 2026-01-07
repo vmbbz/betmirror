@@ -1,9 +1,10 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Activity, Crosshair, Zap, Scale, Terminal, ShieldCheck, 
   Loader2, Search, Globe, Trophy, 
   TrendingUp, ExternalLink, RefreshCw,
-  Coins, Landmark, Star, BarChart3, PlusCircle, Cpu, Lock
+  Coins, Landmark, Star, BarChart3, PlusCircle, Cpu, Lock, Info, X, ChevronRight, Layers, Recycle
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import axios from 'axios';
@@ -18,6 +19,103 @@ const formatCompactNumber = (num: number): string => {
   if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
   if (num < 1000000000) return (num / 1000000).toFixed(1) + 'M';
   return (num / 1000000000).toFixed(1) + 'B';
+};
+
+// --- Sub-Component: Money Market Anatomy Modal ---
+const MoneyMarketExplainer = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in duration-300">
+            <div className="relative w-full max-w-4xl max-h-[90vh] overflow-y-auto custom-scrollbar bg-[#0a0a0a] border border-white/10 rounded-[3rem] p-10 shadow-2xl">
+                <button onClick={onClose} className="absolute top-8 right-8 p-2 text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all">
+                    <X size={24}/>
+                </button>
+
+                <div className="space-y-12">
+                    {/* Header */}
+                    <div className="text-center space-y-4">
+                        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-[0.2em]">
+                            <Terminal size={14}/> Institutional Engine Anatomy
+                        </div>
+                        <h2 className="text-4xl font-black text-white uppercase tracking-tighter italic">How the Money Market Logic Works</h2>
+                        <p className="text-gray-500 max-w-xl mx-auto text-sm font-medium">
+                            Bet Mirror Pro operates as a sophisticated HFT (High-Frequency Trading) Market Maker. Here is how our server-side engine captures alpha on every tick.
+                        </p>
+                    </div>
+
+                    {/* Dual Purpose Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="p-8 bg-white/[0.02] border border-white/5 rounded-[2.5rem] space-y-4">
+                            <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/20">
+                                <Recycle size={24}/>
+                            </div>
+                            <h3 className="text-xl font-black text-white uppercase italic">1. Spread Arbitrage</h3>
+                            <p className="text-gray-400 text-xs leading-relaxed">
+                                The engine identifies "gaps" in the order book. By simultaneously placing a <span className="text-emerald-400 font-bold">BID</span> (Buy) and an <span className="text-rose-400 font-bold">ASK</span> (Sell), we capture the spread. This is pure arbitrage: buying at the bottom of the gap and selling at the top.
+                            </p>
+                        </div>
+                        <div className="p-8 bg-white/[0.02] border border-white/5 rounded-[2.5rem] space-y-4">
+                            <div className="w-12 h-12 rounded-2xl bg-emerald-600 flex items-center justify-center text-white shadow-lg shadow-emerald-600/20">
+                                <Trophy size={24}/>
+                            </div>
+                            <h3 className="text-xl font-black text-white uppercase italic">2. Liquidity Rewards</h3>
+                            <p className="text-gray-400 text-xs leading-relaxed">
+                                Polymarket rewards users who provide liquidity. Our server ensures your quotes stay within the <span className="text-blue-400 font-bold">Max Reward Band</span>. Even if a trade doesn't fill immediately, the bot generates a passive USDC yield just for existing on the book.
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Step-by-Step Server Logic */}
+                    <div className="space-y-6">
+                        <h4 className="text-xs font-black text-gray-500 uppercase tracking-[0.3em] border-l-2 border-blue-500 pl-4">The Autonomous Execution Loop</h4>
+                        <div className="grid grid-cols-1 gap-4">
+                            {[
+                                {
+                                    icon: <Crosshair className="text-blue-400"/>,
+                                    title: "Real-time Midpoint Calculation",
+                                    desc: "The server tracks the fair value of a market in milliseconds. It identifies the exact center between the current buyer and seller."
+                                },
+                                {
+                                    icon: <Zap className="text-amber-400"/>,
+                                    title: "GTC Order Placement",
+                                    desc: "Unlike 'Swaps' which lose money to slippage, we use GTC (Good-Til-Cancelled) Limit Orders. These rest on the blockchain, becoming the liquidity other people pay for."
+                                },
+                                {
+                                    icon: <Scale className="text-purple-400"/>,
+                                    title: "Inventory Skew Management",
+                                    desc: "If the bot accumulates too many 'YES' shares, it automatically 'skews' its quotes. It will lower the Sell price to encourage a trade-out and lower the Buy price to prevent further exposure."
+                                },
+                                {
+                                    icon: <ShieldCheck className="text-emerald-400"/>,
+                                    title: "Atomic Re-quoting",
+                                    desc: "The moment the market moves, the server cancels stale orders and re-posts fresh ones. This 'Re-quoting' ensures we are never 'run over' by sharp price movements."
+                                }
+                            ].map((step, i) => (
+                                <div key={i} className="flex items-start gap-6 p-6 hover:bg-white/[0.03] transition-all rounded-3xl group">
+                                    <div className="mt-1">{step.icon}</div>
+                                    <div className="space-y-1">
+                                        <div className="text-sm font-black text-white uppercase tracking-tight group-hover:text-blue-400 transition-colors">{step.title}</div>
+                                        <div className="text-[11px] text-gray-500 leading-relaxed">{step.desc}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Final CTA/Summary */}
+                    <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-blue-600/20 to-transparent border border-blue-500/20 text-center">
+                        <p className="text-sm font-bold text-white mb-6 italic">
+                            "In summary: The server behaves like a 24/7 automated exchange, picking up pennies in front of steamrollers, but with a built-in shield of AI risk management."
+                        </p>
+                        <button onClick={onClose} className="px-10 py-4 bg-white text-black font-black rounded-2xl uppercase text-[10px] tracking-widest hover:scale-105 transition-all">
+                            Initialize Strategy
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 // --- Sub-Component: Reward Scoring Indicator (HFT Specific) ---
@@ -243,6 +341,7 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
     const [manualId, setManualId] = useState('');
     const [scanning, setScanning] = useState(false);
     const [isBookmarking, setIsBookmarking] = useState<Record<string, boolean>>({});
+    const [isExplainerOpen, setIsExplainerOpen] = useState(false);
 
     const filteredOpps = useMemo(() => {
         if (!moneyMarketOpps) return [];
@@ -275,42 +374,41 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
     };
 
     return (
-        <div className="grid grid-cols-12 gap-8 pb-10 animate-in fade-in duration-500 max-w-screen-2xl mx-auto h-full">
-            <div className="col-span-12 lg:col-span-8 space-y-6">
-                <div className="glass-panel p-6 rounded-3xl border-white/5 bg-gradient-to-br from-blue-600/[0.02] to-transparent shadow-xl relative overflow-hidden">
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-10">
+                <div className="grid grid-cols-12 gap-10 pb-10 animate-in fade-in duration-700">
+            <MoneyMarketExplainer isOpen={isExplainerOpen} onClose={() => setIsExplainerOpen(false)} />
+
+            {/* Main Intelligence Discovery Layer */}
+            <div className="col-span-12 lg:col-span-8 space-y-8">
+                <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 bg-gradient-to-br from-blue-600/[0.04] to-transparent shadow-xl relative overflow-hidden">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 relative z-10">
                         <div>
-                            <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-3">
-                                <Crosshair className="text-blue-500" size={24}/> Intelligence Scout
+                            <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-4">
+                                <Crosshair className="text-blue-500" size={28}/> Intelligence Scout
                             </h2>
-                            <p className="text-[9px] text-gray-500 font-bold uppercase tracking-[0.4em] mt-1">Autonomous Yield Capture Protocol v4.0</p>
-                        </div>
-                        <div className="flex gap-2 w-full md:w-auto">
-                            <div className="relative flex-1 md:w-[260px]">
-                                <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-[10px] font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700" />
+                            <div className="flex items-center gap-3 mt-1.5">
+                                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.4em]">v4.0.2 Institutional Node</p>
+                                <button onClick={() => setIsExplainerOpen(true)} className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 text-[9px] font-black text-blue-400 uppercase tracking-widest transition-all">
+                                    <Info size={12}/> How it works
+                                </button>
                             </div>
-                            <button onClick={handleManualAdd} className="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-lg flex items-center justify-center">
-                                {scanning ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
+                        </div>
+                        <div className="flex gap-3 w-full md:w-auto">
+                            <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full md:w-72 bg-black/40 border border-white/5 rounded-2xl px-6 py-4 text-xs font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700" />
+                            <button onClick={handleManualAdd} className="bg-white text-black px-8 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-xl">
+                                {scanning ? <Loader2 size={16} className="animate-spin"/> : 'Sync Intel'}
                             </button>
                         </div>
                     </div>
                     <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 relative z-10">
-                        {[
-                            { id: 'all', label: 'All Discovery', icon: <Globe size={12}/> },
-                            { id: 'trending', label: 'Trending', icon: <TrendingUp size={12}/> },
-                            { id: 'sports', label: 'Sports', icon: <Trophy size={12}/> },
-                            { id: 'crypto', label: 'Crypto', icon: <Coins size={12}/> },
-                            { id: 'politics', label: 'Politics', icon: <Landmark size={12}/> },
-                            { id: 'bookmarks', label: 'Bookmarks', icon: <Star size={12}/> }
-                        ].map(cat => (
-                            <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${activeCategory === cat.id ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
-                                {cat.icon} {cat.label}
+                        {['all', 'trending', 'sports', 'crypto', 'politics'].map(cat => (
+                            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${activeCategory === cat ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
+                                {cat}
                             </button>
                         ))}
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     {filteredOpps.map((opp) => (
                         <ScoutMarketCard 
                             key={opp.tokenId} 
@@ -323,26 +421,23 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                     ))}
                 </div>
             </div>
-            {/* RIGHT COLUMN: Persistent Monitoring (Exposure + Orders) */}
-            <div className="col-span-12 lg:col-span-4 flex flex-col gap-6 h-full overflow-hidden">
-                {/* 1. EXPOSURE HUB (Inventory with Skew) */}
-                <div className="glass-panel p-6 rounded-[2rem] border-white/5 shadow-2xl flex flex-col max-h-[500px]">
-                    <div className="flex items-center justify-between mb-6">
+
+            {/* PERSISTENT MONITORING SIDEBAR */}
+            <div className="col-span-12 lg:col-span-4 flex flex-col gap-8">
+                {/* 1. EXPOSURE HUB (Inventory Skew) */}
+                <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 flex flex-col shadow-2xl max-h-[600px]">
+                    <div className="flex items-center justify-between mb-8">
                         <div className="space-y-1">
-                            <h3 className="text-sm font-black text-white uppercase tracking-tight flex items-center gap-3">
+                            <h3 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-3">
                                 <Scale size={20} className="text-blue-500"/> Exposure Hub
                             </h3>
-                            <p className="text-[8px] text-gray-500 font-bold uppercase tracking-widest">Inventory Delta tracking</p>
+                            <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest">Active Inventory Distribution</p>
                         </div>
-                        <button onClick={handleSyncPositions} className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white transition-colors">
-                            <RefreshCw size={14}/>
-                        </button>
+                        <button onClick={handleSyncPositions} className="p-2 hover:bg-white/5 rounded-full transition-all text-gray-500 hover:text-white"><RefreshCw size={16}/></button>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-4 pr-1 custom-scrollbar">
                         {activePositions.length === 0 ? (
-                            <div className="h-full flex flex-col items-center justify-center text-gray-800 space-y-4 opacity-30">
-                                <Lock size={48}/><p className="text-[9px] font-black uppercase tracking-widest">Vault Inventory Empty</p>
-                            </div>
+                            <div className="h-full flex flex-col items-center justify-center text-gray-700 opacity-20 py-20"><Lock size={48}/><p className="uppercase tracking-[0.2em] font-black mt-6 text-[10px]">Vault Empty</p></div>
                         ) : (
                             activePositions.map((pos, i) => (
                                 <PositionCard key={i} position={pos} />
@@ -351,35 +446,29 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                     </div>
                 </div>
 
-                {/* 2. ORDER LEDGER (Live Resting Quotes) */}
-                <div className="glass-panel p-6 rounded-[2rem] border-white/5 bg-gradient-to-br from-amber-600/5 to-transparent shadow-2xl flex flex-col max-h-[400px]">
+                {/* 2. ORDER LEDGER (Live resting GTC orders) */}
+                <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 bg-gradient-to-br from-amber-600/5 to-transparent flex flex-col shadow-2xl h-[400px]">
                     <div className="flex items-center gap-3 mb-6">
-                        <BarChart3 size={18} className="text-amber-500"/>
-                        <h3 className="text-xs font-black text-white uppercase tracking-widest">Active Quotes</h3>
+                        <BarChart3 size={20} className="text-amber-500"/>
+                        <h3 className="text-sm font-black text-white uppercase tracking-widest">Active Quotes</h3>
                     </div>
-                    <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+                    <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar font-mono">
                         {openOrders.length === 0 ? (
-                             <div className="h-full flex items-center justify-center text-gray-800 text-[9px] uppercase font-bold italic">No active resting orders...</div>
+                            <div className="h-full flex items-center justify-center text-gray-700 text-[10px] italic">No active resting orders...</div>
                         ) : (
                             openOrders.map((order, i) => (
                                 <div key={i} className="flex items-center justify-between p-3 bg-black/40 rounded-xl border border-white/5">
                                     <div className="flex items-center gap-3">
                                         <span className={`w-1.5 h-1.5 rounded-full ${order.side === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                                         <div>
-                                            <div className="text-[9px] text-white font-black font-mono">{order.side} {order.size}</div>
-                                            <div className="text-[8px] text-gray-500 font-mono">@{order.price}¢</div>
+                                            <div className="text-[9px] text-white font-black">{order.side} {order.size}</div>
+                                            <div className="text-[8px] text-gray-500">@{order.price}¢</div>
                                         </div>
                                     </div>
-                                    <button 
-                                        onClick={async () => {
-                                            await axios.post('/api/orders/cancel', { userId, orderId: order.orderID });
-                                            toast.success("Order Purged");
-                                            onRefresh();
-                                        }}
-                                        className="text-[8px] text-gray-600 hover:text-rose-500 uppercase font-black transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
+                                    <button onClick={async () => {
+                                        await axios.post('/api/orders/cancel', { userId, orderId: order.orderID });
+                                        toast.success("Order Purged");
+                                    }} className="text-[8px] text-gray-600 hover:text-rose-500 uppercase font-black">Cancel</button>
                                 </div>
                             ))
                         )}
@@ -391,3 +480,4 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
 };
 
 export default ProTerminal;
+

@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Activity, Crosshair, Zap, Scale, Terminal, ShieldCheck, 
@@ -216,6 +215,19 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
         return `$${num.toFixed(2)}`;
     };
 
+    const getCategoryColor = (category?: string) => {
+        const colors: Record<string, string> = {
+            sports: 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300',
+            politics: 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300',
+            crypto: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300',
+            entertainment: 'bg-pink-100 text-pink-800 dark:bg-pink-900/50 dark:text-pink-300',
+            business: 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300',
+            science: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300',
+            default: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+        };
+        return colors[category?.toLowerCase() || 'default'] || colors.default;
+    };
+
     const handleBookmark = async (e: React.MouseEvent) => {
         e.stopPropagation();
         if (!onBookmark || !opp.marketId || isBookmarkLoading) return;
@@ -227,38 +239,46 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
         }
     };
 
+    const marketLink = opp.eventSlug 
+        ? `https://polymarket.com/event/${opp.eventSlug}`
+        : opp.marketSlug 
+            ? `https://polymarket.com/market/${opp.marketSlug}`
+            : opp.marketId 
+                ? `https://polymarket.com/market/${opp.marketId}`
+                : null;
+
     return (
         <div 
-            className={`relative group glass-panel rounded-3xl border overflow-hidden transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 ${
-                holdings ? 'border-emerald-500/40' : 
-                isHighVol ? 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : 'border-white/5 hover:border-blue-500/50'
+            className={`relative group bg-white dark:bg-gray-900 border rounded-[2rem] overflow-hidden transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 ${
+                holdings ? 'border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 
+                isHighVol ? 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : 'border-gray-200 dark:border-white/5 hover:border-blue-500/50'
             }`}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
         >
             {isHighVol && (
                 <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600 text-white text-[10px] font-black px-3 py-1 rounded-full flex items-center gap-1 z-20 shadow-lg uppercase tracking-widest">
-                    <Zap className="w-3 h-3" fill="currentColor" /> SPIKE: {movePct}%
+                    <Zap className="w-3 h-3" fill="currentColor" /> FLASH MOVE: {movePct}%
                 </div>
             )}
 
-            <div className="relative h-36 bg-gray-900 overflow-hidden">
+            <div className="relative h-40 bg-gray-100 dark:bg-gray-800 overflow-hidden">
                 {opp.image ? (
-                    <img src={opp.image} alt="" className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-all duration-700" />
+                    <img src={opp.image} alt="" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 opacity-60 group-hover:opacity-100" />
                 ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-blue-900/10"><BarChart3 size={32} className="text-gray-700"/></div>
+                    <div className="w-full h-full flex items-center justify-center bg-blue-900/10"><BarChart3 size={32} className="text-gray-700 dark:text-gray-600"/></div>
                 )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent"></div>
                 
                 {/* Status & Category UI */}
-                <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10">
-                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-black/60 backdrop-blur-md border border-white/10 ${
+                <div className="absolute top-3 right-3 flex items-center space-x-1.5 z-10">
+                    <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-black/60 backdrop-blur-md border border-white/10 ${
                         opp.status === 'active' ? 'text-emerald-400' : 'text-rose-400'
                     }`}>
-                        {opp.status}
+                        {opp.status?.toUpperCase() || 'UNKNOWN'}
                     </span>
                     {opp.category && (
-                        <span className="px-2 py-0.5 bg-blue-600 text-white rounded-full text-[8px] font-black uppercase tracking-widest">
+                        <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${getCategoryColor(opp.category)}`}>
                             {opp.category}
                         </span>
                     )}
@@ -274,28 +294,28 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                 </div>
 
                 <div className="absolute bottom-3 left-4 right-4">
-                    <h3 className="text-[11px] font-black text-white leading-tight uppercase tracking-tight line-clamp-2">{opp.question}</h3>
+                    <h3 className="text-xs font-black text-white leading-tight uppercase tracking-tight line-clamp-2">{opp.question}</h3>
                 </div>
             </div>
 
             <div className="p-5 space-y-4">
                 {/* Market Stats Grid (Legacy Pro restored) */}
-                <div className="grid grid-cols-2 gap-3 text-[9px] font-black uppercase tracking-widest">
-                    <div className="p-3 bg-white/[0.02] border border-white/5 rounded-2xl">
-                        <p className="text-gray-500 mb-0.5">24h Vol</p>
-                        <p className="text-white font-mono">{formatNumber(opp.volume24hr)}</p>
+                <div className="grid grid-cols-2 gap-3 text-[10px] font-black uppercase tracking-widest">
+                    <div className="p-3 bg-gray-50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/5 rounded-2xl">
+                        <p className="text-gray-500 dark:text-gray-400 mb-0.5">24h Vol</p>
+                        <p className="text-gray-900 dark:text-white font-mono">{formatNumber(opp.volume24hr || opp.volume)}</p>
                     </div>
-                    <div className="p-3 bg-white/[0.02] border border-white/5 rounded-2xl">
-                        <p className="text-gray-500 mb-0.5">Liquidity</p>
-                        <p className="text-white font-mono">{formatNumber(opp.liquidity)}</p>
+                    <div className="p-3 bg-gray-50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/5 rounded-2xl">
+                        <p className="text-gray-500 dark:text-gray-400 mb-0.5">Liquidity</p>
+                        <p className="text-gray-900 dark:text-white font-mono">{formatNumber(opp.liquidity || opp.capacityUsd)}</p>
                     </div>
-                    <div className="p-3 bg-white/[0.02] border border-white/5 rounded-2xl">
-                        <p className="text-gray-500 mb-0.5">Spread</p>
-                        <p className="text-blue-400 font-mono">{spreadCents}¢</p>
+                    <div className="p-3 bg-gray-50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/5 rounded-2xl">
+                        <p className="text-gray-500 dark:text-gray-400 mb-0.5">Spread</p>
+                        <p className="text-blue-500 dark:text-blue-400 font-mono">{spreadCents}¢</p>
                     </div>
-                    <div className="p-3 bg-white/[0.02] border border-white/5 rounded-2xl">
-                        <p className="text-gray-500 mb-0.5">Min Order</p>
-                        <p className="text-white font-mono">${opp.orderMinSize || 5}</p>
+                    <div className="p-3 bg-gray-50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/5 rounded-2xl">
+                        <p className="text-gray-500 dark:text-gray-400 mb-0.5">Min Order</p>
+                        <p className="text-gray-900 dark:text-white font-mono">${opp.orderMinSize || 5}</p>
                     </div>
                 </div>
 
@@ -305,19 +325,21 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                         disabled={!opp.acceptingOrders}
                         className={`flex-1 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all ${
                             holdings ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 
-                            isHighVol ? 'bg-red-600 hover:bg-red-500 text-white' : 
-                            'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
+                            isHighVol ? 'bg-red-600 hover:bg-red-700 text-white' : 
+                            isAutoArb ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
                         } disabled:opacity-50`}
                     >
-                        {holdings ? 'Adjust Strategy' : isAutoArb ? 'Dispatch HFT' : 'Execute Trade'}
+                        {holdings ? 'Adjust Strategy' : isAutoArb ? 'Auto Trade' : 'Trade Now'}
                     </button>
-                    <a
-                        href={opp.marketSlug ? `https://polymarket.com/market/${opp.marketSlug}` : '#'}
-                        target="_blank"
-                        className="p-3 bg-white/5 hover:bg-white/10 text-gray-500 hover:text-white border border-white/10 rounded-2xl transition-all"
-                    >
-                        <ExternalLink size={16} />
-                    </a>
+                    {marketLink && (
+                        <a
+                            href={marketLink}
+                            target="_blank"
+                            className="p-3 bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 text-gray-500 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-white/10 rounded-2xl transition-all"
+                        >
+                            <ExternalLink size={16} />
+                        </a>
+                    )}
                 </div>
             </div>
 
@@ -325,7 +347,7 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
             {isHovered && !holdings && (
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 hidden md:flex">
                     <button onClick={() => onExecute(opp)} className="px-8 py-3 bg-white text-black font-black rounded-2xl uppercase text-[10px] tracking-widest hover:scale-105 transition-all">
-                        Quick Dispatch
+                        {isHighVol ? 'Trade Spike (HFT)' : 'Quick Trade'}
                     </button>
                 </div>
             )}
@@ -394,25 +416,23 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
 
             {/* Main Intelligence Discovery Layer */}
             <div className="col-span-12 lg:col-span-8 space-y-6 lg:space-y-8">
-                <div className="glass-panel p-6 lg:p-8 rounded-[2rem] border-white/5 bg-gradient-to-br from-blue-600/[0.04] to-transparent shadow-xl relative overflow-hidden">
+                <div className="glass-panel p-6 lg:p-8 rounded-[2rem] border-white/5 dark:bg-gradient-to-br from-blue-600/[0.04] to-transparent shadow-xl relative overflow-hidden">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 relative z-10">
                         <div>
-                            <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-4">
+                            <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-4">
                                 <Crosshair className="text-blue-500" size={28}/> Intelligence Scout
                             </h2>
                             <div className="flex items-center gap-3 mt-1.5">
                                 <p className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.4em]">v4.0.2 Institutional Node</p>
-                                <button onClick={() => setIsExplainerOpen(true)} className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 text-[9px] font-black text-blue-400 uppercase tracking-widest transition-all">
+                                <button onClick={() => setIsExplainerOpen(true)} className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-[9px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest transition-all">
                                     <Info size={12}/> How it works
                                 </button>
                             </div>
                         </div>
                         <div className="flex gap-2 w-full md:w-auto">
-                            <div className="relative flex-1 md:w-[260px]">
-                                <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-[10px] font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700" />
-                            </div>
-                            <button onClick={handleManualAdd} className="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-lg flex items-center justify-center">
-                                {scanning ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
+                            <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full md:w-72 bg-white dark:bg-black/40 border border-gray-200 dark:border-white/5 rounded-2xl px-5 py-3.5 text-xs font-mono text-gray-900 dark:text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-400" />
+                            <button onClick={handleManualAdd} className="bg-gray-900 dark:bg-white text-white dark:text-black px-6 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-800 dark:hover:bg-gray-200 transition-all shadow-xl">
+                                {scanning ? <Loader2 size={16} className="animate-spin"/> : 'Sync'}
                             </button>
                         </div>
                     </div>
@@ -448,9 +468,9 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                         />
                     ))}
                     {filteredOpps.length === 0 && (
-                        <div className="col-span-full py-40 text-center glass-panel rounded-[3rem] border-dashed border-white/10 flex flex-col items-center justify-center space-y-6 grayscale">
-                            <Activity size={80} className="text-gray-800 animate-pulse"/>
-                            <h3 className="text-sm font-black text-gray-700 uppercase tracking-[0.3em]">Awaiting Yield Signal Detection...</h3>
+                        <div className="col-span-full py-40 text-center glass-panel rounded-[3rem] border-dashed border-gray-200 dark:border-white/10 flex flex-col items-center justify-center space-y-6 grayscale">
+                            <Activity size={80} className="text-gray-400 dark:text-gray-800 animate-pulse"/>
+                            <h3 className="text-sm font-black text-gray-400 dark:text-gray-700 uppercase tracking-[0.3em]">Awaiting Yield Signal Detection...</h3>
                         </div>
                     )}
                 </div>
@@ -462,16 +482,16 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                 <div className="glass-panel p-6 lg:p-8 rounded-[2rem] border-white/5 flex flex-col shadow-2xl max-h-[600px]">
                     <div className="flex items-center justify-between mb-8">
                         <div className="space-y-1">
-                            <h3 className="text-base font-black text-white uppercase tracking-tight flex items-center gap-3">
+                            <h3 className="text-base font-black text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-3">
                                 <Scale size={20} className="text-blue-500"/> Exposure Hub
                             </h3>
                             <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest">Active Inventory Distribution</p>
                         </div>
-                        <button onClick={handleSyncPositions} className="p-2 hover:bg-white/5 rounded-full transition-all text-gray-500 hover:text-white"><RefreshCw size={16}/></button>
+                        <button onClick={handleSyncPositions} className="p-2 hover:bg-gray-100 dark:hover:bg-white/5 rounded-full transition-all text-gray-500 hover:text-blue-600 dark:hover:text-white"><RefreshCw size={16}/></button>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-4 pr-1 custom-scrollbar">
                         {activePositions.length === 0 ? (
-                            <div className="h-full flex flex-col items-center justify-center text-gray-700 opacity-20 py-20"><Lock size={48}/><p className="uppercase tracking-[0.2em] font-black mt-6 text-[10px]">Vault Empty</p></div>
+                            <div className="h-full flex flex-col items-center justify-center text-gray-300 dark:text-gray-700 opacity-20 py-20"><Lock size={48}/><p className="uppercase tracking-[0.2em] font-black mt-6 text-[10px]">Vault Empty</p></div>
                         ) : (
                             activePositions.map((pos, i) => (
                                 <PositionCard key={i} position={pos} />
@@ -481,28 +501,28 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                 </div>
 
                 {/* 2. ORDER LEDGER (Live resting GTC orders) */}
-                <div className="glass-panel p-6 lg:p-8 rounded-[2rem] border-white/5 bg-gradient-to-br from-amber-600/5 to-transparent flex flex-col shadow-2xl h-[400px]">
+                <div className="glass-panel p-6 lg:p-8 rounded-[2rem] border-white/5 dark:bg-gradient-to-br from-amber-600/5 to-transparent flex flex-col shadow-2xl h-[400px]">
                     <div className="flex items-center gap-3 mb-6">
                         <BarChart3 size={20} className="text-amber-500"/>
-                        <h3 className="text-sm font-black text-white uppercase tracking-widest">Active Quotes</h3>
+                        <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-widest">Active Quotes</h3>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar font-mono">
                         {openOrders.length === 0 ? (
-                            <div className="h-full flex items-center justify-center text-gray-700 text-[10px] italic">No active resting orders...</div>
+                            <div className="h-full flex items-center justify-center text-gray-400 dark:text-gray-700 text-[10px] italic font-sans">No active resting orders...</div>
                         ) : (
                             openOrders.map((order, i) => (
-                                <div key={i} className="flex items-center justify-between p-3 bg-black/40 rounded-xl border border-white/5">
+                                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-black/40 rounded-xl border border-gray-100 dark:border-white/5">
                                     <div className="flex items-center gap-3">
                                         <span className={`w-1.5 h-1.5 rounded-full ${order.side === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                                         <div>
-                                            <div className="text-[9px] text-white font-black">{order.side} {order.size}</div>
+                                            <div className="text-[9px] text-gray-900 dark:text-white font-black">{order.side} {order.size}</div>
                                             <div className="text-[8px] text-gray-500">@{order.price}¢</div>
                                         </div>
                                     </div>
                                     <button onClick={async () => {
                                         await axios.post('/api/orders/cancel', { userId, orderId: order.orderID });
                                         toast.success("Order Purged");
-                                    }} className="text-[8px] text-gray-600 hover:text-rose-500 uppercase font-black">Cancel</button>
+                                    }} className="text-[8px] text-gray-500 hover:text-rose-500 uppercase font-black transition-colors">Cancel</button>
                                 </div>
                             ))
                         )}

@@ -609,7 +609,10 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             mmOpportunities = persistedMMOpps.map((o: any) => ({
                 ...o,
                 roi: o.roi || o.spreadPct || 0,
-                capacityUsd: o.capacityUsd || o.liquidity || 0
+                capacityUsd: o.capacityUsd || o.liquidity || 0,
+                volume24hr: o.volume24hr || 0,
+                liquidity: o.liquidity || 0,
+                orderMinSize: o.orderMinSize || 5
             }));
         }
 

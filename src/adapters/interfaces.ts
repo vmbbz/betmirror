@@ -64,6 +64,7 @@ export interface ArbitrageOpportunity {
     question: string;
     image?: string;
     marketSlug?: string;
+    eventSlug?: string;
     bestBid: number;
     bestAsk: number;
     spread: number;
@@ -75,10 +76,10 @@ export interface ArbitrageOpportunity {
     isNewMarket: boolean;
     rewardsMaxSpread?: number;
     rewardsMinSize?: number;
+    orderMinSize?: number;
     timestamp: number;
     roi: number;
     combinedCost: number;
-    orderMinSize?: number;
     capacityUsd: number;
     // Status & Metadata for UI enrichment
     status: 'active' | 'closed' | 'resolved' | 'paused';

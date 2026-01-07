@@ -53,6 +53,7 @@ export interface MarketOpportunity {
     isNewMarket: boolean;
     rewardsMaxSpread?: number;
     rewardsMinSize?: number;
+    orderMinSize?: number;
     timestamp: number;
     // Compatibility fields for UI
     roi: number;
@@ -248,6 +249,14 @@ export class MarketMakingScanner extends EventEmitter {
             this.isScanning = false;
             throw err;
         }
+    }
+
+    /**
+     * Forced refresh for manual sync via UI.
+     */
+    public async forceRefresh() {
+        this.logger.info('🔄 [Forced Refresh] Manually triggering market discovery...');
+        await this.discoverMarkets();
     }
 
     /**
@@ -821,6 +830,7 @@ export class MarketMakingScanner extends EventEmitter {
 
         const wsUrl = `${WS_URLS.CLOB}/ws/market`;
         this.logger.info(`🔌 Connecting to ${wsUrl}`);
+        // Use named imports for WebSocket to resolve constructor error in TS
         this.ws = new WebSocket(wsUrl);
 
         const wsAny = this.ws as any;
@@ -871,6 +881,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         // This requires standard WebSocket logic with Auth Headers or Token
         // Assuming the adapter has the current valid Auth token
+        // Fix: Use named imports for WebSocket to resolve constructor error in TS
         this.userWs = new WebSocket(userWsUrl);
         const wsAny = this.userWs as any;
 
@@ -1229,6 +1240,7 @@ export class MarketMakingScanner extends EventEmitter {
             isNewMarket: isStillNew,
             rewardsMaxSpread: market.rewardsMaxSpread,
             rewardsMinSize: market.rewardsMinSize,
+            orderMinSize: market.orderMinSize,
             timestamp: Date.now(),
             roi: spreadPct,
             combinedCost: 1 - spread,

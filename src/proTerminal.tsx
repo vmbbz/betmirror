@@ -392,23 +392,32 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                                 </button>
                             </div>
                         </div>
-                        <div className="flex gap-3 w-full md:w-auto">
-                            <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full md:w-72 bg-black/40 border border-white/5 rounded-2xl px-6 py-4 text-xs font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700" />
-                            <button onClick={handleManualAdd} className="bg-white text-black px-8 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-xl">
-                                {scanning ? <Loader2 size={16} className="animate-spin"/> : 'Sync Intel'}
+                        <div className="flex gap-2 w-full md:w-auto">
+                            <div className="relative flex-1 md:w-[260px]">
+                                <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-[10px] font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700" />
+                            </div>
+                            <button onClick={handleManualAdd} className="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-lg flex items-center justify-center">
+                                {scanning ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
                             </button>
                         </div>
                     </div>
                     <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 relative z-10">
-                        {['all', 'trending', 'sports', 'crypto', 'politics'].map(cat => (
-                            <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${activeCategory === cat ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
-                                {cat}
+                        {[
+                            { id: 'all', label: 'All Discovery', icon: <Globe size={12}/> },
+                            { id: 'trending', label: 'Trending', icon: <TrendingUp size={12}/> },
+                            { id: 'sports', label: 'Sports', icon: <Trophy size={12}/> },
+                            { id: 'crypto', label: 'Crypto', icon: <Coins size={12}/> },
+                            { id: 'politics', label: 'Politics', icon: <Landmark size={12}/> },
+                            { id: 'bookmarks', label: 'Bookmarks', icon: <Star size={12}/> }
+                        ].map(cat => (
+                            <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${activeCategory === cat.id ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
+                                {cat.icon} {cat.label}
                             </button>
                         ))}
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                     {filteredOpps.map((opp) => (
                         <ScoutMarketCard 
                             key={opp.tokenId} 

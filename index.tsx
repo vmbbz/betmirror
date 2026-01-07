@@ -23,7 +23,7 @@ import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/al
 import { UserStats } from './src/domain/user.types';
 import { ArbitrageOpportunity } from './src/adapters/interfaces';
 import ProTerminal from './src/proTerminal';
-import SportsRunner from './src/sportsRunner';
+import SportsRunner from './src/SportsRunner';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 

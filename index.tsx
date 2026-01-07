@@ -532,7 +532,7 @@ const HelpGuideModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                         </div>
                         <div>
                             <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Institutional Protocols</h2>
-                            <p className="text-sm text-gray-500 uppercase tracking-widest font-bold">Standard Operating Procedure v4.0</p>
+                            <p className="text-sm text-gray-500 uppercase tracking-widest font-bold">Money Markets Standard Operating Procedure</p>
                         </div>
                     </div>
 

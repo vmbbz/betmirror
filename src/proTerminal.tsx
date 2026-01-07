@@ -457,10 +457,10 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 relative z-10">
                         <div>
                             <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-4">
-                                <Crosshair className="text-blue-500" size={28}/> Intelligence Scout
+                                <Crosshair className="text-blue-500" size={28}/> Money Market Scout
                             </h2>
                             <div className="flex items-center gap-3 mt-1.5">
-                                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.4em]">v4.0.2 Institutional Node</p>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-[0.4em]">Autonomous Yield Capture - Provide Liquidity & Scalp Orderbook Spreads</p>
                                 <button onClick={() => setIsExplainerOpen(true)} className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-[9px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest transition-all">
                                     <Info size={12}/> How it works
                                 </button>

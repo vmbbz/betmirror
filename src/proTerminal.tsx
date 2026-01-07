@@ -276,32 +276,34 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
 
     return (
         <div className="grid grid-cols-12 gap-8 pb-10 animate-in fade-in duration-500 max-w-screen-2xl mx-auto h-full">
-            {/* LEFT COLUMN: Main Discovery Feed */}
             <div className="col-span-12 lg:col-span-8 space-y-6">
                 <div className="glass-panel p-6 rounded-3xl border-white/5 bg-gradient-to-br from-blue-600/[0.02] to-transparent shadow-xl relative overflow-hidden">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-10">
                         <div>
-                            <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">
+                            <h2 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-3">
                                 <Crosshair className="text-blue-500" size={24}/> Intelligence Scout
                             </h2>
-                            <p className="text-[9px] text-gray-500 font-bold uppercase tracking-[0.4em] mt-1">Institutional Yield Node v4.0.2</p>
+                            <p className="text-[9px] text-gray-500 font-bold uppercase tracking-[0.4em] mt-1">Autonomous Yield Capture Protocol v4.0</p>
                         </div>
                         <div className="flex gap-2 w-full md:w-auto">
                             <div className="relative flex-1 md:w-[260px]">
                                 <input value={manualId} onChange={(e)=>setManualId(e.target.value)} placeholder="Market ID or Slug..." className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-[10px] font-mono text-white outline-none focus:border-blue-500/50 transition-all placeholder:text-gray-700" />
                             </div>
-                            <button onClick={handleManualAdd} className="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-lg">
-                                {scanning ? <Loader2 size={14} className="animate-spin mx-auto"/> : <PlusCircle size={14}/>}
+                            <button onClick={handleManualAdd} className="bg-white text-black px-4 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-lg flex items-center justify-center">
+                                {scanning ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
                             </button>
                         </div>
                     </div>
                     <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 relative z-10">
                         {[
-                            { id: 'all', label: 'All discovery', icon: <Globe size={12}/> },
+                            { id: 'all', label: 'All Discovery', icon: <Globe size={12}/> },
                             { id: 'trending', label: 'Trending', icon: <TrendingUp size={12}/> },
+                            { id: 'sports', label: 'Sports', icon: <Trophy size={12}/> },
+                            { id: 'crypto', label: 'Crypto', icon: <Coins size={12}/> },
+                            { id: 'politics', label: 'Politics', icon: <Landmark size={12}/> },
                             { id: 'bookmarks', label: 'Bookmarks', icon: <Star size={12}/> }
                         ].map(cat => (
-                            <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${activeCategory === cat.id ? 'bg-blue-600 text-white border-blue-500' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
+                            <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${activeCategory === cat.id ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
                                 {cat.icon} {cat.label}
                             </button>
                         ))}
@@ -321,7 +323,6 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                     ))}
                 </div>
             </div>
-
             {/* RIGHT COLUMN: Persistent Monitoring (Exposure + Orders) */}
             <div className="col-span-12 lg:col-span-4 flex flex-col gap-6 h-full overflow-hidden">
                 {/* 1. EXPOSURE HUB (Inventory with Skew) */}

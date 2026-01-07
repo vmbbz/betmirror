@@ -20,8 +20,6 @@ const formatCompactNumber = (num: number): string => {
   return (num / 1000000000).toFixed(1) + 'B';
 };
 
-
-
 // --- Sub-Component: Reward Scoring Indicator (HFT Specific) ---
 const RewardScoringBadge = ({ spread, maxSpread }: { spread: number, maxSpread?: number }) => {
   const isScoring = maxSpread ? (spread <= maxSpread) : true;
@@ -271,12 +269,18 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent"></div>
                 
                 {/* Status & Category UI */}
-                <div className="absolute top-3 right-3 flex items-center space-x-1.5 z-10">
-                    <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-black/60 backdrop-blur-md border border-white/10 ${
-                        opp.status === 'active' ? 'text-emerald-400' : 'text-rose-400'
-                    }`}>
-                        {opp.status?.toUpperCase() || 'UNKNOWN'}
-                    </span>
+                <div className="absolute top-3 right-3 flex flex-col items-end space-y-2 z-10">
+                    <div className="flex items-center space-x-1.5">
+                        <RewardScoringBadge 
+                            spread={opp.spreadCents} 
+                            maxSpread={opp.rewardsMaxSpread} 
+                        />
+                        <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-black/60 backdrop-blur-md border border-white/10 ${
+                            opp.status?.toLowerCase() === 'active' ? 'text-emerald-400' : 'text-rose-400'
+                        }`}>
+                            {opp.status?.toUpperCase() || 'UNKNOWN'}
+                        </span>
+                    </div>
                     {opp.category && (
                         <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${getCategoryColor(opp.category)}`}>
                             {opp.category}

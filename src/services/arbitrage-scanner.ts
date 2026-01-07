@@ -272,10 +272,9 @@ export class MarketMakingScanner extends EventEmitter {
     public setActiveQuotes(tokenIds: string[]): void {
         this.activeQuoteTokens = new Set(tokenIds);
     }
-    
     /**
-     * PRODUCTION: Fetch available tag IDs from Gamma API
-     * Uses /tags endpoint to get category IDs for filtering
+     * PRODUCTION: Fetch ALL available tag IDs from Gamma API
+     * Dynamically discovers all categories - no hardcoding
      */
     private async fetchTagIds(): Promise<Record<string, number>> {
         const tagMap: Record<string, number> = {};
@@ -286,34 +285,23 @@ export class MarketMakingScanner extends EventEmitter {
             );
             
             if (!response.ok) {
-                this.logger.warn('Failed to fetch tags, proceeding without category filtering');
+                this.logger.warn('Failed to fetch tags');
                 return tagMap;
             }
             
             const tags = await response.json();
             
+            // Store ALL tags by their slug - catches everything dynamically
             for (const tag of tags) {
-                const slug = (tag.slug || tag.label || '').toLowerCase();
+                const slug = (tag.slug || '').toLowerCase();
                 const id = parseInt(tag.id);
                 
-                if (!id || isNaN(id)) continue;
-                
-                // Map primary categories - take first match only
-                if (!tagMap.sports && (slug.includes('sport') || slug === 'nfl' || slug === 'nba' || slug === 'mlb' || slug === 'nhl')) {
-                    tagMap.sports = id;
-                }
-                if (!tagMap.politics && (slug.includes('politic') || slug.includes('election') || slug === 'us-politics')) {
-                    tagMap.politics = id;
-                }
-                if (!tagMap.crypto && (slug.includes('crypto') || slug === 'bitcoin' || slug === 'ethereum' || slug === 'defi')) {
-                    tagMap.crypto = id;
-                }
-                if (!tagMap.business && (slug.includes('business') || slug.includes('economy') || slug.includes('stock') || slug === 'finance')) {
-                    tagMap.business = id;
+                if (slug && id && !isNaN(id)) {
+                    tagMap[slug] = id;
                 }
             }
             
-            this.logger.info(`📋 Tag IDs loaded: ${JSON.stringify(tagMap)}`);
+            this.logger.info(`📋 Loaded ${Object.keys(tagMap).length} tags: ${Object.keys(tagMap).join(', ')}`);
             return tagMap;
             
         } catch (error) {
@@ -323,88 +311,58 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     /**
-     * PRODUCTION: Multi-source market discovery with pagination
-     * Fetches from multiple endpoints including /events, /markets, and /sports
+     * PRODUCTION: Multi-source market discovery
      */
     private async discoverMarkets() {
         this.logger.info('📡 Discovering markets from Gamma API...');
         
         try {
-            // HFT SCOUT: Check sampling markets first for reward eligibility
             let samplingTokens = new Set<string>();
             try {
                 const sampling = await this.adapter.getSamplingMarkets?.();
                 if (sampling && Array.isArray(sampling)) {
                     sampling.forEach(m => samplingTokens.add(m.token_id));
-                    this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools via getSamplingMarkets.`);
+                    this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools.`);
                 }
             } catch (e) {}
 
-            // Step 1: Fetch available tags to get tag IDs
             const tagIds = await this.fetchTagIds();
             
-            // Step 2: Build endpoints for specific categories
+            // Priority categories to fetch (if they exist)
+            const priorityCategories = [
+                'sports', 'politics', 'crypto', 'business', 'climate', 
+                'tech', 'elections', 'finance', 'mentions', 'geopolitics',
+                'entertainment', 'science', 'world', 'earnings'
+            ];
+            
+            const categoryEndpoint = (tagId: number, limit = 100) =>
+                `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&related_tags=true&limit=${limit}&order=volume&ascending=false`;
+
             const endpoints = [
-                // Featured markets (highlighted by Polymarket)
-                'https://gamma-api.polymarket.com/events?active=true&closed=false&featured=true&limit=100',
+                // Trending & newest
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&order=volume&ascending=false',
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=id&ascending=false',
                 
-                // Sports markets
-                ...(tagIds.sports ? [
-                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.sports}&limit=100&order=volume&ascending=false`
-                ] : []),
-                
-                // Crypto markets
-                ...(tagIds.crypto ? [
-                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.crypto}&limit=100&order=volume&ascending=false`
-                ] : []),
-                
-                // Business/Finance markets
-                ...(tagIds.business ? [
-                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.business}&limit=50&order=volume&ascending=false`
-                ] : []),
-                
-                // Politics markets
-                ...(tagIds.politics ? [
-                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.politics}&limit=100&order=volume&ascending=false`
-                ] : []),
-                
-                // Get trending markets (high volume, recent)
-                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=volume&ascending=false',
-                
-                // Get newest markets (for breaking news)
-                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=id&ascending=false'
+                // Dynamic category endpoints - only adds if tag exists
+                ...priorityCategories
+                    .filter(cat => tagIds[cat])
+                    .map(cat => categoryEndpoint(tagIds[cat]))
             ];
 
             let addedCount = 0;
             const newTokenIds: string[] = [];
             const seenConditionIds = new Set<string>();
 
-            // Process each endpoint
             for (const url of endpoints) {
                 try {
-                    this.logger.debug(`Fetching: ${url}`);
-                    
                     const response = await this.rateLimiter.limit(() => fetch(url));
-                    if (!response.ok) {
-                        this.logger.debug(`Endpoint returned ${response.status}: ${url}`);
-                        continue;
-                    }
+                    if (!response.ok) continue;
                     
                     const data = await response.json();
                     const events = Array.isArray(data) ? data : (data.data || []);
                     
-                    this.logger.debug(`Got ${events.length} events from ${url.split('?')[0]}`);
-                    
                     for (const event of events) {
-                        const markets = event.markets || [];
-                        const isFeatured = url.includes('featured=true');
-                        
-                        for (const market of markets) {
-                            // Mark as featured if coming from featured endpoint
-                            if (isFeatured) {
-                                market.featured = true;
-                            }
-                            
+                        for (const market of (event.markets || [])) {
                             const result = this.processMarketData(market, event, seenConditionIds);
                             if (result.added) {
                                 addedCount++;
@@ -413,28 +371,20 @@ export class MarketMakingScanner extends EventEmitter {
                         }
                     }
                 } catch (error) {
-                    this.logger.warn(`Error in market discovery: ${error}`);
-                    continue;
+                    this.logger.warn(`Error: ${error}`);
                 }
             }
 
-            this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new) | Min volume: $${this.config.minVolume}`);
+            this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new)`);
 
-            // Subscribe to WebSocket for new tokens
-            if (newTokenIds.length > 0) {
-                if (this.ws?.readyState === 1) {
-                    this.subscribeToTokens(newTokenIds);
-                } else {
-                    this.logger.warn('WebSocket not connected, will subscribe on reconnect');
-                }
+            if (newTokenIds.length > 0 && this.ws?.readyState === 1) {
+                this.subscribeToTokens(newTokenIds);
             }
 
-            // Trigger initial opportunity evaluation for markets with price data
             this.updateOpportunities();
 
         } catch (error) {
-            const err = error instanceof Error ? error : new Error(String(error));
-            this.logger.error('❌ Failed to discover markets:', err);
+            this.logger.error('❌ Failed to discover markets:', error instanceof Error ? error : new Error(String(error)));
         }
     }
     
@@ -633,16 +583,48 @@ export class MarketMakingScanner extends EventEmitter {
             // Normalize to standard categories
             if (slug.includes('sport') || slug.includes('nfl') || slug.includes('nba') || 
                 slug.includes('mlb') || slug.includes('nhl') || slug.includes('soccer') ||
-                slug.includes('football') || slug.includes('basketball')) {
+                slug.includes('football') || slug.includes('basketball') || slug.includes('tennis')) {
                 return 'sports';
             }
-            if (slug.includes('politic') || slug.includes('election')) {
-                return 'politics';
+            if (slug.includes('politic') || slug.includes('election') || slug.includes('president') ||
+                slug.includes('congress') || slug.includes('senate') || slug.includes('governor')) {
+                return 'elections';
             }
-            if (slug.includes('crypto') || slug.includes('bitcoin') || slug.includes('ethereum')) {
+            if (slug.includes('crypto') || slug.includes('bitcoin') || slug.includes('ethereum') ||
+                slug.includes('btc') || slug.includes('eth') || slug.includes('defi') || 
+                slug.includes('nft') || slug.includes('web3')) {
                 return 'crypto';
             }
-            if (slug.includes('business') || slug.includes('economy') || slug.includes('finance')) {
+            if (slug.includes('finance') || slug.includes('fed') || slug.includes('interest') || 
+                slug.includes('inflation') || slug.includes('rates') || slug.includes('bank')) {
+                return 'finance';
+            }
+            if (slug.includes('tech') || slug.includes('ai') || slug.includes('artificial') || 
+                slug.includes('software') || slug.includes('hardware') || slug.includes('apple') ||
+                slug.includes('microsoft') || slug.includes('google') || slug.includes('meta')) {
+                return 'tech';
+            }
+            if (slug.includes('climate') || slug.includes('environment') || slug.includes('carbon') ||
+                slug.includes('global warming') || slug.includes('renewable') || 
+                slug.includes('sustainability')) {
+                return 'climate';
+            }
+            if (slug.includes('earnings') || slug.includes('revenue') || slug.includes('profit') ||
+                slug.includes('eps') || slug.includes('income') || slug.includes('quarterly')) {
+                return 'earnings';
+            }
+            if (slug.includes('world') || slug.includes('global') || slug.includes('europe') ||
+                slug.includes('asia') || slug.includes('china') || slug.includes('russia') ||
+                slug.includes('ukraine') || slug.includes('middle east')) {
+                return 'world';
+            }
+            if (slug.includes('mention') || slug.includes('social') || slug.includes('twitter') ||
+                slug.includes('reddit') || slug.includes('discord') || slug.includes('tweet') ||
+                slug.includes('influencer')) {
+                return 'mentions';
+            }
+            if (slug.includes('business') || slug.includes('economy') || slug.includes('company') ||
+                slug.includes('stock') || slug.includes('market') || slug.includes('gdp')) {
                 return 'business';
             }
             
@@ -652,20 +634,59 @@ export class MarketMakingScanner extends EventEmitter {
         
         // Fallback: infer from event/market slug
         const slug = (event.slug || market?.slug || '').toLowerCase();
+        
+        // Expanded slug-based categorization
         if (slug.includes('nfl') || slug.includes('nba') || slug.includes('super-bowl') || 
-            slug.includes('world-series') || slug.includes('stanley-cup')) {
+            slug.includes('world-series') || slug.includes('stanley-cup') || slug.includes('tennis') ||
+            slug.includes('soccer') || slug.includes('football') || slug.includes('basketball')) {
             return 'sports';
         }
         if (slug.includes('bitcoin') || slug.includes('ethereum') || slug.includes('crypto') ||
-            slug.includes('btc') || slug.includes('eth')) {
+            slug.includes('btc') || slug.includes('eth') || slug.includes('defi') || 
+            slug.includes('nft') || slug.includes('web3')) {
             return 'crypto';
         }
         if (slug.includes('election') || slug.includes('president') || slug.includes('congress') ||
-            slug.includes('senate') || slug.includes('governor')) {
-            return 'politics';
+            slug.includes('senate') || slug.includes('governor') || slug.includes('vote') ||
+            slug.includes('primary') || slug.includes('democrat') || slug.includes('republican')) {
+            return 'elections';
         }
-        if (slug.includes('stock') || slug.includes('company') || slug.includes('earnings') ||
-            slug.includes('fed') || slug.includes('gdp')) {
+        if (slug.includes('finance') || slug.includes('fed') || slug.includes('interest') || 
+            slug.includes('inflation') || slug.includes('rates') || slug.includes('bank') ||
+            slug.includes('finance') || slug.includes('stocks') || slug.includes('bonds')) {
+            return 'finance';
+        }
+        if (slug.includes('tech') || slug.includes('ai') || slug.includes('artificial') || 
+            slug.includes('software') || slug.includes('hardware') || slug.includes('apple') ||
+            slug.includes('microsoft') || slug.includes('google') || slug.includes('meta') ||
+            slug.includes('amazon') || slug.includes('tesla')) {
+            return 'tech';
+        }
+        if (slug.includes('climate') || slug.includes('environment') || slug.includes('carbon') ||
+            slug.includes('global-warming') || slug.includes('renewable') || 
+            slug.includes('sustainability') || slug.includes('green') || slug.includes('emission')) {
+            return 'climate';
+        }
+        if (slug.includes('earnings') || slug.includes('revenue') || slug.includes('profit') ||
+            slug.includes('eps') || slug.includes('income') || slug.includes('quarterly') ||
+            slug.includes('q1') || slug.includes('q2') || slug.includes('q3') || slug.includes('q4')) {
+            return 'earnings';
+        }
+        if (slug.includes('world') || slug.includes('global') || slug.includes('europe') ||
+            slug.includes('asia') || slug.includes('china') || slug.includes('russia') ||
+            slug.includes('ukraine') || slug.includes('middle-east') || slug.includes('united-nations') ||
+            slug.includes('nato') || slug.includes('eu') || slug.includes('brexit')) {
+            return 'world';
+        }
+        if (slug.includes('mention') || slug.includes('social') || slug.includes('twitter') ||
+            slug.includes('reddit') || slug.includes('discord') || slug.includes('tweet') ||
+            slug.includes('influencer') || slug.includes('viral') || slug.includes('trending')) {
+            return 'mentions';
+        }
+        if (slug.includes('business') || slug.includes('economy') || slug.includes('company') ||
+            slug.includes('stock') || slug.includes('market') || slug.includes('gdp') ||
+            slug.includes('dow') || slug.includes('s&p') || slug.includes('nasdaq') ||
+            slug.includes('retail') || slug.includes('consumer')) {
             return 'business';
         }
         

@@ -3,7 +3,8 @@ import {
   Activity, Crosshair, Zap, Scale, Terminal, ShieldCheck, 
   Loader2, Search, Globe, Trophy, 
   TrendingUp, ExternalLink, RefreshCw,
-  Coins, Landmark, Star, BarChart3, PlusCircle, Cpu, Lock, Info, X, ChevronRight, Layers, Recycle, Wallet
+  Coins, Landmark, Star, BarChart3, PlusCircle, Cpu, Lock, Info, X, ChevronRight, Layers, Recycle, Wallet,
+  CloudRain, LineChart, Globe2
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import axios from 'axios';
@@ -215,12 +216,20 @@ const EnhancedMarketCard: React.FC<EnhancedMarketCardProps> = ({
 
     const getCategoryColor = (category?: string) => {
         const colors: Record<string, string> = {
+            // Existing categories
             sports: 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300',
-            politics: 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300',
             crypto: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300',
-            entertainment: 'bg-pink-100 text-pink-800 dark:bg-pink-900/50 dark:text-pink-300',
             business: 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300',
             science: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300',
+            
+            // New categories
+            elections: 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300',
+            finance: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300',
+            tech: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300',
+            climate: 'bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-300',
+            earnings: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
+            world: 'bg-violet-100 text-violet-800 dark:bg-violet-900/50 dark:text-violet-300',
+            mentions: 'bg-pink-100 text-pink-800 dark:bg-pink-900/50 dark:text-pink-300',
             default: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
         };
         return colors[category?.toLowerCase() || 'default'] || colors.default;
@@ -384,11 +393,35 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
     const [isExplainerOpen, setIsExplainerOpen] = useState(false);
     const [isBookmarking, setIsBookmarking] = useState<Record<string, boolean>>({});
 
+    // Debug: Log available categories when data changes
+    useEffect(() => {
+        if (moneyMarketOpps?.length) {
+            const categories = new Set<string>();
+            moneyMarketOpps.forEach(opp => {
+                if (opp.category) {
+                    categories.add(opp.category.toLowerCase());
+                }
+            });
+            console.log('Available categories:', Array.from(categories).sort());
+            console.log('Sample market with category:', 
+                moneyMarketOpps.find(opp => opp.category)?.category);
+        }
+    }, [moneyMarketOpps]);
+
     const filteredOpps = useMemo(() => {
         if (!moneyMarketOpps) return [];
         if (activeCategory === 'all') return moneyMarketOpps;
         if (activeCategory === 'bookmarks') return moneyMarketOpps.filter(o => o.isBookmarked);
-        return moneyMarketOpps.filter(o => o.category?.toLowerCase() === activeCategory.toLowerCase());
+        
+        // Debug logging for finance category
+        if (activeCategory === 'finance') {
+            console.log('Filtering for finance category...');
+            console.log('Sample market data:', moneyMarketOpps[0]);
+        }
+        
+        return moneyMarketOpps.filter(o => 
+            o.category && o.category.toLowerCase() === activeCategory.toLowerCase()
+        );
     }, [moneyMarketOpps, activeCategory]);
 
     const handleBookmark = async (marketId: string, isBookmarked: boolean) => {
@@ -443,16 +476,29 @@ const ProTerminal: React.FC<ProTerminalProps> = ({
                     {/* Navigation Category Mask for Mobile */}
                     <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2 relative z-10 -mx-1 px-1">
                         {[
-                            {id: 'all', label: 'All discovery', icon: <Globe size={12}/>},
+                            {id: 'all', label: 'All', icon: <Globe size={12}/>},
                             {id: 'trending', label: 'Trending', icon: <TrendingUp size={12}/>},
                             {id: 'sports', label: 'Sports', icon: <Trophy size={12}/>},
                             {id: 'crypto', label: 'Crypto', icon: <Coins size={12}/>},
-                            {id: 'politics', label: 'Politics', icon: <Landmark size={12}/>},
+                            {id: 'elections', label: 'Elections', icon: <Landmark size={12}/>},
                             {id: 'finance', label: 'Finance', icon: <Wallet size={12}/>},
-                            {id: 'bookmarks', label: 'Bookmarks', icon: <Star size={12}/>}
+                            {id: 'tech', label: 'Tech', icon: <Cpu size={12}/>},
+                            {id: 'climate', label: 'Climate', icon: <CloudRain size={12}/>},
+                            {id: 'earnings', label: 'Earnings', icon: <LineChart size={12}/>},
+                            {id: 'world', label: 'World', icon: <Globe2 size={12}/>},
+                            {id: 'bookmarks', label: 'Bookmarks', icon: <Star size={12}/>, count: moneyMarketOpps?.filter(o => o.isBookmarked).length}
                         ].map(cat => (
                             <button key={cat.id} onClick={() => setActiveCategory(cat.id)} className={`flex items-center gap-2 px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${activeCategory === cat.id ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' : 'bg-white/5 text-gray-500 border-white/5 hover:border-white/20'}`}>
                                 {cat.icon} {cat.label}
+                                {cat.count !== undefined && (
+                                    <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] ${
+                                        activeCategory === cat.id 
+                                            ? 'bg-white/20 text-white' 
+                                            : 'bg-black/10 dark:bg-white/10 text-gray-600 dark:text-gray-400'
+                                    }`}>
+                                        {cat.count}
+                                    </span>
+                                )}
                             </button>
                         ))}
                     </div>

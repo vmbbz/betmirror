@@ -26,14 +26,6 @@ import ProTerminal from './src/proTerminal';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
-// Format numbers to compact form (1K, 1M, 1B, etc.)
-const formatCompactNumber = (num: number): string => {
-  if (num < 1000) return num.toString();
-  if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
-  if (num < 1000000000) return (num / 1000000).toFixed(1) + 'M';
-  return (num / 1000000000).toFixed(1) + 'B';
-};
-
 // Constants & Assets
 const CHAIN_ICONS: Record<number, string> = {
     1: "https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=026",
@@ -246,52 +238,6 @@ const PerformanceChart = ({ userId, selectedRange }: {
         </div>
     );
 };
-
-
-// --- Discovery Hub Navigation Component ---
-const DiscoveryNav = ({ activeCategory, onCategoryChange, bookmarkCount }: any) => {
-    const categories = [
-        { id: 'all', label: 'All Discovery', icon: <Globe size={14}/> },
-        { id: 'trending', label: 'Trending', icon: <TrendingUp size={14}/> },
-        { id: 'sports', label: 'Sports', icon: <Trophy size={14}/> },
-        { id: 'crypto', label: 'Crypto', icon: <Coins size={14}/> },
-        { id: 'politics', label: 'Politics', icon: <Landmark size={14}/> },
-        { id: 'bookmarks', label: 'Bookmarks', icon: <Star size={14}/>, count: bookmarkCount },
-    ];
-
-    return (
-        <div className="flex items-center gap-2 overflow-x-auto pb-4 scrollbar-hide no-scrollbar">
-            {categories.map((cat) => (
-                <button
-                    key={cat.id}
-                    onClick={() => onCategoryChange(cat.id)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap border ${
-                        activeCategory === cat.id 
-                        ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-500/20' 
-                        : 'bg-white dark:bg-gray-900 text-gray-500 border-gray-200 dark:border-gray-800 hover:border-blue-400'
-                    }`}
-                >
-                    {cat.icon}
-                    {cat.label}
-                    {cat.count !== undefined && (
-                        <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] ${activeCategory === cat.id ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-white/10 text-gray-400'}`}>
-                            {cat.count}
-                        </span>
-                    )}
-                </button>
-            ))}
-        </div>
-    );
-};
-
-/* FIX: Explicitly type MoneyMarketFeed props to resolve argument mismatch errors */
-interface MoneyMarketFeedProps {
-  opportunities: ArbitrageOpportunity[];
-  onExecute: (opp: ArbitrageOpportunity) => void;
-  isAutoArb: boolean;
-  userId?: string;
-  onRefresh: () => Promise<void>;
-}
 
 // --- Types ---
 interface Log {

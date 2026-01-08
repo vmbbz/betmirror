@@ -30,7 +30,7 @@ export interface BotConfig {
     userAddresses: string[];
     rpcUrl: string;
     geminiApiKey?: string;
-    sportmonksApiKey?: string;
+    sportmonksApiKey: process.env.SPORTSMONK_API_KEY,
     riskProfile: 'conservative' | 'balanced' | 'degen';
     multiplier: number;
     minLiquidityFilter?: 'HIGH' | 'MEDIUM' | 'LOW'; 

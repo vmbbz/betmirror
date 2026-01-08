@@ -1141,6 +1141,8 @@ async function restoreBots() {
             if (user.activeBotConfig && user.tradingWallet) {
                  const normId = user.address.toLowerCase();
                  const config = user.activeBotConfig;
+
+                 config.sportmonksApiKey = process.env.SPORTMONKS_API_KEY || '';
                  
                  // Map legacy names to fix property mismatch
                  config.enableSportsRunner = config.enableSportsRunner ?? config.enableSportsFrontrunning ?? true;

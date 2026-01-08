@@ -19,7 +19,7 @@ interface LiveMatch {
   minute: number;
   marketPrice: number; 
   fairValue: number;   
-  status: 'LIVE' | 'HT' | 'VAR' | 'GOAL' | 'FT';
+  status: 'LIVE' | 'HT' | 'VAR' | 'GOAL' | 'FT' | 'SCOUTING';
   league?: string;
 }
 
@@ -123,7 +123,7 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
                     }`}
                 >
                     <Sword size={12} className={isProfitable ? 'animate-bounce' : ''}/> 
-                    {isProfitable ? 'Chase Goal Edge' : 'Scouting...'}
+                    {isProfitable ? 'Chase Goal Edge' : match.status === 'SCOUTING' ? 'Scouting...' : 'Live Monitoring'}
                 </button>
             </div>
         </div>

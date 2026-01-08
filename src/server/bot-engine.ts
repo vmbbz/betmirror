@@ -1196,6 +1196,22 @@ export class BotEngine {
     }
     
     // Sports Runner Accessors
-    public getLiveSportsMatches(): SportsMatch[] { return this.sportsIntel?.getLiveMatches() || []; }
+    public getLiveSportsMatches(): SportsMatch[] { 
+        const rawMatches = this.sportsIntel?.getLiveMatches() || []; 
+        return rawMatches;
+    }
+
+    public async syncSportsAlpha(): Promise<void> {
+        if (!this.exchange || !this.sportsIntel) return;
+        const matches = this.sportsIntel.getLiveMatches();
+        for (const m of matches) {
+            if (m.tokenId) {
+                try {
+                    m.marketPrice = await this.exchange.getMarketPrice(m.conditionId || "", m.tokenId, 'BUY');
+                } catch(e) {}
+            }
+        }
+    }
+
     public getActiveSportsChases(): any[] { return Array.from((this.sportsRunner as any)?.activeChases?.values() || []); }
 }

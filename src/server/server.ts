@@ -572,68 +572,33 @@ app.post('/api/bot/refresh', async (req: any, res: any) => {
 });
 
 // 7. Bot Status & Logs
+
 app.get('/api/bot/status/:userId', async (req: any, res: any) => {
     const { userId } = req.params;
     const normId = userId.toLowerCase();
-    
     const engine = ACTIVE_BOTS.get(normId);
-    
     try {
-        const tradeHistory = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
         const user = await User.findOne({ address: normId }).lean();
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
-        
-        // --- ENHANCEMENT: DISCOVERY CACHE ---
-        // Pull latest 50 discovered markets from the scanner (if running) or DB
+        const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
+
         let mmOpportunities: ArbitrageOpportunity[] = [];
-        
-        if (engine && (engine as any).arbScanner) {
-            const scanner = (engine as any).arbScanner;
-            const strictOpps = scanner.getOpportunities();
-            const monitored = scanner.getMonitoredMarkets();
-            
-            // Combine strict + monitored to ensure tabs are never blank
-            const combined = [...strictOpps];
-            monitored.forEach((m: ArbitrageOpportunity) => {
-                if (!combined.some(c => c.tokenId === m.tokenId)) {
-                    combined.push(m);
-                }
-            });
-            
-            mmOpportunities = combined.sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
-        } else {
-            const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(100).lean();
-            mmOpportunities = persistedMMOpps.map((o: any) => ({
-                ...o,
-                roi: o.roi || o.spreadPct || 0,
-                capacityUsd: o.capacityUsd || o.liquidity || 0,
-                volume24hr: o.volume24hr || 0,
-                liquidity: o.liquidity || 0,
-                orderMinSize: o.orderMinSize || 5
-            }));
+        let sportsMatches: any[] = [];
+        let sportsChases: any[] = [];
+
+        if (engine) {
+            mmOpportunities = engine.getArbOpportunities();
+            sportsMatches = engine.getLiveSportsMatches();
+            sportsChases = engine.getActiveSportsChases();
         }
-
-        const formattedLogs = dbLogs.map(l => ({
-            id: l._id.toString(),
-            time: l.timestamp.toLocaleTimeString(),
-            type: l.type,
-            message: l.message
-        }));
-
-        const historyUI = tradeHistory.map((t: any) => ({
-             ...t,
-             timestamp: t.timestamp.toISOString(),
-             id: t._id.toString()
-        }));
 
         let livePositions: ActivePosition[] = [];
         if (engine) {
             const scanner = (engine as any).arbScanner;
             livePositions = (engine.getActivePositions() || []).map(p => ({
                 ...p,
-                // --- ENHANCEMENT: MM MANAGEMENT FLAG ---
-                // Mark if the scanner is currently providing liquidity for this token
-                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false,
+                managedBySports: sportsChases.some(c => c.conditionId === p.marketId)
             }));
         } else if (user && user.activePositions) {
             livePositions = user.activePositions as ActivePosition[];
@@ -641,17 +606,16 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
 
         res.json({ 
             isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
-            logs: formattedLogs,
-            history: historyUI,
-            positions: livePositions, 
+            logs: dbLogs.map(l => ({ id: l._id.toString(), time: l.timestamp.toLocaleTimeString(), type: l.type, message: l.message })),
+            history: history.map((t: any) => ({ ...t, id: t._id.toString() })),
+            positions: livePositions,
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
-            mmOpportunities: mmOpportunities 
+            mmOpportunities,
+            sportsMatches,
+            sportsChases
         });
-    } catch (e) {
-        console.error("Status Error:", e);
-        res.status(500).json({ error: 'DB Error' });
-    }
+    } catch (e) { res.status(500).json({ error: 'DB Error' }); }
 });
 
 // --- NEW MM SCANNER ENDPOINTS ---

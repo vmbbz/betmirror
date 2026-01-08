@@ -20,7 +20,7 @@ import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
 import { AutoCashoutConfig } from '../domain/trade.types.js';
-import { SportsIntelService } from '../services/sports-intel.service.js';
+import { SportsIntelService, SportsMatch } from '../services/sports-intel.service.js';
 import { SportsRunnerService } from '../services/sports-runner.service.js';
 import crypto from 'crypto';
 
@@ -1194,4 +1194,8 @@ export class BotEngine {
         return this.arbScanner?.getOpportunities()
             .filter(o => o.category === category) || [];
     }
+    
+    // Sports Runner Accessors
+    public getLiveSportsMatches(): SportsMatch[] { return this.sportsIntel?.getLiveMatches() || []; }
+    public getActiveSportsChases(): any[] { return Array.from((this.sportsRunner as any)?.activeChases?.values() || []); }
 }

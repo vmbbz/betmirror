@@ -4116,236 +4116,334 @@ return (
         )}
 
         {/* VAULT SECTION (PERFECTED) */}
+        
+        {/* VAULT (REBRANDED & REDESIGNED) */}
         {activeTab === 'vault' && (
-            <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20 space-y-12">
-                {/* Header */}
-                <section className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                    <div className="space-y-1">
-                        <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-900/20">
-                                <ShieldIcon size={24} />
-                            </div>
-                            <h2 className="text-3xl font-black text-white uppercase tracking-tighter italic">Strategy Vault</h2>
+            <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20 space-y-10">
+                
+                {/* 1. HEADER & GLOBAL SAVE */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-6 border-b border-gray-200 dark:border-terminal-border">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-blue-600 rounded-2xl shadow-lg shadow-blue-900/20">
+                            <ShieldIcon size={28} className="text-white" />
                         </div>
-                        <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.3em] ml-1">Autonomous Execution & Sovereignty Control</p>
+                        <div>
+                            <h2 className="text-2xl font-black text-gray-900 dark:text-white uppercase tracking-tight italic">Strategy Vault</h2>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-widest">Autonomous Control & Risk Protocols</p>
+                        </div>
                     </div>
                     <button 
                         onClick={() => {
                             localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-                            toast.success("Configuration Locked");
+                            toast.success("Configuration Locked & Deployed");
                         }}
-                        className="px-8 py-4 bg-white text-black font-black rounded-2xl text-[10px] uppercase tracking-widest hover:scale-105 transition-all shadow-xl"
+                        className="w-full md:w-auto px-10 py-4 bg-white text-black font-black rounded-2xl text-[10px] uppercase tracking-[0.2em] hover:scale-105 transition-all shadow-xl shadow-white/5 active:scale-95"
                     >
-                        Save & Deploy Changes
+                        Save & Sync Engine
                     </button>
-                </section>
+                </div>
 
-                {/* 1. Autonomous Command Section */}
+                {/* 2. AUTONOMOUS COMMAND CENTRE (The Big Three) */}
                 <section className="space-y-6">
-                    <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] flex items-center gap-3">
-                        <Play size={12} fill="currentColor"/> Autonomous Command Centre
+                    <h3 className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.4em] flex items-center gap-2">
+                        <Play size={12} fill="currentColor" /> Autonomous Engines
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {/* Alpha Mirror (Copy Trading) */}
-                        <div className={`p-8 rounded-[2.5rem] border transition-all duration-500 ${config.enableCopyTrading ? 'bg-purple-600/10 border-purple-500/30 shadow-[0_0_30px_rgba(147,51,234,0.05)]' : 'bg-white/5 border-white/5 opacity-60'}`}>
+                        {/* Alpha Mirror */}
+                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableCopyTrading ? 'bg-purple-600/10 border-purple-500/40 shadow-[0_0_30px_rgba(147,51,234,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
                             <div className="flex justify-between items-start mb-6">
-                                <div className="w-14 h-14 bg-purple-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
-                                    <Users size={28} />
-                                </div>
+                                <div className="p-3 bg-purple-600 rounded-xl text-white shadow-lg"><Users size={22} /></div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" checked={config.enableCopyTrading} onChange={(e) => updateConfig({ enableCopyTrading: e.target.checked })} className="sr-only peer" />
-                                    <div className="w-14 h-7 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                    <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                                 </label>
                             </div>
-                            <h4 className="text-xl font-black text-white uppercase italic mb-2">Alpha Mirror</h4>
-                            <p className="text-xs text-gray-500 leading-relaxed font-medium">Replicate institutional whale movements from the Alpha Registry with millisecond precision.</p>
+                            <h4 className="text-lg font-black text-white uppercase italic mb-1">Alpha Mirror</h4>
+                            <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Real-time replication of whale movements from the global registry.</p>
                         </div>
 
-                        {/* Liquidity Engine (Money Market) */}
-                        <div className={`p-8 rounded-[2.5rem] border transition-all duration-500 ${config.enableMoneyMarkets ? 'bg-blue-600/10 border-blue-500/30 shadow-[0_0_30px_rgba(37,99,235,0.05)]' : 'bg-white/5 border-white/5 opacity-60'}`}>
+                        {/* Liquidity Engine (Money Markets Unified) */}
+                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableMoneyMarkets ? 'bg-blue-600/10 border-blue-500/40 shadow-[0_0_30px_rgba(37,99,235,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
                             <div className="flex justify-between items-start mb-6">
-                                <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
-                                    <Recycle size={28} />
-                                </div>
+                                <div className="p-3 bg-blue-600 rounded-xl text-white shadow-lg"><Recycle size={22} /></div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" checked={config.enableMoneyMarkets} onChange={(e) => updateConfig({ enableMoneyMarkets: e.target.checked })} className="sr-only peer" />
-                                    <div className="w-14 h-7 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                    <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                                 </label>
                             </div>
-                            <h4 className="text-xl font-black text-white uppercase italic mb-2">Liquidity Engine</h4>
-                            <p className="text-xs text-gray-500 leading-relaxed font-medium">Capture orderbook spreads and earn Passive Rewards via autonomous GTC limit order provision.</p>
+                            <h4 className="text-lg font-black text-white uppercase italic mb-1">Liquidity Engine</h4>
+                            <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Autonomous Market Making & Spread capture via GTC maker orders.</p>
                         </div>
 
-                        {/* Sport Runner */}
-                        <div className={`p-8 rounded-[2.5rem] border transition-all duration-500 ${config.enableSportsRunner ? 'bg-emerald-600/10 border-emerald-500/30 shadow-[0_0_30px_rgba(5,150,105,0.05)]' : 'bg-white/5 border-white/5 opacity-60'}`}>
+                        {/* Sport Runner (Rebranded Pulse Scout) */}
+                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableSportsRunner ? 'bg-emerald-600/10 border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
                             <div className="flex justify-between items-start mb-6">
-                                <div className="w-14 h-14 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
-                                    <Sword size={28} />
-                                </div>
+                                <div className="p-3 bg-emerald-600 rounded-xl text-white shadow-lg"><Sword size={22} /></div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input type="checkbox" checked={config.enableSportsRunner} onChange={(e) => updateConfig({ enableSportsRunner: e.target.checked })} className="sr-only peer" />
-                                    <div className="w-14 h-7 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-emerald-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                    <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-emerald-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                                 </label>
                             </div>
-                            <h4 className="text-xl font-black text-white uppercase italic mb-2">Sport Runner</h4>
-                            <p className="text-xs text-gray-500 leading-relaxed font-medium">High-frequency frontrunning of live event data. Detects score changes before the market reacts.</p>
+                            <h4 className="text-lg font-black text-white uppercase italic mb-1">Sport Runner</h4>
+                            <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Low-latency frontrunning of live sports scores and event arbitrage.</p>
                         </div>
                     </div>
                 </section>
 
-                {/* 2. Strategy Tuning (Grouped by Engine) */}
-                <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* Mirror & Intelligence Settings */}
+                {/* 3. ENGINE CALIBRATION (Grouped Tuning) */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    
+                    {/* Module Calibration */}
                     <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                            <Target size={14}/> Engine Tuning
+                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Sliders size={14} className="text-purple-500"/> Engine Calibration
+                        </h4>
+
+                        <div className="space-y-6">
+                            {/* Mirror Multiplier */}
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center">
+                                    <label className="text-[10px] font-black text-white uppercase tracking-widest">Mirror Multiplier</label>
+                                    <span className="text-sm font-mono font-black text-purple-400 px-3 py-1 bg-purple-500/10 rounded-lg">{config.multiplier}x</span>
+                                </div>
+                                <input 
+                                    type="range" min="0.1" max="5.0" step="0.1" 
+                                    value={config.multiplier}
+                                    onChange={(e) => updateConfig({ multiplier: parseFloat(e.target.value) })}
+                                    className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-purple-500 border border-white/5"
+                                />
+                                <p className="text-[9px] text-gray-500 font-bold">Adjusts your relative position size vs the whale. 1.0x = 100% parity.</p>
+                            </div>
+
+                            <hr className="border-white/5" />
+
+                            {/* Target Registry */}
+                            <div className="space-y-4">
+                                <label className="text-[10px] font-black text-white uppercase tracking-widest flex items-center justify-between">
+                                    Whale Watchlist
+                                    <span className="text-gray-500 font-mono">{config.targets.length} Target(s)</span>
+                                </label>
+                                <div className="flex gap-2">
+                                    <input 
+                                        value={targetInput}
+                                        onChange={(e) => setTargetInput(e.target.value)}
+                                        placeholder="Enter wallet 0x..." 
+                                        className="flex-1 bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono text-white outline-none focus:border-blue-500/50"
+                                    />
+                                    <button onClick={() => { if(targetInput) { updateConfig({ targets: [...config.targets, targetInput] }); setTargetInput(''); }}} className="px-6 bg-white text-black font-black text-[9px] uppercase rounded-xl hover:bg-gray-200 transition-colors">Add</button>
+                                </div>
+                                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar p-1">
+                                    {config.targets.map(t => (
+                                        <div key={t} className="flex items-center gap-2 px-3 py-2 bg-white/5 rounded-xl border border-white/10 text-[10px] font-mono text-gray-300">
+                                            {t.slice(0,6)}...{t.slice(-4)}
+                                            <button onClick={() => updateConfig({ targets: config.targets.filter(x => x !== t) })} className="hover:text-rose-500 ml-1"><X size={12}/></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* AI & Security Credentials */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
+                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Brain size={14} className="text-blue-500"/> AI & Security Guard
+                        </h4>
+
+                        <div className="space-y-6">
+                            {/* Gemini API Key */}
+                            <div className="space-y-3">
+                                <div className="flex justify-between items-center">
+                                    <label className="text-[10px] font-black text-white uppercase tracking-widest">Gemini API Key</label>
+                                    <button onClick={() => setShowSecrets(!showSecrets)} className="text-[9px] font-black text-blue-500 uppercase tracking-widest hover:underline">{showSecrets ? 'Hide' : 'Reveal'}</button>
+                                </div>
+                                <input 
+                                    type={showSecrets ? "text" : "password"}
+                                    value={config.geminiApiKey}
+                                    onChange={(e) => updateConfig({ geminiApiKey: e.target.value })}
+                                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono text-white outline-none focus:border-blue-500/50"
+                                    placeholder="Enter Google Gemini Key..."
+                                />
+                            </div>
+
+                            {/* Risk Profile Selection */}
+                            <div className="space-y-4">
+                                <label className="text-[10px] font-black text-white uppercase tracking-widest">AI Intelligence Protocol</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {(['conservative', 'balanced', 'degen'] as const).map(p => (
+                                        <button 
+                                            key={p}
+                                            onClick={() => updateConfig({ riskProfile: p })}
+                                            className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] border transition-all ${config.riskProfile === p ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 border-white/5 text-gray-500 hover:text-gray-300'}`}
+                                        >
+                                            {p}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-[9px] text-gray-500 font-bold leading-relaxed italic">Conservative: Rejects high volatility. Balanced: Standard management. Degen: High-risk appetite.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 4. SAFETY & COMMUNICATION (Global Controls) */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    
+                    {/* Liquidity Guard */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-6">
+                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Zap size={14} className="text-amber-500"/> Liquidity Guard
+                        </h4>
+                        <div className="grid grid-cols-1 gap-2">
+                            {(['HIGH', 'MEDIUM', 'LOW'] as const).map(l => (
+                                <button 
+                                    key={l}
+                                    onClick={() => updateConfig({ minLiquidityFilter: l })}
+                                    className={`py-3 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest border text-left flex justify-between items-center transition-all ${config.minLiquidityFilter === l ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400' : 'bg-white/5 border-white/5 text-gray-500'}`}
+                                >
+                                    {l}
+                                    {config.minLiquidityFilter === l && <Check size={12}/>}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="text-[9px] text-gray-600 leading-relaxed uppercase font-bold">Only executes if market depth exceeds threshold.</p>
+                    </div>
+
+                    {/* Sizing Hard-Caps */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
+                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Target size={14} className="text-rose-500"/> Safety Hard-Caps
                         </h4>
                         
-                        {/* Multiplier Slider */}
                         <div className="space-y-4">
                             <div className="flex justify-between items-center">
-                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Mirror Multiplier</label>
-                                <span className="text-sm font-mono font-black text-purple-400">{config.multiplier}x</span>
-                            </div>
-                            <input 
-                                type="range" min="0.1" max="5.0" step="0.1" 
-                                value={config.multiplier}
-                                onChange={(e) => updateConfig({ multiplier: parseFloat(e.target.value) })}
-                                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                            />
-                        </div>
-
-                        {/* AI Risk Profiles */}
-                        <div className="space-y-4">
-                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">AI Risk Protocol</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {(['conservative', 'balanced', 'degen'] as const).map(p => (
-                                    <button 
-                                        key={p}
-                                        onClick={() => updateConfig({ riskProfile: p })}
-                                        className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all ${config.riskProfile === p ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-900/20' : 'bg-white/5 border-white/5 text-gray-500'}`}
-                                    >
-                                        {p}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* Liquidity Guard */}
-                        <div className="space-y-4">
-                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Liquidity Guard (Slippage Shield)</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {(['HIGH', 'MEDIUM', 'LOW'] as const).map(l => (
-                                    <button 
-                                        key={l}
-                                        onClick={() => updateConfig({ minLiquidityFilter: l })}
-                                        className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all ${config.minLiquidityFilter === l ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-900/20' : 'bg-white/5 border-white/5 text-gray-500'}`}
-                                    >
-                                        {l}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Target Registry & Secrets */}
-                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
-                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                            <Key size={14}/> Signals & Access
-                        </h4>
-
-                        {/* Target Registry */}
-                        <div className="space-y-4">
-                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Target Whale List</label>
-                            <div className="flex gap-2">
-                                <input 
-                                    value={targetInput}
-                                    onChange={(e) => setTargetInput(e.target.value)}
-                                    placeholder="0x..." 
-                                    className="flex-1 bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-xs font-mono text-white outline-none focus:border-blue-500/50"
-                                />
-                                <button onClick={() => { if(targetInput) { updateConfig({ targets: [...config.targets, targetInput] }); setTargetInput(''); }}} className="px-4 bg-white text-black font-black text-[9px] uppercase rounded-xl">Add</button>
-                            </div>
-                            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto custom-scrollbar">
-                                {config.targets.map(t => (
-                                    <div key={t} className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-lg border border-white/5 text-[10px] font-mono text-gray-400">
-                                        {t.slice(0,6)}...
-                                        <button onClick={() => updateConfig({ targets: config.targets.filter(x => x !== t) })} className="hover:text-rose-500"><X size={10}/></button>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* AI Credentials */}
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-center">
-                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Gemini API Key</label>
-                                <button onClick={() => setShowSecrets(!showSecrets)} className="text-[10px] text-blue-500 font-bold uppercase">{showSecrets ? 'Hide' : 'Reveal'}</button>
-                            </div>
-                            <input 
-                                type={showSecrets ? "text" : "password"}
-                                value={config.geminiApiKey}
-                                onChange={(e) => updateConfig({ geminiApiKey: e.target.value })}
-                                className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-xs font-mono text-white outline-none focus:border-purple-500/50"
-                                placeholder="Enter API Key for Risk Analysis..."
-                            />
-                        </div>
-                    </div>
-                </section>
-
-                {/* 3. Global Safety Protocols */}
-                <section className="space-y-6">
-                    <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] flex items-center gap-3">
-                        <Shield size={12} fill="currentColor"/> Global Safety Protocols
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        {/* Hard Allocation Limit */}
-                        <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-rose-600/10 to-transparent border border-rose-500/20 space-y-6">
-                            <div className="flex justify-between items-center">
-                                <div>
-                                    <h4 className="text-sm font-black text-white uppercase tracking-tight">Hard Allocation Ceiling</h4>
-                                    <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">Universal cap per trade</p>
-                                </div>
-                                <div className="text-2xl font-black text-rose-500 font-mono">${config.maxTradeAmount}</div>
+                                <label className="text-[10px] font-black text-white uppercase tracking-widest">Max Trade Size</label>
+                                <span className="text-sm font-mono font-black text-rose-500">${config.maxTradeAmount}</span>
                             </div>
                             <input 
                                 type="range" min="10" max="1000" step="10" 
                                 value={config.maxTradeAmount}
                                 onChange={(e) => updateConfig({ maxTradeAmount: Number(e.target.value) })}
-                                className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-rose-500"
+                                className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-rose-500 border border-white/5"
                             />
-                            <p className="text-[9px] text-gray-500 italic leading-relaxed">
-                                The absolute maximum USD the bot can commit to any single market event. This overrides multipliers and AI approval.
-                            </p>
                         </div>
 
-                        {/* Profit Sovereignty (Recovery) */}
-                        <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-blue-600/10 to-transparent border border-blue-500/20 flex flex-col justify-between">
-                            <div className="flex items-start gap-4">
-                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${recoveryOwnerAdded ? 'bg-emerald-500 text-white' : 'bg-blue-600 text-white'}`}>
-                                    {recoveryOwnerAdded ? <ShieldCheck size={24}/> : <Fingerprint size={24}/>}
-                                </div>
-                                <div>
-                                    <h4 className="text-sm font-black text-white uppercase tracking-tight">Vault Sovereignty</h4>
-                                    <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">Multi-Owner Recovery Path</p>
-                                    <p className="text-[10px] text-gray-400 mt-3 leading-relaxed">
-                                        Current Status: <span className={recoveryOwnerAdded ? 'text-emerald-500' : 'text-blue-500'}>
-                                            {recoveryOwnerAdded ? 'Sovereign Path Enabled' : 'Managed Access Only'}
-                                        </span>
-                                    </p>
-                                </div>
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-black text-white uppercase tracking-widest">Auto Take-Profit</label>
+                                <span className="text-sm font-mono font-black text-emerald-500">+{config.autoTp}%</span>
                             </div>
-                            {!recoveryOwnerAdded && (
-                                <button 
-                                    onClick={handleAddRecoveryOwner}
-                                    disabled={isAddingRecovery}
-                                    className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-[10px] uppercase rounded-xl transition-all flex items-center justify-center gap-2"
-                                >
-                                    {isAddingRecovery ? <Loader2 className="animate-spin" size={14}/> : <PlusCircle size={14}/>}
-                                    Enable Sovereign Path
-                                </button>
-                            )}
+                            <input 
+                                type="range" min="5" max="100" step="5" 
+                                value={config.autoTp}
+                                onChange={(e) => updateConfig({ autoTp: Number(e.target.value) })}
+                                className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-emerald-500 border border-white/5"
+                            />
                         </div>
+                    </div>
+
+                    {/* Communication Alerts */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-6">
+                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Bell size={14} className="text-blue-500"/> Communication
+                        </h4>
+
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
+                                <span className="text-[10px] font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                    <Volume2 size={14} /> UI Audio Feedback
+                                </span>
+                                <input 
+                                    type="checkbox" 
+                                    className="accent-blue-500 w-4 h-4"
+                                    checked={config.enableSounds}
+                                    onChange={e => updateConfig({ enableSounds: e.target.checked })}
+                                />
+                            </div>
+
+                            <div className="space-y-3 p-4 bg-white/5 rounded-2xl border border-white/5">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                        <MessageSquare size={14} /> SMS Notifications
+                                    </span>
+                                    <input 
+                                        type="checkbox" 
+                                        className="accent-emerald-500 w-4 h-4"
+                                        checked={config.enableNotifications}
+                                        onChange={e => updateConfig({ enableNotifications: e.target.checked })}
+                                    />
+                                </div>
+                                <input 
+                                    type="tel"
+                                    className={`w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2 text-xs font-mono text-white outline-none transition-opacity ${config.enableNotifications ? 'opacity-100 focus:border-emerald-500/50' : 'opacity-30 pointer-events-none'}`}
+                                    placeholder="+1234567890"
+                                    value={config.userPhoneNumber}
+                                    onChange={e => updateConfig({ userPhoneNumber: e.target.value })}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 5. PROFIT SECURITY & SOVEREIGNTY */}
+                <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Auto Sweep */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-orange-500/20 bg-orange-500/[0.02] space-y-6">
+                        <div className="flex justify-between items-center">
+                            <h4 className="text-sm font-black text-white uppercase italic tracking-tight flex items-center gap-2">
+                                <LockKeyhole size={18} className="text-orange-500"/> Profit Security (Auto-Sweep)
+                            </h4>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" checked={config.enableAutoCashout} onChange={(e) => updateConfig({ enableAutoCashout: e.target.checked })} className="sr-only peer" />
+                                <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                        </div>
+                        
+                        <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 transition-all ${config.enableAutoCashout ? 'opacity-100' : 'opacity-20 grayscale pointer-events-none'}`}>
+                            <div className="space-y-2">
+                                <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Retention Limit ($)</label>
+                                <input 
+                                    type="number" 
+                                    value={config.maxRetentionAmount}
+                                    onChange={(e) => updateConfig({ maxRetentionAmount: Number(e.target.value) })}
+                                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm font-mono text-white"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest">Cold Wallet Address</label>
+                                <input 
+                                    type="text" 
+                                    value={config.coldWalletAddress}
+                                    onChange={(e) => updateConfig({ coldWalletAddress: e.target.value })}
+                                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-[10px] font-mono text-white"
+                                    placeholder="0x..."
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Vault Sovereignty */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-blue-500/20 bg-blue-500/[0.02] flex flex-col justify-between">
+                        <div className="flex items-start gap-4">
+                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 ${recoveryOwnerAdded ? 'bg-emerald-500 text-white' : 'bg-blue-600 text-white'}`}>
+                                {recoveryOwnerAdded ? <ShieldCheck size={28}/> : <Fingerprint size={28}/>}
+                            </div>
+                            <div>
+                                <h4 className="text-sm font-black text-white uppercase italic tracking-tight">Vault Sovereignty</h4>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">Status: <span className={recoveryOwnerAdded ? 'text-emerald-500' : 'text-blue-500'}>{recoveryOwnerAdded ? 'Sovereign Path Enabled' : 'Managed Access'}</span></p>
+                                <p className="text-[10px] text-gray-500 mt-3 leading-relaxed">By default, the server manages your vault. Upgrade to add your Main Wallet as a co-owner on-chain for 100% independence.</p>
+                            </div>
+                        </div>
+                        {!recoveryOwnerAdded && (
+                            <button 
+                                onClick={handleAddRecoveryOwner}
+                                disabled={isAddingRecovery}
+                                className="mt-6 w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20"
+                            >
+                                {isAddingRecovery ? <Loader2 className="animate-spin" size={14}/> : <PlusCircle size={14}/>}
+                                Upgrade To Multi-Sig
+                            </button>
+                        )}
                     </div>
                 </section>
             </div>

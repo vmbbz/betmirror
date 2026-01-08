@@ -1893,7 +1893,7 @@ const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
-const [activeTab, setActiveTab] = useState<'dashboard' | 'money-market' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help' | 'sports'>('dashboard');
+const [activeTab, setActiveTab] = useState<'dashboard' | 'money-market' | 'sports-runner' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help' | 'sports'>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
@@ -2959,6 +2959,7 @@ return (
                 {[
                 { id: 'dashboard', icon: Activity, label: 'Dashboard' },
                 { id: 'money-market', icon: Scale, label: 'M.Market' },
+                { id: 'sports-runner', icon: Trophy, label: 'Sports Runner' },
                 { id: 'system', icon: Gauge, label: 'System' },
                 { id: 'bridge', icon: Globe, label: 'Bridge' },
                 { id: 'marketplace', icon: Users, label: 'Alpha' },
@@ -3054,6 +3055,7 @@ return (
                     { id: 'dashboard', icon: Activity, label: 'Dashboard' },
                     { id: 'system', icon: Gauge, label: 'System' },
                     { id: 'money-market', icon: Scale, label: 'Money Market' },
+                    { id: 'sports-runner', icon: Trophy, label: 'Sports Runner' },
                     { id: 'bridge', icon: Globe, label: 'Bridge' },
                     { id: 'marketplace', icon: Users, label: 'Marketplace' },
                     { id: 'history', icon: History, label: 'History' },

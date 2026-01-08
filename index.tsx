@@ -14,7 +14,7 @@ Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLe
 Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
 Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle,
 Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown, Sliders, Bell, ShieldAlert,
-Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark, ArrowLeft, ArrowRight
+Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark, ArrowLeft, ArrowRight, Target, Sword, Recycle, ShieldIcon
 } from 'lucide-react';
 import { web3Service, USDC_POLYGON, USDC_BRIDGED_POLYGON, USDC_ABI } from './src/services/web3.service';
 import { lifiService, BridgeTransactionRecord } from './src/services/lifi-bridge.service';
@@ -4115,605 +4115,239 @@ return (
             </div>
         )}
 
-        {/* VAULT (REBRANDED & REDESIGNED) */}
+        {/* VAULT SECTION (PERFECTED) */}
         {activeTab === 'vault' && (
-            <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-300 pb-10">
-                <div className="flex flex-col md:flex-row items-start md:items-center gap-4 mb-8 pb-8 border-b border-gray-200 dark:border-terminal-border">
-                    <div className="flex items-center gap-4 w-full md:w-auto">
-                        <div className="p-3 bg-blue-50 dark:bg-terminal-accent/10 rounded-xl">
-                            <Sliders size={32} className="text-blue-600 dark:text-terminal-accent" />
+            <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20 space-y-12">
+                {/* Header */}
+                <section className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-900/20">
+                                <ShieldIcon size={24} />
+                            </div>
+                            <h2 className="text-3xl font-black text-white uppercase tracking-tighter italic">Strategy Vault</h2>
                         </div>
-                        <div>
-                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Strategy & Risk</h2>
-                            <p className="text-gray-500 text-sm">Configure how your bot sizes positions and manages risk.</p>
-                        </div>
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.3em] ml-1">Autonomous Execution & Sovereignty Control</p>
                     </div>
-                </div>
-                
-                {/* Strategy Hub Section */}
-                <section className="space-y-8 mt-12">
-                    <div className="flex justify-between items-end">
-                        <div className="space-y-2">
-                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Strategy Hub</h2>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">Configure Autonomous Trading Pilots</p>
-                        </div>
-                    </div>
+                    <button 
+                        onClick={() => {
+                            localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+                            toast.success("Configuration Locked");
+                        }}
+                        className="px-8 py-4 bg-white text-black font-black rounded-2xl text-[10px] uppercase tracking-widest hover:scale-105 transition-all shadow-xl"
+                    >
+                        Save & Deploy Changes
+                    </button>
+                </section>
 
+                {/* 1. Autonomous Command Section */}
+                <section className="space-y-6">
+                    <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] flex items-center gap-3">
+                        <Play size={12} fill="currentColor"/> Autonomous Command Centre
+                    </h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {/* Copy-Trading Pilot */}
-                        <div className={`p-6 rounded-2xl border transition-all duration-300 flex flex-col justify-between h-full ${
-                            config.enableCopyTrading 
-                                ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-500/30' 
-                                : 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
-                        }`}>
-                            <div>
-                                <div className="flex justify-between items-start mb-4">
-                                    <div className={`p-3 rounded-xl ${
-                                        config.enableCopyTrading 
-                                            ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' 
-                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
-                                    }`}>
-                                        <Users size={24} />
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input 
-                                            type="checkbox" 
-                                            checked={config.enableCopyTrading} 
-                                            onChange={(e) => updateConfig({ enableCopyTrading: e.target.checked })}
-                                            className="sr-only peer" 
-                                        />
-                                        <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                    </label>
+                        {/* Alpha Mirror (Copy Trading) */}
+                        <div className={`p-8 rounded-[2.5rem] border transition-all duration-500 ${config.enableCopyTrading ? 'bg-purple-600/10 border-purple-500/30 shadow-[0_0_30px_rgba(147,51,234,0.05)]' : 'bg-white/5 border-white/5 opacity-60'}`}>
+                            <div className="flex justify-between items-start mb-6">
+                                <div className="w-14 h-14 bg-purple-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
+                                    <Users size={28} />
                                 </div>
-                                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Alpha Mirror</h3>
-                                <p className="text-sm text-gray-600 dark:text-gray-400">
-                                    Real-time replication of whale trades from the global registry with proportional sizing.
-                                </p>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" checked={config.enableCopyTrading} onChange={(e) => updateConfig({ enableCopyTrading: e.target.checked })} className="sr-only peer" />
+                                    <div className="w-14 h-7 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                </label>
                             </div>
-                            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                                <div className="flex justify-between text-xs font-medium text-gray-500 mb-1">
-                                    <span>Multiplier</span>
-                                    <span className="font-bold text-blue-600 dark:text-blue-400">{config.multiplier}x</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="0.1"
-                                    max="5"
-                                    step="0.1"
-                                    value={config.multiplier}
-                                    onChange={(e) => updateConfig({ multiplier: parseFloat(e.target.value) })}
-                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                                />
-                            </div>
+                            <h4 className="text-xl font-black text-white uppercase italic mb-2">Alpha Mirror</h4>
+                            <p className="text-xs text-gray-500 leading-relaxed font-medium">Replicate institutional whale movements from the Alpha Registry with millisecond precision.</p>
                         </div>
 
-                        {/* Money Markets Pilot */}
-                        <div className={`p-6 rounded-2xl border transition-all duration-300 flex flex-col justify-between h-full ${
-                            config.enableMoneyMarkets
-                                ? 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-500/30'
-                                : 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
-                        }`}>
-                            <div>
-                                <div className="flex justify-between items-start mb-4">
-                                    <div className={`p-3 rounded-xl ${
-                                        config.enableMoneyMarkets
-                                            ? 'bg-emerald-100 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400'
-                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
-                                    }`}>
-                                        <Scale size={24} />
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={config.enableMoneyMarkets}
-                                            onChange={(e) => updateConfig({ enableMoneyMarkets: e.target.checked })}
-                                            className="sr-only peer"
-                                        />
-                                        <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-emerald-600"></div>
-                                    </label>
+                        {/* Liquidity Engine (Money Market) */}
+                        <div className={`p-8 rounded-[2.5rem] border transition-all duration-500 ${config.enableMoneyMarkets ? 'bg-blue-600/10 border-blue-500/30 shadow-[0_0_30px_rgba(37,99,235,0.05)]' : 'bg-white/5 border-white/5 opacity-60'}`}>
+                            <div className="flex justify-between items-start mb-6">
+                                <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
+                                    <Recycle size={28} />
                                 </div>
-                                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Yield Scout</h3>
-                                <p className="text-sm text-gray-600 dark:text-gray-400">
-                                    Captures cent-spreads and earns liquidity rewards through autonomous limit orders.
-                                </p>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" checked={config.enableMoneyMarkets} onChange={(e) => updateConfig({ enableMoneyMarkets: e.target.checked })} className="sr-only peer" />
+                                    <div className="w-14 h-7 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                </label>
                             </div>
-                            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                                <div className="flex justify-between text-xs font-medium text-gray-500">
-                                    <span>Status</span>
-                                    <span className={`font-bold ${
-                                        config.enableMoneyMarkets 
-                                            ? 'text-emerald-600 dark:text-emerald-400' 
-                                            : 'text-gray-400'
-                                    }`}>
-                                        {config.enableMoneyMarkets ? 'Active' : 'Inactive'}
-                                    </span>
-                                </div>
-                            </div>
+                            <h4 className="text-xl font-black text-white uppercase italic mb-2">Liquidity Engine</h4>
+                            <p className="text-xs text-gray-500 leading-relaxed font-medium">Capture orderbook spreads and earn Passive Rewards via autonomous GTC limit order provision.</p>
                         </div>
 
-                        {/* Sports Runner Pilot */}
-                        <div className={`p-6 rounded-2xl border transition-all duration-300 flex flex-col justify-between h-full ${
-                            config.enableSportsRunner
-                                ? 'bg-rose-50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-500/30'
-                                : 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
-                        }`}>
-                            <div>
-                                <div className="flex justify-between items-start mb-4">
-                                    <div className={`p-3 rounded-xl ${
-                                        config.enableSportsRunner
-                                            ? 'bg-rose-100 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400'
-                                            : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
-                                    }`}>
-                                        <Zap size={24} />
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={config.enableSportsRunner}
-                                            onChange={(e) => updateConfig({ enableSportsRunner: e.target.checked })}
-                                            className="sr-only peer"
-                                        />
-                                        <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-rose-600"></div>
-                                    </label>
+                        {/* Sport Runner */}
+                        <div className={`p-8 rounded-[2.5rem] border transition-all duration-500 ${config.enableSportsRunner ? 'bg-emerald-600/10 border-emerald-500/30 shadow-[0_0_30px_rgba(5,150,105,0.05)]' : 'bg-white/5 border-white/5 opacity-60'}`}>
+                            <div className="flex justify-between items-start mb-6">
+                                <div className="w-14 h-14 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg">
+                                    <Sword size={28} />
                                 </div>
-                                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Pulse Runner</h3>
-                                <p className="text-sm text-gray-600 dark:text-gray-400">
-                                    Latency arbitrage engine for sports markets using direct feeds.
-                                </p>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" checked={config.enableSportsRunner} onChange={(e) => updateConfig({ enableSportsRunner: e.target.checked })} className="sr-only peer" />
+                                    <div className="w-14 h-7 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-emerald-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                </label>
                             </div>
-                            <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                                <div className="flex justify-between text-xs font-medium text-gray-500">
-                                    <span>Feed Latency</span>
-                                    <span className="font-bold text-rose-600 dark:text-rose-400">1.2ms</span>
-                                </div>
-                            </div>
+                            <h4 className="text-xl font-black text-white uppercase italic mb-2">Sport Runner</h4>
+                            <p className="text-xs text-gray-500 leading-relaxed font-medium">High-frequency frontrunning of live event data. Detects score changes before the market reacts.</p>
                         </div>
                     </div>
                 </section>
-                
-                {/* Global Risk Parameters Section */}
-                <section className="mt-12 glass-panel p-8 rounded-2xl border border-gray-200 dark:border-gray-700">
-                    <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Global Risk Parameters</h2>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div>
-                            <div className="flex justify-between items-center mb-2">
-                                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Max Trade Size (USD)</label>
-                                <span className="text-sm font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
-                                    ${config.maxTradeAmount}
-                                </span>
-                            </div>
-                            <input
-                                type="range"
-                                min="10"
-                                max="1000"
-                                step="10"
-                                value={config.maxTradeAmount}
-                                onChange={(e) => updateConfig({ maxTradeAmount: parseInt(e.target.value) })}
-                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                            />
-                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                Maximum USD amount per trade across all strategies.
-                            </p>
-                        </div>
 
-                        <div>
-                            <div className="flex justify-between items-center mb-2">
-                                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Liquidity Filter</label>
-                                <span className="text-sm font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
-                                    {config.minLiquidityFilter}
-                                </span>
-                            </div>
-                            <select
-                                value={config.minLiquidityFilter}
-                                onChange={(e) => updateConfig({ minLiquidityFilter: e.target.value as any })}
-                                className="w-full p-2 text-sm border border-gray-300 rounded-lg bg-white dark:bg-gray-800 dark:border-gray-600"
-                            >
-                                <option value="LOW">Low (Riskier)</option>
-                                <option value="MEDIUM">Medium (Balanced)</option>
-                                <option value="HIGH">High (Safer)</option>
-                            </select>
-                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                Minimum liquidity threshold for all trades.
-                            </p>
-                        </div>
-                    </div>
-                </section>
-                
-                {/* Vault Sovereignty Section */}
-                <div className="mb-8 glass-panel border-purple-500/20 dark:border-purple-500/30 rounded-2xl overflow-hidden relative group">
-                    {/* Background Decorative Element */}
-                    <div className="absolute top-0 right-0 p-8 opacity-[0.03] dark:opacity-[0.07] group-hover:opacity-10 transition-opacity pointer-events-none">
-                         {recoveryOwnerAdded ? <ShieldCheck size={180} /> : <Fingerprint size={180} />}
-                    </div>
-
-                    <div className="p-6 sm:p-8 relative z-10">
-                        <div className="flex flex-col lg:flex-row justify-between items-start gap-8">
-                            <div className="flex-1">
-                                <div className="flex items-center gap-3 mb-4">
-                                    <div className="p-2.5 bg-purple-600 rounded-xl shadow-lg shadow-purple-500/20">
-                                        <Shield className="text-white" size={24}/>
-                                    </div>
-                                    <div>
-                                        <h3 className="text-l font-black text-gray-900 dark:text-white tracking-tight uppercase">
-                                            Vault Sovereignty
-                                        </h3>
-                                        <p className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-[0.2em]">Self-Custodial Protocol</p>
-                                    </div>
-                                </div>
-                                
-                                <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed max-w-3xl">
-                                    By default, the server operates your vault as a managed signer. To achieve <strong>100% platform independence</strong>, 
-                                    you can add your Main Wallet as a co-owner on the blockchain. This creates a fail-safe recovery path 
-                                    that works even if this terminal is inaccessible.
-                                </p>
-
-                                {/* Instructional Grid */}
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
-                                    {[
-                                        { icon: Link, title: "1. Authorize", desc: "Link Main Wallet" },
-                                        { icon: Globe, title: "2. Connect", desc: "Visit Safe{Wallet}" },
-                                        { icon: Key, title: "3. Import", desc: "Load Vault Safe" },
-                                        { icon: ArrowUpCircle, title: "4. Recover", desc: "Direct Withdraw" }
-                                    ].map((step, idx) => (
-                                        <div key={idx} className="p-3 bg-gray-50 dark:bg-black/40 rounded-xl border border-gray-200 dark:border-white/5 flex flex-col items-center text-center group/step hover:border-purple-500/30 transition-all">
-                                            <step.icon size={16} className="text-purple-500 mb-2 group-hover/step:scale-110 transition-transform" />
-                                            <h4 className="text-[11px] font-bold text-gray-900 dark:text-white uppercase mb-1">{step.title}</h4>
-                                            <p className="text-[9px] text-gray-500 leading-tight">{step.desc}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="lg:w-64 w-full flex flex-col gap-4">
-                                <div className={`p-5 rounded-2xl border flex flex-col items-center text-center transition-all ${
-                                    recoveryOwnerAdded 
-                                    ? 'bg-green-50/50 dark:bg-green-900/10 border-green-500/30 shadow-lg shadow-green-500/5' 
-                                    : 'bg-purple-50/50 dark:bg-purple-900/10 border-purple-500/30'
-                                }`}>
-                                    <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-3 ${
-                                        recoveryOwnerAdded ? 'bg-green-500 text-white' : 'bg-purple-100 dark:bg-purple-900/40 text-purple-600'
-                                    }`}>
-                                        {recoveryOwnerAdded ? <ShieldCheck size={24}/> : <Lock size={24}/>}
-                                    </div>
-                                    
-                                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Status</span>
-                                    <span className={`text-sm font-black uppercase tracking-tight ${
-                                        recoveryOwnerAdded ? 'text-green-600' : 'text-purple-600'
-                                    }`}>
-                                        {recoveryOwnerAdded ? 'Sovereign Path Active' : 'Managed Access Only'}
-                                    </span>
-
-                                    {!recoveryOwnerAdded && (
-                                        <button 
-                                            onClick={handleAddRecoveryOwner}
-                                            disabled={isAddingRecovery}
-                                            className="mt-4 w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs shadow-xl shadow-purple-500/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                                        >
-                                            {isAddingRecovery ? <Loader2 size={14} className="animate-spin"/> : <PlusCircle size={14}/>}
-                                            UPGRADE VAULT
-                                        </button>
-                                    )}
-
-                                    {recoveryOwnerAdded && (
-                                        <a 
-                                            href="https://app.safe.global" 
-                                            target="_blank" 
-                                            className="mt-4 w-full py-2 bg-white dark:bg-white/5 text-gray-900 dark:text-white border border-gray-200 dark:border-white/10 rounded-lg text-[10px] font-bold uppercase transition-all hover:bg-gray-50 dark:hover:bg-white/10 flex items-center justify-center gap-2"
-                                        >
-                                            Open Safe Dashboard <ExternalLink size={12}/>
-                                        </a>
-                                    )}
-                                </div>
-                                
-                                <div className="p-3 bg-gray-100 dark:bg-white/5 rounded-xl border border-gray-200 dark:border-white/5">
-                                    <div className="flex items-center gap-2 mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">
-                                        <Info size={12}/> Governance Note
-                                    </div>
-                                    <p className="text-[9px] text-gray-400 leading-normal">
-                                        Adding an owner requires a small blockchain transaction (~0.05 POL) to update the Safe contract on-chain.
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Money Market Protocols Section */}
-                <div className="glass-panel p-6 md:p-8 rounded-3xl space-y-6 border border-blue-200 dark:border-blue-500/30 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm mb-8 transition-colors duration-300">
-                    <div className="flex items-center gap-4 border-b border-gray-200 dark:border-slate-700 pb-4">
-                        <div className="w-10 h-10 md:w-12 md:h-12 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl flex items-center justify-center shadow-sm">
-                            <Landmark size={20} />
-                        </div>
-                        <div>
-                            <h4 className="font-bold text-gray-900 dark:text-white text-lg md:text-xl uppercase tracking-tight">Money Market</h4>
-                            <p className="text-xs text-gray-500 dark:text-slate-400">Liquidity Provision & Yield</p>
-                        </div>
-                    </div>
-
-                    <div className="space-y-6">
-                        <div className="p-5 rounded-2xl bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-500/20 flex justify-between items-center group hover:shadow-sm transition-all duration-200">
-                            <div className="max-w-[70%]">
-                                <div className="font-bold text-gray-800 dark:text-gray-100 text-sm md:text-base uppercase mb-1">Autonomous Exploitation</div>
-                                <p className="text-xs text-gray-600 dark:text-slate-400 leading-tight">When active, the server engine locks in spreads autonomously 24/7.</p>
-                            </div>
-                            <label className="relative inline-flex items-center cursor-pointer">
-                                <input 
-                                    type="checkbox" 
-                                    checked={config.enableAutoArb} 
-                                    onChange={(e) => updateConfig({ enableAutoArb: e.target.checked })} 
-                                    className="sr-only peer"
-                                />
-                                <div className="w-12 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-6 peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:duration-200 peer-checked:after:border-blue-600"></div>
-                            </label>
-                        </div>
-
-                        <div className="space-y-3 p-4 bg-white/50 dark:bg-slate-800/30 rounded-xl border border-gray-100 dark:border-slate-700/50">
-                            <div className="flex justify-between items-center">
-                                <label className="text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Max Allocation per Leg</label>
-                                <span className="text-sm font-mono font-bold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2.5 py-1 rounded-lg">
-                                    ${config.maxTradeAmount}
-                                </span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <span className="text-xs text-gray-500 dark:text-slate-400 w-8">$10</span>
-                                <input 
-                                    type="range" 
-                                    min="10" 
-                                    max="500" 
-                                    step="10" 
-                                    className="flex-1 h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full appearance-none cursor-pointer accent-blue-500" 
-                                    value={config.maxTradeAmount} 
-                                    onChange={e => updateConfig({ maxTradeAmount: Number(e.target.value) })}
-                                />
-                                <span className="text-xs text-gray-500 dark:text-slate-400 w-12 text-right">$500</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-                    {/* Left Column: Targets & AI */}
-                    <div className="md:col-span-5 space-y-6">
-                        {/* Target Wallets */}
-                        <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-6 shadow-sm dark:shadow-none">
-                            <label className="text-xs text-gray-500 font-bold uppercase mb-3 block flex items-center gap-2">
-                                <Users size={14}/> Target Wallets
-                            </label>
-                            <div className="flex gap-2 mb-4">
-                                <input 
-                                    className="flex-1 bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded-lg px-3 py-2 text-sm font-mono text-gray-900 dark:text-white outline-none focus:border-blue-500 dark:focus:border-terminal-accent"
-                                    placeholder="0x..."
-                                    value={targetInput}
-                                    onChange={e => setTargetInput(e.target.value)}
-                                />
-                                <button onClick={() => { if(targetInput) { updateConfig({...config, targets: [...config.targets, targetInput]}); setTargetInput(''); }}} className="px-4 bg-blue-600 dark:bg-terminal-accent rounded-lg text-white font-bold text-xs">ADD</button>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {config.targets.map(t => (
-                                    <span key={t} className="px-3 py-1.5 bg-gray-100 dark:bg-white/5 rounded border border-gray-200 dark:border-white/10 text-xs text-gray-700 dark:text-gray-300 font-mono flex gap-2 items-center">
-                                        {t.slice(0,6)}...{t.slice(-4)} 
-                                        <button onClick={() => updateConfig({...config, targets: config.targets.filter(x => x !== t)})} className="hover:text-red-500"><X size={12}/></button>
-                                    </span>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* AI Risk Guard */}
-                        <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-6 shadow-sm dark:shadow-none">
-                            <div className="flex items-center justify-between mb-4">
-                                <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2"><Brain size={14}/> AI Risk Guard</label>
-                                <Tooltip text="Gemini 2.5 analyzes the market question. Conservative rejects volatile/ambiguous markets. Degen accepts almost everything." />
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['conservative', 'balanced', 'degen'].map(mode => (
-                                    <button 
-                                        key={mode} 
-                                        onClick={() => updateConfig({...config, riskProfile: mode as any})} 
-                                        className={`py-2 px-1 rounded-lg text-[10px] font-bold uppercase border transition-all ${config.riskProfile === mode ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-500 text-purple-600 dark:text-purple-400' : 'border-gray-200 dark:border-gray-800 text-gray-500 hover:bg-gray-50 dark:hover:bg-white/5'}`}
-                                    >
-                                        {mode}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="mt-4 relative">
-                                <label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Gemini API Key</label>
-                                <input 
-                                    type={showSecrets ? "text" : "password"}
-                                    className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded-lg px-3 py-2 text-xs font-mono text-gray-900 dark:text-white outline-none focus:border-purple-500"
-                                    value={config.geminiApiKey}
-                                    onChange={e => updateConfig({...config, geminiApiKey: e.target.value})}
-                                    placeholder="Required for AI analysis"
-                                />
-                                <button onClick={() => setShowSecrets(!showSecrets)} className="absolute right-3 top-7 text-gray-400">
-                                    {showSecrets ? <EyeOff size={12}/> : <Eye size={12}/>}
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* NEW: Liquidity Guard Section */}
-                        <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-6 shadow-sm dark:shadow-none">
-                            <div className="flex items-center justify-between mb-4">
-                                <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
-                                    <Zap size={14} className="text-blue-500"/> Liquidity Filter
-                                </label>
-                                <Tooltip text="Slippage Protection: Only trade in markets that meet this liquidity health level. HIGH is safest but skips more trades." />
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['HIGH', 'MEDIUM', 'LOW'].map(level => (
-                                    <button 
-                                        key={level} 
-                                        onClick={() => updateConfig({...config, minLiquidityFilter: level as any})} 
-                                        className={`py-2 px-1 rounded-lg text-[10px] font-bold uppercase border transition-all ${config.minLiquidityFilter === level ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 text-blue-600 dark:text-blue-400' : 'border-gray-200 dark:border-gray-800 text-gray-500 hover:bg-gray-50 dark:hover:bg-white/5'}`}
-                                    >
-                                        {level}
-                                    </button>
-                                ))}
-                            </div>
-                            <p className="text-[10px] text-gray-400 mt-3 italic">
-                                *Filters based on spread % and order book depth.
-                            </p>
-                        </div>
-
-                        {/* Alerts & Notifications (RESTORED) */}
-                        <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-6 shadow-sm dark:shadow-none">
-                            <div className="flex items-center justify-between mb-4">
-                                <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
-                                    <Volume2 size={14}/> App Sounds
-                                </label>
-                                <input 
-                                    type="checkbox" 
-                                    className="toggle-checkbox accent-blue-600 w-4 h-4"
-                                    checked={config.enableSounds}
-                                    onChange={e => updateConfig({...config, enableSounds: e.target.checked})}
-                                />
-                            </div>
-
-                            <hr className="border-gray-100 dark:border-white/5 my-4"/>
-
-                            <div className="flex items-center justify-between mb-2">
-                                <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
-                                    <MessageSquare size={14}/> SMS Alerts
-                                </label>
-                                <input 
-                                    type="checkbox"
-                                    className="toggle-checkbox accent-green-500 w-4 h-4"
-                                    checked={config.enableNotifications}
-                                    onChange={e => updateConfig({...config, enableNotifications: e.target.checked})}
-                                />
-                            </div>
-                            
-                            <div className={`transition-opacity ${config.enableNotifications ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
-                                <input 
-                                    type="tel"
-                                    className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded-lg px-3 py-2 text-xs font-mono text-gray-900 dark:text-white outline-none focus:border-green-500"
-                                    placeholder="+1234567890"
-                                    value={config.userPhoneNumber}
-                                    onChange={e => updateConfig({...config, userPhoneNumber: e.target.value})}
-                                />
-                                <p className="text-[10px] text-gray-400 mt-1">Receive texts for trades & cashouts.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Right Column: Sizing & Limits */}
-                    <div className="md:col-span-7 space-y-6">
+                {/* 2. Strategy Tuning (Grouped by Engine) */}
+                <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Mirror & Intelligence Settings */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Target size={14}/> Engine Tuning
+                        </h4>
                         
-                        {/* Position Sizing */}
-                        <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-6 shadow-sm dark:shadow-none">
-                            <h4 className="text-xs font-bold text-gray-900 dark:text-white uppercase tracking-wider mb-6 flex items-center gap-2">
-                                <DollarSign size={14} className="text-green-500"/> Position Sizing
-                            </h4>
-                            
-                            <div className="space-y-6">
-                                <div>
-                                    <div className="flex justify-between mb-2">
-                                        <label className="text-xs text-gray-500 font-bold uppercase">Size Multiplier</label>
-                                        <span className="text-sm font-bold text-blue-600 dark:text-terminal-accent">{config.multiplier}x</span>
-                                    </div>
-                                    <input 
-                                        type="range" min="0.1" max="5.0" step="0.1" 
-                                        className="w-full accent-blue-600 h-1 bg-gray-200 dark:bg-gray-800 rounded-lg appearance-none cursor-pointer" 
-                                        value={config.multiplier} 
-                                        onChange={e => updateConfig({...config, multiplier: Number(e.target.value)})}
-                                    />
-                                    <p className="text-[10px] text-gray-400 mt-2">
-                                        Based on proportional equity. If Whale uses 1% of their portfolio, you use {config.multiplier}% of yours.
-                                    </p>
-                                </div>
+                        {/* Multiplier Slider */}
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Mirror Multiplier</label>
+                                <span className="text-sm font-mono font-black text-purple-400">{config.multiplier}x</span>
+                            </div>
+                            <input 
+                                type="range" min="0.1" max="5.0" step="0.1" 
+                                value={config.multiplier}
+                                onChange={(e) => updateConfig({ multiplier: parseFloat(e.target.value) })}
+                                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            />
+                        </div>
 
-                                <div className="grid grid-cols-2 gap-6 pt-4 border-t border-gray-100 dark:border-white/5">
-                                    <div>
-                                        <label className="text-xs text-gray-500 font-bold uppercase mb-2 block flex items-center gap-1">
-                                            Max Bet Cap <Tooltip text="The hard ceiling. The bot will NEVER bet more than this amount on a single trade, regardless of the multiplier."/>
-                                        </label>
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
-                                            <input 
-                                                type="number"
-                                                className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded-lg pl-6 pr-3 py-2 text-sm font-bold text-gray-900 dark:text-white outline-none focus:border-blue-500"
-                                                value={config.maxTradeAmount}
-                                                onChange={e => updateConfig({...config, maxTradeAmount: Number(e.target.value)})}
-                                            />
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="text-xs text-gray-500 font-bold uppercase mb-2 block flex items-center gap-1">
-                                            Auto Take-Profit <Tooltip text="If a position goes up by this %, the bot will automatically sell it to secure gains."/>
-                                        </label>
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">+</span>
-                                            <input 
-                                                type="number"
-                                                className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded-lg pl-6 pr-8 py-2 text-sm font-bold text-green-600 dark:text-green-400 outline-none focus:border-green-500"
-                                                value={config.autoTp}
-                                                onChange={e => updateConfig({...config, autoTp: Number(e.target.value)})}
-                                            />
-                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
-                                        </div>
-                                    </div>
-                                </div>
+                        {/* AI Risk Profiles */}
+                        <div className="space-y-4">
+                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">AI Risk Protocol</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {(['conservative', 'balanced', 'degen'] as const).map(p => (
+                                    <button 
+                                        key={p}
+                                        onClick={() => updateConfig({ riskProfile: p })}
+                                        className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all ${config.riskProfile === p ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-900/20' : 'bg-white/5 border-white/5 text-gray-500'}`}
+                                    >
+                                        {p}
+                                    </button>
+                                ))}
                             </div>
                         </div>
 
-                        {/* Profit Security (Cashout) */}
-                        <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl p-6 shadow-sm dark:shadow-none">
-                            <div className="flex items-center justify-between mb-6">
-                                <h4 className="text-xs font-bold text-gray-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                                    <LockKeyhole size={14} className="text-orange-500"/> Profit Security
-                                </h4>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-gray-400">AUTO-SWEEP</span>
-                                    <input 
-                                        type="checkbox" 
-                                        className="toggle-checkbox accent-orange-500 w-4 h-4"
-                                        checked={config.enableAutoCashout}
-                                        onChange={e => updateConfig({...config, enableAutoCashout: e.target.checked})}
-                                    />
-                                </div>
+                        {/* Liquidity Guard */}
+                        <div className="space-y-4">
+                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Liquidity Guard (Slippage Shield)</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {(['HIGH', 'MEDIUM', 'LOW'] as const).map(l => (
+                                    <button 
+                                        key={l}
+                                        onClick={() => updateConfig({ minLiquidityFilter: l })}
+                                        className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all ${config.minLiquidityFilter === l ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-900/20' : 'bg-white/5 border-white/5 text-gray-500'}`}
+                                    >
+                                        {l}
+                                    </button>
+                                ))}
                             </div>
-                            
-                            <div className={`space-y-4 transition-opacity ${config.enableAutoCashout ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
-                                <p className="text-xs text-gray-500">
-                                    Automatically withdraw excess profits to your cold wallet when balance exceeds the retention limit.
-                                </p>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 uppercase font-bold block mb-1">Keep in Bot ($)</label>
-                                        <input 
-                                            type="number"
-                                            className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded px-3 py-2 text-sm text-gray-900 dark:text-white"
-                                            value={config.maxRetentionAmount}
-                                            onChange={e => updateConfig({...config, maxRetentionAmount: Number(e.target.value)})}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 uppercase font-bold block mb-1">Cold Wallet Address</label>
-                                        <input 
-                                            type="text"
-                                            className="w-full bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-terminal-border rounded px-3 py-2 text-xs font-mono text-gray-900 dark:text-white"
-                                            placeholder="0x..."
-                                            value={config.coldWalletAddress}
-                                            onChange={e => updateConfig({...config, coldWalletAddress: e.target.value})}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex justify-end pt-4">
-                            <button 
-                                onClick={() => {
-                                    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-                                    toast.done("Configuration Saved");
-                                }} 
-                                className="px-8 py-3 bg-gray-900 dark:bg-white text-white dark:text-black font-bold rounded-xl shadow-lg hover:opacity-90 transition-all flex items-center gap-2"
-                            >
-                                <Save size={16} /> SAVE CONFIGURATION
-                            </button>
                         </div>
                     </div>
-                </div>
+
+                    {/* Target Registry & Secrets */}
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
+                        <h4 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Key size={14}/> Signals & Access
+                        </h4>
+
+                        {/* Target Registry */}
+                        <div className="space-y-4">
+                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Target Whale List</label>
+                            <div className="flex gap-2">
+                                <input 
+                                    value={targetInput}
+                                    onChange={(e) => setTargetInput(e.target.value)}
+                                    placeholder="0x..." 
+                                    className="flex-1 bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-xs font-mono text-white outline-none focus:border-blue-500/50"
+                                />
+                                <button onClick={() => { if(targetInput) { updateConfig({ targets: [...config.targets, targetInput] }); setTargetInput(''); }}} className="px-4 bg-white text-black font-black text-[9px] uppercase rounded-xl">Add</button>
+                            </div>
+                            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto custom-scrollbar">
+                                {config.targets.map(t => (
+                                    <div key={t} className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-lg border border-white/5 text-[10px] font-mono text-gray-400">
+                                        {t.slice(0,6)}...
+                                        <button onClick={() => updateConfig({ targets: config.targets.filter(x => x !== t) })} className="hover:text-rose-500"><X size={10}/></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* AI Credentials */}
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Gemini API Key</label>
+                                <button onClick={() => setShowSecrets(!showSecrets)} className="text-[10px] text-blue-500 font-bold uppercase">{showSecrets ? 'Hide' : 'Reveal'}</button>
+                            </div>
+                            <input 
+                                type={showSecrets ? "text" : "password"}
+                                value={config.geminiApiKey}
+                                onChange={(e) => updateConfig({ geminiApiKey: e.target.value })}
+                                className="w-full bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-xs font-mono text-white outline-none focus:border-purple-500/50"
+                                placeholder="Enter API Key for Risk Analysis..."
+                            />
+                        </div>
+                    </div>
+                </section>
+
+                {/* 3. Global Safety Protocols */}
+                <section className="space-y-6">
+                    <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] flex items-center gap-3">
+                        <Shield size={12} fill="currentColor"/> Global Safety Protocols
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        {/* Hard Allocation Limit */}
+                        <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-rose-600/10 to-transparent border border-rose-500/20 space-y-6">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h4 className="text-sm font-black text-white uppercase tracking-tight">Hard Allocation Ceiling</h4>
+                                    <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">Universal cap per trade</p>
+                                </div>
+                                <div className="text-2xl font-black text-rose-500 font-mono">${config.maxTradeAmount}</div>
+                            </div>
+                            <input 
+                                type="range" min="10" max="1000" step="10" 
+                                value={config.maxTradeAmount}
+                                onChange={(e) => updateConfig({ maxTradeAmount: Number(e.target.value) })}
+                                className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-rose-500"
+                            />
+                            <p className="text-[9px] text-gray-500 italic leading-relaxed">
+                                The absolute maximum USD the bot can commit to any single market event. This overrides multipliers and AI approval.
+                            </p>
+                        </div>
+
+                        {/* Profit Sovereignty (Recovery) */}
+                        <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-blue-600/10 to-transparent border border-blue-500/20 flex flex-col justify-between">
+                            <div className="flex items-start gap-4">
+                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${recoveryOwnerAdded ? 'bg-emerald-500 text-white' : 'bg-blue-600 text-white'}`}>
+                                    {recoveryOwnerAdded ? <ShieldCheck size={24}/> : <Fingerprint size={24}/>}
+                                </div>
+                                <div>
+                                    <h4 className="text-sm font-black text-white uppercase tracking-tight">Vault Sovereignty</h4>
+                                    <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">Multi-Owner Recovery Path</p>
+                                    <p className="text-[10px] text-gray-400 mt-3 leading-relaxed">
+                                        Current Status: <span className={recoveryOwnerAdded ? 'text-emerald-500' : 'text-blue-500'}>
+                                            {recoveryOwnerAdded ? 'Sovereign Path Enabled' : 'Managed Access Only'}
+                                        </span>
+                                    </p>
+                                </div>
+                            </div>
+                            {!recoveryOwnerAdded && (
+                                <button 
+                                    onClick={handleAddRecoveryOwner}
+                                    disabled={isAddingRecovery}
+                                    className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-[10px] uppercase rounded-xl transition-all flex items-center justify-center gap-2"
+                                >
+                                    {isAddingRecovery ? <Loader2 className="animate-spin" size={14}/> : <PlusCircle size={14}/>}
+                                    Enable Sovereign Path
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </section>
             </div>
         )}
 

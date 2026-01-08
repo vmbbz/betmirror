@@ -820,33 +820,29 @@ export class BotEngine {
 
     private async proceedWithPostFundingSetup(engineLogger: Logger) {
         try {
-            if (!this.exchange) {
-                throw new Error('Exchange not initialized');
-            }
-            
             this.portfolioService = new PortfolioService(engineLogger);
-            this.portfolioService.startSnapshotService(
-                this.config.userId,
-                async () => {
-                    const totalValue = this.stats.portfolioValue || 0;
-                    const cashBalance = this.stats.cashBalance || 0;
-                    return {
-                        totalValue,
-                        cashBalance,
-                        positions: this.activePositions,
-                        totalPnL: this.stats.totalPnl || 0
-                    };
-                }
-            );
+            this.portfolioService.startSnapshotService(this.config.userId, async () => ({
+                totalValue: this.stats.portfolioValue || 0,
+                cashBalance: this.stats.cashBalance || 0,
+                positions: this.activePositions,
+                totalPnL: this.stats.totalPnl || 0
+            }));
             
-            await this.startServices(engineLogger);
-
-            if (this.arbScanner) {
+            if (this.config.enableMoneyMarkets && this.arbScanner) {
+                this.addLog('info', `🚀 Starting Money Markets Liquidity Rewards..`);
                 await this.arbScanner.start();
             }
 
-            if (this.config.enableSportsRunner && this.sportsIntel) {
+            // Fix for restoration: Support legacy naming here
+            const sportsActive = this.config.enableSportsRunner || this.config.enableSportsFrontrunning;
+            if (sportsActive && this.sportsIntel) {
+                this.addLog('info', `🚀 Starting Sports Runner Service..`);
                 await this.sportsIntel.start();
+            }
+
+            if (this.config.enableCopyTrading && this.monitor) {
+                this.addLog('info', `🚀 Starting Copy Trading Service..`);
+                await this.monitor.start();
             }
 
             await this.syncPositions(true); 
@@ -854,7 +850,6 @@ export class BotEngine {
         } catch (e: any) {
             console.error(e);
             await this.addLog('error', `Setup Failed: ${e.message}`);
-            this.isRunning = false; 
         }
     }
 

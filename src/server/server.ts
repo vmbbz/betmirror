@@ -8,7 +8,7 @@ import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, SportsMatch, ITrade } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, SportsMatch as DbSportsMatch, ITrade } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -17,7 +17,6 @@ import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
-// FIX: ActivePosition is defined in trade.types.ts, not interfaces.ts
 import { ActivePosition } from '../domain/trade.types.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
@@ -603,13 +602,22 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
 
         let mmOpportunities: ArbitrageOpportunity[] = [];
-        let sportsMatches: any[] = [];
+        let sportsMatches: import('../services/sports-intel.service.js').SportsMatch[] = [];
         let sportsChases: any[] = [];
 
         if (engine) {
             mmOpportunities = engine.getArbOpportunities();
             sportsMatches = engine.getLiveSportsMatches();
             sportsChases = engine.getActiveSportsChases();
+            
+            // Sync current prices for sports matches to ensure UI has Alpha Edge visibility
+            for (const match of sportsMatches) {
+                if (match.tokenId && !match.marketPrice) {
+                    try {
+                        match.marketPrice = await (engine as any).exchange.getMarketPrice(match.conditionId, match.tokenId, 'BUY');
+                    } catch (e) {}
+                }
+            }
         }
 
         let livePositions: ActivePosition[] = [];
@@ -617,8 +625,7 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             const scanner = (engine as any).arbScanner;
             livePositions = (engine.getActivePositions() || []).map(p => ({
                 ...p,
-                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false,
-                managedBySports: sportsChases.some(c => c.conditionId === p.marketId)
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
             }));
         } else if (user && user.activePositions) {
             livePositions = user.activePositions as ActivePosition[];
@@ -636,6 +643,17 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             sportsChases
         });
     } catch (e) { res.status(500).json({ error: 'DB Error' }); }
+});
+
+app.post('/api/bot/sports/link', async (req: any, res: any) => {
+    const { userId, conditionId, matchId } = req.body;
+    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
+    if (engine && (engine as any).sportsIntel) {
+        (engine as any).sportsIntel.forceLink(conditionId, matchId);
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: "Engine or Sports module offline" });
+    }
 });
 
 // --- NEW MM SCANNER ENDPOINTS ---
@@ -1124,7 +1142,7 @@ app.get('/api/market/:marketId', async (req: any, res: any) => {
 // New: Sports Intel Map
 app.get('/api/sports/matches', async (req: any, res: any) => {
     try {
-        const matches = await SportsMatch.find({}).sort({ updatedAt: -1 });
+        const matches = await DbSportsMatch.find({}).sort({ updatedAt: -1 });
         res.json(matches);
     } catch (e) {
         res.status(500).json({ error: 'DB Error' });
@@ -1134,7 +1152,7 @@ app.get('/api/sports/matches', async (req: any, res: any) => {
 app.post('/api/sports/map', async (req: any, res: any) => {
     const { matchId, conditionId } = req.body;
     try {
-        await SportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
+        await DbSportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: 'Mapping failed' });

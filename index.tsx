@@ -1933,6 +1933,9 @@ const [openOrders, setOpenOrders] = useState<any[]>([]);
 const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
 const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
 
+const [sportsChases, setSportsChases] = useState<any[]>([]);
+const [sportsMatches, setSportsMatches] = useState<any[]>([]);
+
 // --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
 const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
 // --- STATE: Bridging (Updated for Bidirectional Flow) ---
@@ -2185,6 +2188,9 @@ const fetchBotStatus = useCallback(async (force?: boolean) => {
             console.log(`📊 Found ${res.data.positions.length} active positions`);
             setActivePositions(res.data.positions);
         }
+
+        if (res.data.sportsMatches) setSportsMatches(res.data.sportsMatches);
+        if (res.data.sportsChases) setSportsChases(res.data.sportsChases);
 
         // Track latest ID instead of length
         const latestHistory = res.data.history || [];
@@ -3569,7 +3575,13 @@ return (
             />
         )}
 
-        {activeTab === 'sports' && <SportsRunner userId={userAddress} isRunning={isRunning} />}
+        {activeTab === 'sports' && (
+            <SportsRunner 
+                userId={userAddress} 
+                isRunning={isRunning} 
+                sportsMatches={sportsMatches} 
+            />
+        )}
         
         {/* BRIDGE */}
         {activeTab === 'bridge' && (

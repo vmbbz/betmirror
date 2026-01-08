@@ -36,24 +36,38 @@ export class SportsIntelService extends EventEmitter {
         return this.isPolling;
     }
 
+    private cleanName(name: string): string {
+        return name.toLowerCase()
+            .replace(/\bfc\b|\butd\b|\bunited\b|\bcity\b|\breal\b|\batletico\b|\bcf\b/g, '')
+            .replace(/[^a-z0-9]/g, '')
+            .trim();
+    }
+
+    private fuzzyMatch(pmTitle: string, smHome: string, smAway: string): boolean {
+        const cleanPm = pmTitle.toLowerCase().replace(/ vs | v /i, ' ');
+        const cHome = this.cleanName(smHome);
+        const cAway = this.cleanName(smAway);
+        
+        if (cHome.length < 3 || cAway.length < 3) return false;
+
+        // Regex check: Does the cleaned Polymarket title contain significant parts of cleaned SM names
+        const homeRegex = new RegExp(cHome.substring(0, 5));
+        const awayRegex = new RegExp(cAway.substring(0, 5));
+
+        return homeRegex.test(cleanPm) && awayRegex.test(cleanPm);
+    }
+
     public async start() {
         if (this.isPolling) return;
         this.isPolling = true;
         this.logger.info("⚽ Sports Intel: Monitoring Live Scores & Structural Discovery...");
         
-        if (!this.apiToken) {
-            this.logger.warn("⚠️ Sports Intel: No Sportmonks API Token provided. Mapped score polling is DISABLED.");
-        }
-
-        // 1. Initial Pitch Discovery
         await this.discoverPolymarketSports();
         
-        // 2. High-Frequency Score Polling (3.5s)
         if (this.apiToken) {
             this.pollInterval = setInterval(() => this.pollLiveScores(), 3500);
         }
         
-        // 3. Periodic Discovery Refresh (60s)
         this.discoveryInterval = setInterval(() => this.discoverPolymarketSports(), 60000);
     }
 
@@ -61,14 +75,11 @@ export class SportsIntelService extends EventEmitter {
         this.isPolling = false;
         if (this.pollInterval) clearInterval(this.pollInterval);
         if (this.discoveryInterval) clearInterval(this.discoveryInterval);
-        this.logger.warn("⚽ Sports Intel: Engine standby.");
     }
 
     private async discoverPolymarketSports() {
         try {
             this.logger.info(`📡 [Sports Scout] Querying Sports Metadata...`);
-            
-            // Targeted search for "Game Winner" markets (Tag: 100639)
             const tagId = "100639"; 
             const url = `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&order=startTime&ascending=true&limit=50`;
             const response = await axios.get(url);
@@ -83,8 +94,6 @@ export class SportsIntelService extends EventEmitter {
                 
                 const conditionId = market.conditionId;
                 const tokenId = market.clobTokenIds ? JSON.parse(market.clobTokenIds)[0] : null;
-
-                // 1. ALWAYS store/update the match in the map immediately
                 const teams = event.title.split(/ vs | v /i);
                 const existing = this.matches.get(conditionId);
 
@@ -103,8 +112,6 @@ export class SportsIntelService extends EventEmitter {
                 };
 
                 this.matches.set(conditionId, matchData);
-
-                // 2. Trigger asynchronous mapping to Sportmonks
                 this.attemptMapping(conditionId, event.title);
             }
         } catch (e: any) {
@@ -115,35 +122,27 @@ export class SportsIntelService extends EventEmitter {
     private async attemptMapping(conditionId: string, eventTitle: string) {
         if (!this.apiToken) return;
         
-        const matchId = await this.findSportmonksMatch(eventTitle);
-        if (matchId) {
-            const match = this.matches.get(conditionId);
-            if (match) {
-                match.matchId = matchId;
-                this.externalToInternal.set(matchId, conditionId);
-                this.logger.debug(`[Sports Intel] Mapped ${eventTitle} -> SM:${matchId}`);
-            }
-        }
-    }
-
-    private async findSportmonksMatch(eventTitle: string): Promise<string | null> {
-        if (!this.apiToken) return null;
         try {
             const today = new Date().toISOString().split('T')[0];
             const url = `https://api.sportmonks.com/v3/football/fixtures/date/${today}?api_token=${this.apiToken}&include=participants`;
             const response = await axios.get(url);
-            if (!response.data || !response.data.data) return null;
+            if (!response.data || !response.data.data) return;
 
-            const normalizedTitle = eventTitle.toLowerCase();
             for (const f of response.data.data) {
-                const home = f.participants?.find((p: any) => p.meta.location === 'home')?.name?.toLowerCase() || "";
-                const away = f.participants?.find((p: any) => p.meta.location === 'away')?.name?.toLowerCase() || "";
-                if (normalizedTitle.includes(home) && normalizedTitle.includes(away)) {
-                    return f.id.toString();
+                const home = f.participants?.find((p: any) => p.meta.location === 'home')?.name || "";
+                const away = f.participants?.find((p: any) => p.meta.location === 'away')?.name || "";
+
+                if (this.fuzzyMatch(eventTitle, home, away)) {
+                    const match = this.matches.get(conditionId);
+                    if (match) {
+                        match.matchId = f.id.toString();
+                        this.externalToInternal.set(f.id.toString(), conditionId);
+                        this.logger.success(`🔗 AUTO-LINK: ${eventTitle} matched to SM:${f.id}`);
+                        return;
+                    }
                 }
             }
         } catch (e) {}
-        return null;
     }
 
     private async pollLiveScores() {
@@ -166,6 +165,12 @@ export class SportsIntelService extends EventEmitter {
                 const away = m.participants?.find((p: any) => p.meta.location === 'away');
                 const awayScore = m.scores?.find((s: any) => s.description === 'CURRENT' && s.participant_id === away?.id)?.score?.goals || 0;
 
+                // Handle VAR
+                if (m.state?.state === 'VAR') {
+                    if (existing.status !== 'VAR') this.emit('var', existing);
+                    existing.status = 'VAR';
+                }
+
                 // Detection for real-time goal bursts
                 if ((homeScore > existing.score[0] || awayScore > existing.score[1]) && existing.status !== 'SCOUTING') {
                     this.logger.success(`🥅 GOAL BURST: ${existing.homeTeam} ${homeScore}-${awayScore} ${existing.awayTeam}`);
@@ -184,5 +189,14 @@ export class SportsIntelService extends EventEmitter {
 
     public getLiveMatches(): SportsMatch[] {
         return Array.from(this.matches.values());
+    }
+
+    public forceLink(conditionId: string, matchId: string) {
+        const match = this.matches.get(conditionId);
+        if (match) {
+            match.matchId = matchId;
+            this.externalToInternal.set(matchId, conditionId);
+            this.logger.success(`🎯 MANUAL-LINK: ${conditionId} -> SM:${matchId}`);
+        }
     }
 }

@@ -442,61 +442,36 @@ app.post('/api/feedback', async (req: any, res: any) => {
 
 // 5. Start Bot
 app.post('/api/bot/start', async (req: any, res: any) => {
-  const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, enableSportsRunner, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
-  
+  const { userId, userAddresses, rpcUrl, geminiApiKey, sportmonksApiKey, multiplier, riskProfile, enableSportsRunner, enableMoneyMarkets, enableCopyTrading, maxTradeAmount } = req.body;
   if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
   const normId = userId.toLowerCase();
-
   try {
-      const user = await User.findOne({ address: normId })
-        .select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
+      const user = await User.findOne({ address: normId }).select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
+      if (!user || !user.tradingWallet) return res.status(400).json({ error: 'Trading Wallet not activated.' });
 
-      if (!user || !user.tradingWallet) { 
-          res.status(400).json({ error: 'Trading Wallet not activated.' }); 
-          return; 
-      }
-
-      const l2Creds = user.tradingWallet.l2ApiCredentials;
-      
       const config: BotConfig = {
         userId: normId,
         walletConfig: user.tradingWallet,
         userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s: string) => s.trim()),
         rpcUrl,
         geminiApiKey,
+        sportmonksApiKey,
         multiplier: Number(multiplier),
         riskProfile,
-        enableAutoArb,
-        enableCopyTrading: true,  // Default to enabled
-        enableMoneyMarkets: true, // Default to enabled
-        enableSportsRunner: true, // Default to enabled
-        autoTp: autoTp ? Number(autoTp) : undefined,
-        enableNotifications: notifications?.enabled,
-        userPhoneNumber: notifications?.phoneNumber,
-        autoCashout: autoCashout,
-        maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : 100, 
-        activePositions: user.activePositions || [],
-        stats: user.stats,
-        l2ApiCredentials: l2Creds,
+        enableNotifications: false,
+        enableCopyTrading: enableCopyTrading ?? true,
+        enableMoneyMarkets: enableMoneyMarkets ?? true,
+        enableSportsRunner: enableSportsRunner ?? true,
+        maxTradeAmount: maxTradeAmount || 100, 
         mongoEncryptionKey: ENV.mongoEncryptionKey,
-        builderApiKey: ENV.builderApiKey,
-        builderApiSecret: ENV.builderApiSecret,
-        builderApiPassphrase: ENV.builderApiPassphrase,
-        startCursor: Math.floor(Date.now() / 1000) 
+        l2ApiCredentials: user.tradingWallet.l2ApiCredentials
       };
-
       await startUserBot(normId, config);
-      
-      user.activeBotConfig = config;
-      user.isBotRunning = true;
-      await user.save();
-
+      await User.updateOne({ address: normId }, { activeBotConfig: config, isBotRunning: true });
       res.json({ success: true, status: 'RUNNING' });
-  } catch (e: any) {
-      console.error("Failed to start bot:", e);
-      res.status(500).json({ error: e.message });
-  }
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
+
 
 // 6. Stop Bot
 app.post('/api/bot/stop', async (req: any, res: any) => {
@@ -1198,36 +1173,24 @@ async function restoreBots() {
         const activeUsers = await User.find({ isBotRunning: true, "tradingWallet.address": { $exists: true } })
             .select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
         
-        console.log(`Found ${activeUsers.length} bots to restore.`);
-
         for (const user of activeUsers) {
             if (user.activeBotConfig && user.tradingWallet) {
                  const normId = user.address.toLowerCase();
-                 const correctSafeAddr = await SafeManagerService.computeAddress(user.tradingWallet.address);
-                 if (user.tradingWallet.safeAddress !== correctSafeAddr) {
-                     console.log(`[RESTORE] Aligning mismatched safe for ${normId}`);
-                     user.tradingWallet.safeAddress = correctSafeAddr;
-                     await user.save();
-                 }
-
-                 const lastTrade = await Trade.findOne({ userId: normId }).sort({ timestamp: -1 });
-                 const lastTime = lastTrade ? Math.floor(lastTrade.timestamp.getTime() / 1000) + 1 : Math.floor(Date.now() / 1000) - 3600;
-
-                 const l2Creds = user.tradingWallet.l2ApiCredentials;
-
-                 const config: BotConfig = {
-                     ...user.activeBotConfig,
-                     walletConfig: user.tradingWallet,
-                     stats: user.stats,
-                     activePositions: user.activePositions,
-                     startCursor: lastTime,
-                     l2ApiCredentials: l2Creds,
-                     mongoEncryptionKey: ENV.mongoEncryptionKey,
-                     builderApiKey: ENV.builderApiKey,
-                     builderApiSecret: ENV.builderApiSecret,
-                     builderApiPassphrase: ENV.builderApiPassphrase
-                 };
+                 const config = user.activeBotConfig;
                  
+                 // Map legacy names to fix property mismatch
+                 config.enableSportsRunner = config.enableSportsRunner ?? config.enableSportsFrontrunning ?? true;
+                 config.enableMoneyMarkets = config.enableMoneyMarkets ?? true;
+                 config.enableCopyTrading = config.enableCopyTrading ?? true;
+                 
+                 // Inject transient runtime data
+                 config.walletConfig = user.tradingWallet;
+                 config.l2ApiCredentials = user.tradingWallet.l2ApiCredentials;
+                 config.mongoEncryptionKey = ENV.mongoEncryptionKey;
+                 config.builderApiKey = ENV.builderApiKey;
+                 config.builderApiSecret = ENV.builderApiSecret;
+                 config.builderApiPassphrase = ENV.builderApiPassphrase;
+
                  try {
                     await startUserBot(normId, config);
                     console.log(`✅ Restored Bot: ${normId}`);
@@ -1236,9 +1199,7 @@ async function restoreBots() {
                  }
             }
         }
-    } catch (e) {
-        console.error("Restore failed:", e);
-    }
+    } catch (e) { console.error("Restore failed:", e); }
 }
 
 // --- REGISTRY SEER ---

@@ -45,6 +45,8 @@ export interface BotConfig {
     enableCopyTrading: boolean;
     enableMoneyMarkets: boolean;
     enableSportsRunner: boolean;
+    // Legacy support for restoration
+    enableSportsFrontrunning?: boolean;
     enableAutoArb?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
@@ -122,18 +124,19 @@ export class BotEngine {
 
     private async addLog(type: 'info' | 'warn' | 'error' | 'success', message: string) {
         try {
+            // Log to console so user sees it in runtime logs
+            const consoleMethod = type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'log';
+            console[consoleMethod](`[ENGINE][${this.config.userId.slice(0, 8)}] ${message}`);
             await BotLog.create({ userId: this.config.userId, type, message, timestamp: new Date() } as any);
         } catch (e) { console.error("Log failed", e); }
     }
 
     public updateConfig(newConfig: Partial<BotConfig>) {
-        // 1. Update Target Addresses for Monitor
         if (newConfig.userAddresses && this.monitor) {
             this.monitor.updateTargets(newConfig.userAddresses);
             this.config.userAddresses = newConfig.userAddresses;
         }
 
-        // 2. Handle Copy Trading Toggle
         if (newConfig.enableCopyTrading === false && this.monitor?.isActive()) {
             this.addLog('warn', '⏸️ Copy-Trading Module Standby.');
             this.monitor.stop();
@@ -142,38 +145,21 @@ export class BotEngine {
             this.monitor.start(this.config.startCursor || Math.floor(Date.now() / 1000));
         }
 
-        // 3. Handle Money Markets Toggle (AGGRESSIVE PURGE)
         if (newConfig.enableMoneyMarkets === false && this.arbScanner?.isScanning) {
-            this.addLog('warn', '⏸️ Money Markets Standby. Purging resting orders...');
-            this.arbScanner.stop(); // This now clears the socket AND calls cancelAll
+            this.addLog('warn', '⏸️ Money Markets Standby.');
+            this.arbScanner.stop(); 
         } else if (newConfig.enableMoneyMarkets === true && this.arbScanner && !this.arbScanner.isScanning) {
             this.addLog('success', '▶️ Money Markets Module Online.');
             this.arbScanner.start();
         }
 
-        // 4. Handle Sports Runner Toggle
-        if (newConfig.enableSportsRunner === false && this.sportsIntel?.isActive()) {
+        const sportsEnabled = newConfig.enableSportsRunner ?? newConfig.enableSportsFrontrunning;
+        if (sportsEnabled === false && this.sportsIntel?.isActive()) {
             this.addLog('warn', '⏸️ SportsRunner Module Standby.');
             this.sportsIntel.stop();
-        } else if (newConfig.enableSportsRunner === true && this.sportsIntel && !this.sportsIntel.isActive()) {
+        } else if (sportsEnabled === true && this.sportsIntel && !this.sportsIntel.isActive()) {
             this.addLog('success', '▶️ SportsRunner Module Online.');
             this.sportsIntel.start();
-        }
-
-        // 5. Update core numeric settings
-        if (newConfig.multiplier !== undefined) {
-            this.config.multiplier = newConfig.multiplier;
-            if (this.runtimeEnv) this.runtimeEnv.tradeMultiplier = newConfig.multiplier;
-        }
-
-        if (newConfig.maxTradeAmount !== undefined) {
-            this.config.maxTradeAmount = newConfig.maxTradeAmount;
-            if (this.runtimeEnv) this.runtimeEnv.maxTradeAmount = newConfig.maxTradeAmount;
-        }
-
-        if (newConfig.minLiquidityFilter !== undefined) {
-            this.config.minLiquidityFilter = newConfig.minLiquidityFilter;
-            if (this.runtimeEnv) this.runtimeEnv.minLiquidityFilter = newConfig.minLiquidityFilter;
         }
 
         this.config = { ...this.config, ...newConfig };
@@ -664,12 +650,12 @@ export class BotEngine {
         try {
             await this.addLog('info', 'Starting Engine...');
             
-            const engineLogger = {
-                info: (m: string) => { console.log(m); this.addLog('info', m); },
-                warn: (m: string) => { console.warn(m); this.addLog('warn', m); },
-                error: (m: string, e?: any) => { console.error(m, e); this.addLog('error', m); },
+            const engineLogger: Logger = {
+                info: (m: string) => this.addLog('info', m),
+                warn: (m: string) => this.addLog('warn', m),
+                error: (m: string, e?: any) => this.addLog('error', `${m} ${e ? e.message : ''}`),
                 debug: () => {},
-                success: (m: string) => { console.log(`${m}`); this.addLog('success', m); }
+                success: (m: string) => this.addLog('success', m)
             };
 
             this.exchange = new PolymarketAdapter({
@@ -688,76 +674,25 @@ export class BotEngine {
 
             await this.initializeServices();
 
-            this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
+            // Validate Sports Key before module init
+            const sportsActive = this.config.enableSportsRunner || this.config.enableSportsFrontrunning;
+            if (sportsActive && !this.config.sportmonksApiKey) {
+                throw new Error("SportsRunner enabled but Sportmonks API Key is missing. Check your configuration.");
+            }
 
-            // New: Sports Intel Map - Pass the API Key from config
+            this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
             this.sportsIntel = new SportsIntelService(engineLogger, this.config.sportmonksApiKey);
             this.sportsRunner = new SportsRunnerService(this.exchange, this.sportsIntel, this.executor as any, engineLogger);
             
-            this.arbScanner.on('volatilityAlert', async ({ question, movePct }) => {
-                await this.addLog('warn', `⚡ VOLATILITY ALERT: ${movePct.toFixed(1)}% move on ${question.slice(0, 20)}... Engine continuing execution.`);
-            });
-
-            this.arbScanner.on('killSwitch', async ({ reason }) => {
-                await this.addLog('error', `🚨 EMERGENCY STOP: ${reason}`);
-                if (this.executor) {
-                    const adapter = this.executor.getAdapter();
-                    await adapter?.cancelAllOrders();
-                }
-            });
-
-            this.arbScanner.on('mergeOpportunity', async ({ conditionId, amount }) => {
-                await this.addLog('info', `📦 Auto-Merging ${amount} pairs for ${conditionId}`);
-                try {
-                    const adapter = this.executor?.getAdapter();
-                    if (adapter) {
-                        const tx = await adapter.mergePositions(conditionId, amount);
-                        await this.addLog('success', `✅ Inventory Merged: ${tx}`);
-                    } else {
-                        throw new Error('Adapter not available');
-                    }
-                } catch (e: any) {
-                    await this.addLog('warn', `Merge failed: ${e.message}`);
-                }
-            });
-
-            this.arbScanner.on('marketResolved', async ({ conditionId, question }) => {
-                await this.addLog('info', `🏁 Market Resolved: ${question}`);
-                await this.syncPositions(true);
-                const winner = this.activePositions.find(p => p.conditionId === conditionId);
-                if (winner) {
-                    await this.addLog('info', `🏆 Winning shares detected. Redeeming...`);
-                    await this.exchange?.redeemPosition(conditionId, winner.tokenId);
-                }
-            });
-
             this.arbScanner.on('opportunity', async (opp: MarketOpportunity) => {
-                if (this.callbacks?.onArbUpdate) {
-                    const arbOpps = this.arbScanner!.getOpportunities().map(o => ({
-                        ...o,
-                        marketId: o.conditionId,
-                        roi: o.spreadPct,
-                        combinedCost: 1 - o.spread,
-                        capacityUsd: o.liquidity || 0
-                    } as ArbitrageOpportunity));
-                    await this.callbacks.onArbUpdate(arbOpps);
-                }
-                if (this.config.enableAutoArb) {
-                    await this.executeMarketMaking(opp);
-                }
-            });
-
-            this.arbScanner.on('tickSizeChange', async (data) => {
-                const opps = this.arbScanner?.getOpportunities();
-                const target = opps?.find(o => o.tokenId === data.tokenId);
-                if (target && this.config.enableAutoArb) {
-                    await this.executeMarketMaking(target);
+                if (this.config.enableMoneyMarkets && this.executor) {
+                    await this.executor.executeMarketMakingQuotes(opp);
                 }
             });
 
             const isFunded = await this.checkFunding();
             if (!isFunded) {
-                await this.addLog('warn', 'Safe Empty. Engine standby. Waiting for deposit (Min 1.00)...');
+                await this.addLog('warn', 'Safe Empty (Min 1.00). Engine standby. Waiting for deposit.');
                 this.startFundWatcher();
                 return; 
             }
@@ -765,7 +700,6 @@ export class BotEngine {
             await this.proceedWithPostFundingSetup(engineLogger);
 
         } catch (e: any) {
-            console.error(e);
             await this.addLog('error', `Startup Failed: ${e.message}`);
             this.isRunning = false;
         }

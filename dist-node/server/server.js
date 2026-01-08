@@ -392,7 +392,7 @@ app.post('/api/feedback', async (req, res) => {
 });
 // 5. Start Bot
 app.post('/api/bot/start', async (req, res) => {
-    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, enableSportsFrontrunning, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
+    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, enableSportsRunner, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
     if (!userId) {
         res.status(400).json({ error: 'Missing userId' });
         return;
@@ -415,7 +415,7 @@ app.post('/api/bot/start', async (req, res) => {
             multiplier: Number(multiplier),
             riskProfile,
             enableAutoArb,
-            enableSportsFrontrunning,
+            enableSportsRunner,
             enableCopyTrading: true, // Default to enabled
             enableMoneyMarkets: true, // Default to enabled
             enableSportsRunner: true, // Default to enabled

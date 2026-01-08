@@ -30,6 +30,7 @@ export interface BotConfig {
     userAddresses: string[];
     rpcUrl: string;
     geminiApiKey?: string;
+    sportmonksApiKey?: string;
     riskProfile: 'conservative' | 'balanced' | 'degen';
     multiplier: number;
     minLiquidityFilter?: 'HIGH' | 'MEDIUM' | 'LOW'; 
@@ -45,7 +46,6 @@ export interface BotConfig {
     enableMoneyMarkets: boolean;
     enableSportsRunner: boolean;
     enableAutoArb?: boolean;
-    enableSportsFrontrunning?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
     l2ApiCredentials?: L2ApiCredentials;
@@ -690,8 +690,8 @@ export class BotEngine {
 
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
 
-            // New: Sports Frontrunning Ingestion
-            this.sportsIntel = new SportsIntelService(engineLogger);
+            // New: Sports Intel Map - Pass the API Key from config
+            this.sportsIntel = new SportsIntelService(engineLogger, this.config.sportmonksApiKey);
             this.sportsRunner = new SportsRunnerService(this.exchange, this.sportsIntel, this.executor as any, engineLogger);
             
             this.arbScanner.on('volatilityAlert', async ({ question, movePct }) => {
@@ -911,7 +911,7 @@ export class BotEngine {
                 await this.arbScanner.start();
             }
 
-            if (this.config.enableSportsFrontrunning && this.sportsIntel) {
+            if (this.config.enableSportsRunner && this.sportsIntel) {
                 await this.sportsIntel.start();
             }
 

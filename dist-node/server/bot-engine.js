@@ -773,7 +773,7 @@ export class BotEngine {
             if (this.arbScanner) {
                 await this.arbScanner.start();
             }
-            if (this.config.enableSportsFrontrunning && this.sportsIntel) {
+            if (this.config.enableSportsRunner && this.sportsIntel) {
                 await this.sportsIntel.start();
             }
             await this.syncPositions(true);

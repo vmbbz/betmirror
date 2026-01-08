@@ -543,8 +543,28 @@ app.get('/api/bot/sports/live/:userId', async (req: any, res: any) => {
     try {
         const intel = (engine as any).sportsIntel;
         const matches = intel.getLiveMatches();
-        res.json({ success: true, matches });
+        const sportsRunner = (engine as any).sportsRunner;
+        
+        // Transform matches to include required fields
+        const transformedMatches = matches.map((match: any) => {
+            const score = match.score || [0, 0];
+            const minute = match.minute || 0;
+            const fairValue = sportsRunner?.calculateFairValue?.(score, minute) || 0.5;
+            
+            return {
+                ...match,
+                marketPrice: 0,  // Will be updated by the frontend
+                fairValue: fairValue,
+                status: match.status || 'LIVE'
+            };
+        });
+
+        res.json({ 
+            success: true, 
+            matches: transformedMatches 
+        });
     } catch (e) {
+        console.error('Error in /api/bot/sports/live:', e);
         res.status(500).json({ error: 'Failed to fetch live sports' });
     }
 });

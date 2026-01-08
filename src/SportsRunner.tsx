@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Trophy, Activity, Zap, Timer, Target, TrendingUp, 
@@ -25,6 +26,9 @@ interface LiveMatch {
 
 // --- Quant Utility: Power-Curve Decay Model ---
 const calculateUIVector = (score: [number, number], minute: number): number => {
+    // Defensive check: If score is missing, return neutral probability
+    if (!score || score.length < 2) return 0.5;
+
     const [h, a] = score;
     const absoluteDiff = Math.abs(h - a);
     const timeFactor = Math.min(minute / 95, 0.99);
@@ -44,7 +48,7 @@ const calculateUIVector = (score: [number, number], minute: number): number => {
 };
 
 const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatch) => void }) => {
-    const delta = match.fairValue - match.marketPrice;
+    const delta = (match.fairValue || 0.5) - (match.marketPrice || 0);
     const isProfitable = delta > 0.12 && match.marketPrice > 0; 
     const [pulse, setPulse] = useState(false);
 
@@ -84,7 +88,7 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
                 
                 <div className="flex items-center justify-center bg-white/[0.03] border border-white/[0.05] px-3 py-1 rounded-xl mx-3 min-w-[60px]">
                     <span className="text-xl font-black text-white font-mono tracking-tighter">
-                        {match.score[0]}<span className="opacity-20 mx-0.5">:</span>{match.score[1]}
+                        {match.score ? match.score[0] : 0}<span className="opacity-20 mx-0.5">:</span>{match.score ? match.score[1] : 0}
                     </span>
                 </div>
 
@@ -102,7 +106,7 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
                 </div>
                 <div className={`p-2.5 bg-black/40 rounded-xl border flex flex-col justify-center transition-colors ${isProfitable ? 'border-emerald-500/20' : 'border-white/[0.03]'}`}>
                     <p className={`text-[7px] font-black uppercase tracking-widest mb-1 ${isProfitable ? 'text-emerald-500' : 'text-gray-600'}`}>Quant Fair</p>
-                    <p className={`text-xs font-mono font-black tracking-tighter ${isProfitable ? 'text-emerald-500' : 'text-white'}`}>${match.fairValue.toFixed(2)}</p>
+                    <p className={`text-xs font-mono font-black tracking-tighter ${isProfitable ? 'text-emerald-500' : 'text-white'}`}>${(match.fairValue || 0.5).toFixed(2)}</p>
                 </div>
             </div>
 

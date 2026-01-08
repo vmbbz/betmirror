@@ -1,11 +1,13 @@
+
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import EventEmitter from 'events';
 
 export interface SportsMatch {
-    id: string;
-    conditionId?: string;
-    tokenId?: string; // Target token ID for price feed
+    id: string; // Primary Key: conditionId
+    matchId?: string; // External: Sportmonks ID
+    conditionId: string;
+    tokenId?: string; 
     homeTeam: string;
     awayTeam: string;
     score: [number, number];
@@ -21,10 +23,9 @@ export class SportsIntelService extends EventEmitter {
     private isPolling = false;
     private pollInterval?: NodeJS.Timeout;
     private discoveryInterval?: NodeJS.Timeout;
-    private matches: Map<string, SportsMatch> = new Map();
+    private matches: Map<string, SportsMatch> = new Map(); // Keyed by conditionId
     private apiToken: string;
-    private idMap: Map<string, string> = new Map(); // matchId -> conditionId
-    private tokenMap: Map<string, string> = new Map(); // matchId -> tokenId
+    private externalToInternal: Map<string, string> = new Map(); // matchId -> conditionId
 
     constructor(private logger: Logger, apiToken?: string) {
         super();
@@ -41,10 +42,10 @@ export class SportsIntelService extends EventEmitter {
         this.logger.info("⚽ Sports Intel: Monitoring Live Scores & Structural Discovery...");
         
         if (!this.apiToken) {
-            this.logger.warn("⚠️ Sports Intel: No API Token provided. Match discovery active but score polling is DISABLED.");
+            this.logger.warn("⚠️ Sports Intel: No Sportmonks API Token provided. Mapped score polling is DISABLED.");
         }
 
-        // 1. Initial Pitch Discovery & Metadata Mapping
+        // 1. Initial Pitch Discovery
         await this.discoverPolymarketSports();
         
         // 2. High-Frequency Score Polling (3.5s)
@@ -63,19 +64,11 @@ export class SportsIntelService extends EventEmitter {
         this.logger.warn("⚽ Sports Intel: Engine standby.");
     }
 
-    /**
-     * structural discovery via /sports and /events?tag_id=100639
-     */
     private async discoverPolymarketSports() {
         try {
             this.logger.info(`📡 [Sports Scout] Querying Sports Metadata...`);
             
-            // 1. Get Series IDs for Soccer (ID: 1 in many systems, but we fetch to be safe)
-            const sportsRes = await axios.get("https://gamma-api.polymarket.com/sports");
-            const soccerData = sportsRes.data.find((s: any) => s.name?.toLowerCase() === 'soccer' || s.id === "1");
-            
-            // 2. Targeted search for "Game Winner" markets (Tag: 100639)
-            // This ensures we avoid futures and long-term props
+            // Targeted search for "Game Winner" markets (Tag: 100639)
             const tagId = "100639"; 
             const url = `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&order=startTime&ascending=true&limit=50`;
             const response = await axios.get(url);
@@ -88,68 +81,68 @@ export class SportsIntelService extends EventEmitter {
                 const market = event.markets?.[0];
                 if (!market || !market.conditionId) continue;
                 
-                // Polymarket best practice: Use 'closed' field
-                if (market.closed === true) continue;
-
                 const conditionId = market.conditionId;
                 const tokenId = market.clobTokenIds ? JSON.parse(market.clobTokenIds)[0] : null;
 
-                // Resolution of match via Team Mapping
-                const matchId = await this.findSportmonksMatch(event.title);
-                if (matchId) {
-                    this.idMap.set(matchId, conditionId);
-                    if (tokenId) this.tokenMap.set(matchId, tokenId);
-                    
-                    if (!this.matches.has(matchId)) {
-                        const teams = event.title.split(/ vs | v /i);
-                        this.matches.set(matchId, {
-                            id: matchId,
-                            conditionId: conditionId,
-                            tokenId: tokenId,
-                            homeTeam: teams[0]?.trim() || "Home",
-                            awayTeam: teams[1]?.trim() || "Away",
-                            score: [0, 0],
-                            minute: 0,
-                            status: 'PREMATCH',
-                            league: event.category || "Pro League",
-                            startTime: event.startTime
-                        });
-                    }
-                }
+                // 1. ALWAYS store/update the match in the map immediately
+                const teams = event.title.split(/ vs | v /i);
+                const existing = this.matches.get(conditionId);
+
+                const matchData: SportsMatch = {
+                    id: conditionId,
+                    conditionId: conditionId,
+                    tokenId: tokenId,
+                    homeTeam: teams[0]?.trim() || "Home",
+                    awayTeam: teams[1]?.trim() || "Away",
+                    score: existing?.score || [0, 0],
+                    minute: existing?.minute || 0,
+                    status: existing?.status || 'SCOUTING',
+                    league: event.category || "Pro League",
+                    startTime: event.startTime,
+                    marketPrice: existing?.marketPrice || 0
+                };
+
+                this.matches.set(conditionId, matchData);
+
+                // 2. Trigger asynchronous mapping to Sportmonks
+                this.attemptMapping(conditionId, event.title);
             }
         } catch (e: any) {
             this.logger.error(`[Sports Scout] Discovery Fail: ${e.message}`);
         }
     }
 
-    /**
-     * Matches Polymarket event title to Sportmonks fixtures
-     */
+    private async attemptMapping(conditionId: string, eventTitle: string) {
+        if (!this.apiToken) return;
+        
+        const matchId = await this.findSportmonksMatch(eventTitle);
+        if (matchId) {
+            const match = this.matches.get(conditionId);
+            if (match) {
+                match.matchId = matchId;
+                this.externalToInternal.set(matchId, conditionId);
+                this.logger.debug(`[Sports Intel] Mapped ${eventTitle} -> SM:${matchId}`);
+            }
+        }
+    }
+
     private async findSportmonksMatch(eventTitle: string): Promise<string | null> {
         if (!this.apiToken) return null;
-        
         try {
             const today = new Date().toISOString().split('T')[0];
             const url = `https://api.sportmonks.com/v3/football/fixtures/date/${today}?api_token=${this.apiToken}&include=participants`;
             const response = await axios.get(url);
-            
             if (!response.data || !response.data.data) return null;
 
-            const fixtures = response.data.data;
             const normalizedTitle = eventTitle.toLowerCase();
-
-            for (const f of fixtures) {
+            for (const f of response.data.data) {
                 const home = f.participants?.find((p: any) => p.meta.location === 'home')?.name?.toLowerCase() || "";
                 const away = f.participants?.find((p: any) => p.meta.location === 'away')?.name?.toLowerCase() || "";
-
-                // Fuzzy check: If team names are contained in the market title
                 if (normalizedTitle.includes(home) && normalizedTitle.includes(away)) {
                     return f.id.toString();
                 }
             }
-        } catch (e) {
-            this.logger.debug(`[Sports Intel] Fixture lookup failed for: ${eventTitle}`);
-        }
+        } catch (e) {}
         return null;
     }
 
@@ -160,43 +153,33 @@ export class SportsIntelService extends EventEmitter {
             const response = await axios.get(url);
             if (!response.data || !response.data.data) return;
 
-            const liveMatches = response.data.data.map((m: any) => {
+            for (const m of response.data.data) {
+                const matchId = m.id.toString();
+                const conditionId = this.externalToInternal.get(matchId);
+                if (!conditionId) continue;
+
+                const existing = this.matches.get(conditionId);
+                if (!existing) continue;
+
                 const home = m.participants?.find((p: any) => p.meta.location === 'home');
-                const away = m.participants?.find((p: any) => p.meta.location === 'away');
                 const homeScore = m.scores?.find((s: any) => s.description === 'CURRENT' && s.participant_id === home?.id)?.score?.goals || 0;
+                const away = m.participants?.find((p: any) => p.meta.location === 'away');
                 const awayScore = m.scores?.find((s: any) => s.description === 'CURRENT' && s.participant_id === away?.id)?.score?.goals || 0;
 
-                const matchId = m.id.toString();
-
-                return {
-                    id: matchId,
-                    homeTeam: home?.name || 'Home',
-                    awayTeam: away?.name || 'Away',
-                    score: [homeScore, awayScore],
-                    minute: m.minute || 0,
-                    status: m.state?.state === 'INPLAY' ? 'LIVE' : 'VAR',
-                    league: m.league_id?.toString() || 'Live',
-                    conditionId: this.idMap.get(matchId),
-                    tokenId: this.tokenMap.get(matchId)
-                } as SportsMatch;
-            });
-
-            for (const match of liveMatches) {
-                const existing = this.matches.get(match.id);
-                
                 // Detection for real-time goal bursts
-                if (existing && existing.status !== 'PREMATCH' && existing.status !== 'SCOUTING') {
-                    if (match.score[0] > existing.score[0] || match.score[1] > existing.score[1]) {
-                        this.logger.success(`🥅 GOAL BURST: ${match.homeTeam} ${match.score[0]}-${match.score[1]} ${match.awayTeam}`);
-                        this.emit('goal', { ...match, status: 'GOAL' });
-                    }
+                if ((homeScore > existing.score[0] || awayScore > existing.score[1]) && existing.status !== 'SCOUTING') {
+                    this.logger.success(`🥅 GOAL BURST: ${existing.homeTeam} ${homeScore}-${awayScore} ${existing.awayTeam}`);
+                    this.emit('goal', { ...existing, score: [homeScore, awayScore], status: 'GOAL' });
                 }
                 
-                this.matches.set(match.id, { ...existing, ...match });
+                this.matches.set(conditionId, {
+                    ...existing,
+                    score: [homeScore, awayScore],
+                    minute: m.minute || existing.minute,
+                    status: m.state?.state === 'INPLAY' ? 'LIVE' : (m.state?.state === 'VAR' ? 'VAR' : 'LIVE')
+                });
             }
-        } catch (e) {
-            this.logger.debug(`[Sports Intel] Poll Error`);
-        }
+        } catch (e) {}
     }
 
     public getLiveMatches(): SportsMatch[] {

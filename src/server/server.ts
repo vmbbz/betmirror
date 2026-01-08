@@ -557,6 +557,24 @@ app.post('/api/bot/update', async (req: any, res: any) => {
     }
 });
 
+app.get('/api/bot/sports/live/:userId', async (req: any, res: any) => {
+    const { userId } = req.params;
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    
+    if (!engine || !(engine as any).sportsIntel) {
+        return res.json({ success: true, matches: [] });
+    }
+
+    try {
+        const intel = (engine as any).sportsIntel;
+        const matches = intel.getLiveMatches();
+        res.json({ success: true, matches });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch live sports' });
+    }
+});
+
 // Trigger a forced market discovery scan
 app.post('/api/bot/refresh', async (req: any, res: any) => {
     const { userId } = req.body;

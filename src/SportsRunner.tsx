@@ -12,43 +12,41 @@ import axios from 'axios';
 // --- Types ---
 interface LiveMatch {
   id: string;
-  conditionId: string;
+  conditionId?: string;
   homeTeam: string;
   awayTeam: string;
   score: [number, number]; // [Home, Away]
   minute: number;
-  marketPrice: number; // Current Ask on Polymarket
-  fairValue: number;   // Quant calculated price based on score
-  status: 'LIVE' | 'HT' | 'VAR' | 'GOAL';
-  eventSlug?: string;
-  marketSlug?: string;
-  category: string;
-  lastGoalAt?: number;
+  marketPrice: number; 
+  fairValue: number;   
+  status: 'LIVE' | 'HT' | 'VAR' | 'GOAL' | 'FT';
+  league?: string;
 }
 
-// --- Quant Utility: Calculate Fair Value (Simplified Soccer Model) ---
-// In a production environment, this would use Poisson distributions or trained ML models.
-const calculateFairValue = (score: [number, number], minute: number, side: 'HOME' | 'DRAW' | 'AWAY'): number => {
+// --- Quant Utility: Power-Curve Decay Model ---
+// This matches the math used in SportsRunnerService.ts
+const calculateUIVector = (score: [number, number], minute: number): number => {
     const [h, a] = score;
-    const timeRemaining = Math.max(0, 90 - minute);
-    
-    // Base probability estimates for 3-way soccer
-    if (side === 'HOME') {
-        if (h > a) return 0.85 + (h - a) * 0.05 - (timeRemaining * 0.001);
-        if (h === a) return 0.45 - (minute * 0.002);
-        return 0.15;
+    const absoluteDiff = Math.abs(h - a);
+    const timeFactor = Math.min(minute / 95, 0.99);
+
+    if (absoluteDiff > 0) {
+        const baseProb = absoluteDiff === 1 ? 0.65 : 0.88;
+        const decaySensitivity = 2.5;
+        const fairValue = baseProb + (1 - baseProb) * Math.pow(timeFactor, decaySensitivity);
+        return Math.min(fairValue, 0.99);
     }
-    if (side === 'DRAW') {
-        if (h === a) return 0.40 + (minute * 0.005);
-        if (Math.abs(h - a) === 1) return 0.25 - (minute * 0.002);
-        return 0.05;
+    if (absoluteDiff === 0) {
+        const baseDraw = 0.33;
+        const drawFairValue = baseDraw + (1 - baseDraw) * Math.pow(timeFactor, 3.0);
+        return Math.min(drawFairValue, 0.99);
     }
-    return 0.5; // Placeholder
+    return 0.5;
 };
 
 const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatch) => void }) => {
     const delta = match.fairValue - match.marketPrice;
-    const isProfitable = delta > 0.10; // 10 cent discrepancy
+    const isProfitable = delta > 0.12; // 12 cent discrepancy
     const [pulse, setPulse] = useState(false);
 
     useEffect(() => {
@@ -66,7 +64,7 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
         }`}>
             <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${match.status === 'LIVE' ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
+                    <span className={`w-2 h-2 rounded-full ${match.status === 'LIVE' || match.status === 'GOAL' ? 'bg-emerald-500 animate-ping' : 'bg-gray-500'}`}></span>
                     <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{match.minute}' | {match.status}</span>
                 </div>
                 <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[8px] font-black uppercase tracking-widest">
@@ -76,27 +74,27 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
 
             <div className="space-y-4 mb-6">
                 <div className="flex justify-between items-center px-2">
-                    <div className="flex flex-col">
-                        <span className="text-sm font-black text-white uppercase tracking-tight">{match.homeTeam}</span>
-                        <span className="text-[10px] text-gray-500 font-bold">Home</span>
+                    <div className="flex flex-col flex-1 overflow-hidden">
+                        <span className="text-sm font-black text-white uppercase tracking-tight truncate">{match.homeTeam}</span>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Home</span>
                     </div>
-                    <div className="text-2xl font-black text-white font-mono bg-white/5 px-4 py-1 rounded-2xl border border-white/5">
-                        {match.score[0]} : {match.score[1]}
+                    <div className="text-2xl font-black text-white font-mono bg-white/5 px-4 py-1 rounded-2xl border border-white/5 mx-4">
+                        {match.score[0]}:{match.score[1]}
                     </div>
-                    <div className="flex flex-col text-right">
-                        <span className="text-sm font-black text-white uppercase tracking-tight">{match.awayTeam}</span>
-                        <span className="text-[10px] text-gray-500 font-bold">Away</span>
+                    <div className="flex flex-col text-right flex-1 overflow-hidden">
+                        <span className="text-sm font-black text-white uppercase tracking-tight truncate">{match.awayTeam}</span>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Away</span>
                     </div>
                 </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-5">
                 <div className="p-3 bg-black/40 rounded-2xl border border-white/5">
-                    <p className="text-[8px] font-black text-gray-500 uppercase mb-1">Market Price</p>
-                    <p className="text-sm font-mono font-black text-white">${match.marketPrice.toFixed(2)}</p>
+                    <p className="text-[8px] font-black text-gray-500 uppercase mb-1">Mkt Price</p>
+                    <p className="text-sm font-mono font-black text-white">${match.marketPrice > 0 ? match.marketPrice.toFixed(2) : '??'}</p>
                 </div>
                 <div className="p-3 bg-black/40 rounded-2xl border border-white/5">
-                    <p className="text-[8px] font-black text-gray-500 uppercase mb-1">Fair Value</p>
+                    <p className="text-[8px] font-black text-gray-500 uppercase mb-1">Quant Value</p>
                     <p className="text-sm font-mono font-black text-emerald-400">${match.fairValue.toFixed(2)}</p>
                 </div>
             </div>
@@ -105,7 +103,7 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
                 <div className="flex flex-col">
                     <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Edge Delta</span>
                     <span className={`text-sm font-black ${delta >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        {delta >= 0 ? '+' : ''}{(delta * 100).toFixed(1)}¢
+                        {match.marketPrice > 0 ? `${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(1)}¢` : '--'}
                     </span>
                 </div>
                 <button 
@@ -122,44 +120,59 @@ const MatchCard = ({ match, onChase }: { match: LiveMatch, onChase: (m: LiveMatc
 };
 
 const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolean }) => {
-    const [matches, setMatches] = useState<LiveMatch[]>([
-        {
-            id: 'm1',
-            conditionId: '0x...',
-            homeTeam: 'Arsenal',
-            awayTeam: 'Liverpool',
-            score: [1, 1],
-            minute: 74,
-            marketPrice: 0.35, // Market still thinks draw is unlikely
-            fairValue: 0.52,   // Quant thinks draw is 52%
-            status: 'LIVE',
-            category: 'EPL'
-        },
-        {
-            id: 'm2',
-            conditionId: '0x...',
-            homeTeam: 'Real Madrid',
-            awayTeam: 'Barcelona',
-            score: [2, 1],
-            minute: 88,
-            marketPrice: 0.88,
-            fairValue: 0.94,
-            status: 'LIVE',
-            category: 'La Liga'
-        }
-    ]);
-
+    const [matches, setMatches] = useState<LiveMatch[]>([]);
     const [sportsLogs, setSportsLogs] = useState<any[]>([]);
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
 
     const addLog = (msg: string, type: 'info' | 'success' | 'warn') => {
         setSportsLogs(prev => [{ id: Math.random(), msg, type, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 50));
     };
 
+    // POLL LIVE DATA FROM BACKEND
+    useEffect(() => {
+        const fetchLiveSports = async () => {
+            try {
+                const res = await axios.get(`/api/bot/sports/live/${userId}`);
+                if (res.data.success && Array.isArray(res.data.matches)) {
+                    const rawMatches = res.data.matches;
+                    
+                    const enriched: LiveMatch[] = await Promise.all(rawMatches.map(async (m: any) => {
+                        // Calculate fair value in real-time
+                        const fairValue = calculateUIVector(m.score, m.minute);
+                        
+                        // Try to fetch live polymarket price if we have a mapping
+                        let marketPrice = 0;
+                        try {
+                            // This would ideally hit /api/market/:conditionId if mapped
+                            // For now, we show 0 if not yet engaged
+                        } catch (e) {}
+
+                        return {
+                            ...m,
+                            fairValue,
+                            marketPrice
+                        };
+                    }));
+
+                    setMatches(enriched);
+                    if (isInitialLoad && enriched.length > 0) {
+                        addLog(`Synchronized ${enriched.length} live matches from Sportmonks.`, 'info');
+                        setIsInitialLoad(false);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to poll sports feed");
+            }
+        };
+
+        fetchLiveSports();
+        const interval = setInterval(fetchLiveSports, 3000);
+        return () => clearInterval(interval);
+    }, [userId, isInitialLoad]);
+
     const handleChaseMatch = async (match: LiveMatch) => {
         addLog(`Initiating Taker Chase on ${match.homeTeam}...`, 'info');
-        // Logic would go to API
-        toast.success(`Sent FOK Order for ${match.homeTeam}`);
-        addLog(`FOK filled at $${match.marketPrice} (Fair: $${match.fairValue})`, 'success');
+        toast.info(`Manual Chase: Evaluating ${match.homeTeam} Edge...`);
     };
 
     return (
@@ -170,12 +183,12 @@ const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolea
                 <div className="glass-panel p-6 rounded-[2rem] border-white/5">
                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em] mb-2">Live Scouting</p>
                     <div className="text-3xl font-black text-white">{matches.length} Matches</div>
-                    <div className="mt-2 text-[10px] text-emerald-500 font-bold uppercase animate-pulse">Scanning Sportsmonks API</div>
+                    <div className="mt-2 text-[10px] text-emerald-500 font-bold uppercase animate-pulse">Sportmonks V3 Feed Active</div>
                 </div>
                 <div className="glass-panel p-6 rounded-[2rem] border-white/5">
                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em] mb-2">Arbitrage Edge</p>
-                    <div className="text-3xl font-black text-emerald-500">+18.4%</div>
-                    <div className="mt-2 text-[10px] text-gray-500 font-bold uppercase">Average Stale-Price Delta</div>
+                    <div className="text-3xl font-black text-emerald-500">Live</div>
+                    <div className="mt-2 text-[10px] text-gray-500 font-bold uppercase">Scanning for stale prices</div>
                 </div>
                 <div className="glass-panel p-6 rounded-[2rem] border-white/5">
                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em] mb-2">Auto-Chase Status</p>
@@ -186,7 +199,7 @@ const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolea
                 </div>
                 <div className="glass-panel p-6 rounded-[2rem] border-emerald-500/20 bg-emerald-500/[0.02]">
                     <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.3em] mb-2">Goal Profits</p>
-                    <div className="text-3xl font-black text-white font-mono">$1,240.50</div>
+                    <div className="text-3xl font-black text-white font-mono">$0.00</div>
                     <div className="mt-2 text-[10px] text-gray-500 font-bold uppercase">Total realized from frontrunning</div>
                 </div>
             </div>
@@ -196,18 +209,24 @@ const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolea
                 <div className="flex justify-between items-center">
                     <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">Live Intelligence Feed</h2>
                     <div className="flex gap-2">
-                        <button className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black text-gray-400 uppercase tracking-widest hover:text-white">All Leagues</button>
-                        <button className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[10px] font-black text-emerald-400 uppercase tracking-widest">Arbitrage Only</button>
+                        <button className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[10px] font-black text-emerald-400 uppercase tracking-widest">Sportmonks In-Play</button>
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {matches.map(m => (
-                        <MatchCard key={m.id} match={m} onChase={handleChaseMatch} />
-                    ))}
-                </div>
+                {matches.length === 0 ? (
+                    <div className="glass-panel p-20 rounded-[3rem] border-white/5 text-center flex flex-col items-center">
+                        <Loader2 className="animate-spin text-blue-500 mb-4" size={40}/>
+                        <p className="text-gray-500 uppercase font-black tracking-widest">Awaiting Live Score Data...</p>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {matches.map(m => (
+                            <MatchCard key={m.id} match={m} onChase={handleChaseMatch} />
+                        ))}
+                    </div>
+                )}
 
-                {/* Educational / Logic Helper */}
+                {/* Logic Helper */}
                 <div className="p-8 glass-panel rounded-[3rem] border-white/5 bg-gradient-to-br from-blue-600/[0.05] to-transparent">
                     <div className="flex items-start gap-6">
                         <div className="p-4 bg-blue-600 rounded-3xl text-white shadow-xl shadow-blue-600/20">
@@ -220,14 +239,6 @@ const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolea
                                 <br/><br/>
                                 <span className="text-blue-400">Strategy:</span> The bot executes "Taker" orders (FOK) to sweep the stale book before standard market makers can adjust their spreads.
                             </p>
-                            <div className="flex gap-4 pt-2">
-                                <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                    <Shield size={14} className="text-emerald-500"/> VAR Guard Enabled
-                                </div>
-                                <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                    <Zap size={14} className="text-amber-500"/> FOK Execution
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -241,13 +252,12 @@ const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolea
                             <Target size={18} className="text-rose-500"/>
                             <h3 className="text-xs font-black text-white uppercase tracking-widest">Goal Execution Tape</h3>
                         </div>
-                        <button onClick={() => setSportsLogs([])} className="text-[10px] text-gray-500 hover:text-white uppercase font-black">Purge</button>
                     </div>
                     <div className="flex-1 overflow-y-auto p-4 space-y-2 font-mono text-[11px] custom-scrollbar">
                         {sportsLogs.length === 0 && (
                             <div className="h-full flex flex-col items-center justify-center text-gray-700 opacity-30 text-center px-10">
                                 <Activity size={40} className="mb-4"/>
-                                <p className="uppercase tracking-[0.2em] font-black">Awaiting Goal Signal...</p>
+                                <p className="uppercase tracking-[0.2em] font-black">Awaiting Signals...</p>
                             </div>
                         )}
                         {sportsLogs.map(log => (
@@ -261,20 +271,6 @@ const SportsRunner = ({ userId, isRunning }: { userId: string, isRunning: boolea
                                 </span>
                             </div>
                         ))}
-                    </div>
-                    <div className="p-6 border-t border-white/5 bg-black/40">
-                         <div className="flex flex-col gap-4">
-                            <div className="flex justify-between items-center">
-                                <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Autonomous Chasing</span>
-                                <label className="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" checked={isRunning} className="sr-only peer" readOnly />
-                                    <div className="w-10 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"></div>
-                                </label>
-                            </div>
-                            <button className="w-full py-4 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-2xl text-[10px] uppercase tracking-[0.3em] transition-all shadow-xl shadow-rose-900/20">
-                                Global Stop & Exit
-                            </button>
-                         </div>
                     </div>
                 </div>
             </div>

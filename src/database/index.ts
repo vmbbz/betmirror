@@ -157,6 +157,7 @@ const ActivePositionSchema = new Schema<ActivePosition>({
   tradeId: String,
   clobOrderId: String,
   marketId: String,
+  conditionId: String,
   tokenId: String,
   outcome: String,
   entryPrice: Number,

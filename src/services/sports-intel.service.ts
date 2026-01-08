@@ -21,7 +21,7 @@ export class SportsIntelService extends EventEmitter {
     constructor(private logger: Logger, apiToken?: string) {
         super();
         // Use the provided production key
-        this.apiToken = apiToken || '4FyNA9F8T1jwnqzgIbyeGnV39bPNV3GAXj8SyPszBQo45pWZzBaSBpKhyZLK';
+        this.apiToken = apiToken || '';
     }
 
     public isActive(): boolean {

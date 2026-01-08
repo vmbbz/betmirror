@@ -35,6 +35,7 @@ const ActivePositionSchema = new Schema({
     tradeId: String,
     clobOrderId: String,
     marketId: String,
+    conditionId: String,
     tokenId: String,
     outcome: String,
     entryPrice: Number,

@@ -6,7 +6,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, SportsMatch } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, SportsMatch } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -392,55 +392,38 @@ app.post('/api/feedback', async (req, res) => {
 });
 // 5. Start Bot
 app.post('/api/bot/start', async (req, res) => {
-    const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableAutoArb, enableSportsRunner, autoTp, notifications, autoCashout, maxTradeAmount } = req.body;
+    const { userId, userAddresses, rpcUrl, geminiApiKey, sportmonksApiKey, multiplier, riskProfile, enableSportsRunner, enableMoneyMarkets, enableCopyTrading, maxTradeAmount } = req.body;
     if (!userId) {
         res.status(400).json({ error: 'Missing userId' });
         return;
     }
     const normId = userId.toLowerCase();
     try {
-        const user = await User.findOne({ address: normId })
-            .select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
-        if (!user || !user.tradingWallet) {
-            res.status(400).json({ error: 'Trading Wallet not activated.' });
-            return;
-        }
-        const l2Creds = user.tradingWallet.l2ApiCredentials;
+        const user = await User.findOne({ address: normId }).select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
+        if (!user || !user.tradingWallet)
+            return res.status(400).json({ error: 'Trading Wallet not activated.' });
         const config = {
             userId: normId,
             walletConfig: user.tradingWallet,
             userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s) => s.trim()),
             rpcUrl,
             geminiApiKey,
+            sportmonksApiKey: process.env.SPORTSMONK_API_KEY,
             multiplier: Number(multiplier),
             riskProfile,
-            enableAutoArb,
-            enableSportsRunner,
-            enableCopyTrading: true, // Default to enabled
-            enableMoneyMarkets: true, // Default to enabled
-            enableSportsRunner: true, // Default to enabled
-            autoTp: autoTp ? Number(autoTp) : undefined,
-            enableNotifications: notifications?.enabled,
-            userPhoneNumber: notifications?.phoneNumber,
-            autoCashout: autoCashout,
-            maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : 100,
-            activePositions: user.activePositions || [],
-            stats: user.stats,
-            l2ApiCredentials: l2Creds,
+            enableNotifications: false,
+            enableCopyTrading: enableCopyTrading ?? true,
+            enableMoneyMarkets: enableMoneyMarkets ?? true,
+            enableSportsRunner: enableSportsRunner ?? true,
+            maxTradeAmount: maxTradeAmount || 100,
             mongoEncryptionKey: ENV.mongoEncryptionKey,
-            builderApiKey: ENV.builderApiKey,
-            builderApiSecret: ENV.builderApiSecret,
-            builderApiPassphrase: ENV.builderApiPassphrase,
-            startCursor: Math.floor(Date.now() / 1000)
+            l2ApiCredentials: user.tradingWallet.l2ApiCredentials
         };
         await startUserBot(normId, config);
-        user.activeBotConfig = config;
-        user.isBotRunning = true;
-        await user.save();
+        await User.updateOne({ address: normId }, { activeBotConfig: config, isBotRunning: true });
         res.json({ success: true, status: 'RUNNING' });
     }
     catch (e) {
-        console.error("Failed to start bot:", e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -506,6 +489,22 @@ app.post('/api/bot/update', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+app.get('/api/bot/sports/live/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine || !engine.sportsIntel) {
+        return res.json({ success: true, matches: [] });
+    }
+    try {
+        const intel = engine.sportsIntel;
+        const matches = intel.getLiveMatches();
+        res.json({ success: true, matches });
+    }
+    catch (e) {
+        res.status(500).json({ error: 'Failed to fetch live sports' });
+    }
+});
 // Trigger a forced market discovery scan
 app.post('/api/bot/refresh', async (req, res) => {
     const { userId } = req.body;
@@ -534,55 +533,24 @@ app.get('/api/bot/status/:userId', async (req, res) => {
     const normId = userId.toLowerCase();
     const engine = ACTIVE_BOTS.get(normId);
     try {
-        const tradeHistory = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
         const user = await User.findOne({ address: normId }).lean();
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
-        // --- ENHANCEMENT: DISCOVERY CACHE ---
-        // Pull latest 50 discovered markets from the scanner (if running) or DB
+        const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
         let mmOpportunities = [];
-        if (engine && engine.arbScanner) {
-            const scanner = engine.arbScanner;
-            const strictOpps = scanner.getOpportunities();
-            const monitored = scanner.getMonitoredMarkets();
-            // Combine strict + monitored to ensure tabs are never blank
-            const combined = [...strictOpps];
-            monitored.forEach((m) => {
-                if (!combined.some(c => c.tokenId === m.tokenId)) {
-                    combined.push(m);
-                }
-            });
-            mmOpportunities = combined.sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
+        let sportsMatches = [];
+        let sportsChases = [];
+        if (engine) {
+            mmOpportunities = engine.getArbOpportunities();
+            sportsMatches = engine.getLiveSportsMatches();
+            sportsChases = engine.getActiveSportsChases();
         }
-        else {
-            const persistedMMOpps = await MoneyMarketOpportunity.find().sort({ timestamp: -1 }).limit(100).lean();
-            mmOpportunities = persistedMMOpps.map((o) => ({
-                ...o,
-                roi: o.roi || o.spreadPct || 0,
-                capacityUsd: o.capacityUsd || o.liquidity || 0,
-                volume24hr: o.volume24hr || 0,
-                liquidity: o.liquidity || 0,
-                orderMinSize: o.orderMinSize || 5
-            }));
-        }
-        const formattedLogs = dbLogs.map(l => ({
-            id: l._id.toString(),
-            time: l.timestamp.toLocaleTimeString(),
-            type: l.type,
-            message: l.message
-        }));
-        const historyUI = tradeHistory.map((t) => ({
-            ...t,
-            timestamp: t.timestamp.toISOString(),
-            id: t._id.toString()
-        }));
         let livePositions = [];
         if (engine) {
             const scanner = engine.arbScanner;
             livePositions = (engine.getActivePositions() || []).map(p => ({
                 ...p,
-                // --- ENHANCEMENT: MM MANAGEMENT FLAG ---
-                // Mark if the scanner is currently providing liquidity for this token
-                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false,
+                managedBySports: sportsChases.some(c => c.conditionId === p.marketId)
             }));
         }
         else if (user && user.activePositions) {
@@ -590,16 +558,17 @@ app.get('/api/bot/status/:userId', async (req, res) => {
         }
         res.json({
             isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
-            logs: formattedLogs,
-            history: historyUI,
+            logs: dbLogs.map(l => ({ id: l._id.toString(), time: l.timestamp.toLocaleTimeString(), type: l.type, message: l.message })),
+            history: history.map((t) => ({ ...t, id: t._id.toString() })),
             positions: livePositions,
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
-            mmOpportunities: mmOpportunities
+            mmOpportunities,
+            sportsMatches,
+            sportsChases
         });
     }
     catch (e) {
-        console.error("Status Error:", e);
         res.status(500).json({ error: 'DB Error' });
     }
 });
@@ -1131,31 +1100,21 @@ async function restoreBots() {
     try {
         const activeUsers = await User.find({ isBotRunning: true, "tradingWallet.address": { $exists: true } })
             .select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
-        console.log(`Found ${activeUsers.length} bots to restore.`);
         for (const user of activeUsers) {
             if (user.activeBotConfig && user.tradingWallet) {
                 const normId = user.address.toLowerCase();
-                const correctSafeAddr = await SafeManagerService.computeAddress(user.tradingWallet.address);
-                if (user.tradingWallet.safeAddress !== correctSafeAddr) {
-                    console.log(`[RESTORE] Aligning mismatched safe for ${normId}`);
-                    user.tradingWallet.safeAddress = correctSafeAddr;
-                    await user.save();
-                }
-                const lastTrade = await Trade.findOne({ userId: normId }).sort({ timestamp: -1 });
-                const lastTime = lastTrade ? Math.floor(lastTrade.timestamp.getTime() / 1000) + 1 : Math.floor(Date.now() / 1000) - 3600;
-                const l2Creds = user.tradingWallet.l2ApiCredentials;
-                const config = {
-                    ...user.activeBotConfig,
-                    walletConfig: user.tradingWallet,
-                    stats: user.stats,
-                    activePositions: user.activePositions,
-                    startCursor: lastTime,
-                    l2ApiCredentials: l2Creds,
-                    mongoEncryptionKey: ENV.mongoEncryptionKey,
-                    builderApiKey: ENV.builderApiKey,
-                    builderApiSecret: ENV.builderApiSecret,
-                    builderApiPassphrase: ENV.builderApiPassphrase
-                };
+                const config = user.activeBotConfig;
+                // Map legacy names to fix property mismatch
+                config.enableSportsRunner = config.enableSportsRunner ?? config.enableSportsFrontrunning ?? true;
+                config.enableMoneyMarkets = config.enableMoneyMarkets ?? true;
+                config.enableCopyTrading = config.enableCopyTrading ?? true;
+                // Inject transient runtime data
+                config.walletConfig = user.tradingWallet;
+                config.l2ApiCredentials = user.tradingWallet.l2ApiCredentials;
+                config.mongoEncryptionKey = ENV.mongoEncryptionKey;
+                config.builderApiKey = ENV.builderApiKey;
+                config.builderApiSecret = ENV.builderApiSecret;
+                config.builderApiPassphrase = ENV.builderApiPassphrase;
                 try {
                     await startUserBot(normId, config);
                     console.log(`✅ Restored Bot: ${normId}`);

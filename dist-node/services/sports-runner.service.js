@@ -16,13 +16,11 @@ export class SportsRunnerService {
         this.startExitMonitor();
     }
     setupEvents() {
-        // Core frontrunning event: detect goal before Polymarket adjusts
         this.intel.on('goal', (match) => this.handleGoalArb(match));
-        // Safety event: if goal is reviewed by VAR, dump position immediately
         this.intel.on('var', (match) => this.handleVAR(match));
     }
     /**
-     * Autonomous Monitor: Evaluates exit conditions for "In-Flight" frontruns
+     * Monitor loop to evaluate exit conditions for "In-Flight" frontruns
      */
     startExitMonitor() {
         this.monitorInterval = setInterval(() => this.evaluateExits(), 5000);
@@ -32,17 +30,15 @@ export class SportsRunnerService {
             return;
         for (const [key, chase] of this.activeChases.entries()) {
             try {
-                // Get real-time price we can sell at
                 const currentBid = await this.adapter.getMarketPrice(chase.conditionId, chase.tokenId, 'SELL');
                 const elapsed = (Date.now() - chase.startTime) / 1000;
-                // Condition 1: Target Price Reached
+                // 1. Check for Target Hit
                 if (currentBid >= chase.targetPrice) {
-                    this.logger.success(`🎯 [TARGET REACHED] Alpha captured for ${chase.matchKey} @ $${currentBid}`);
-                    await this.liquidateScalp(key, currentBid, "Target Reached");
+                    this.logger.success(`🎯 [TARGET REACHED] Exit target hit for ${chase.matchKey} @ $${currentBid}`);
+                    await this.liquidateScalp(key, currentBid, "Target Hit");
                     continue;
                 }
-                // Condition 2: Alpha Decay (Momentum Stall)
-                // If price hasn't moved up in 3 consecutive checks (15s) and we're past initial burst
+                // 2. Check for Momentum Stall
                 if (currentBid <= chase.lastBid) {
                     chase.stallTicks++;
                 }
@@ -51,19 +47,19 @@ export class SportsRunnerService {
                 }
                 chase.lastBid = currentBid;
                 if (chase.stallTicks >= 3 && elapsed > 30) {
-                    this.logger.warn(`📉 [MOMENTUM STALL] Stale price window closed for ${chase.matchKey}. Exiting...`);
-                    await this.liquidateScalp(key, currentBid, "Alpha Decay");
+                    this.logger.warn(`📉 [MOMENTUM STALL] Alpha decay detected for ${chase.matchKey}. Exiting...`);
+                    await this.liquidateScalp(key, currentBid, "Momentum Stall");
                     continue;
                 }
-                // Condition 3: Hard Time Stop (120s)
+                // 3. Hard Time Stop (120s)
                 if (elapsed >= 120) {
-                    this.logger.info(`⏰ [TIME STOP] Exiting ${chase.matchKey} scalp - time limit reached.`);
-                    await this.liquidateScalp(key, currentBid, "Time Limit");
+                    this.logger.info(`⏰ [TIME STOP] 120s limit reached for ${chase.matchKey}. Closing scalp.`);
+                    await this.liquidateScalp(key, currentBid, "Time Stop");
                     continue;
                 }
             }
             catch (e) {
-                this.logger.debug(`Exit Monitor: ${chase.matchKey} price fetch failed.`);
+                this.logger.debug(`Exit Monitor Error for ${chase.matchKey}`);
             }
         }
     }
@@ -80,116 +76,126 @@ export class SportsRunnerService {
                 side: 'SELL',
                 sizeUsd: 0,
                 sizeShares: chase.shares,
-                priceLimit: 0.01, // Sweep down the book to ensure exit
+                priceLimit: 0.01,
                 orderType: 'FAK'
             });
             if (result.success) {
-                const pnl = (exitPrice - chase.entryPrice) * chase.shares;
-                this.logger.success(`💰 [SCALP COMPLETE] ${chase.matchKey} | PnL: $${pnl.toFixed(2)} | Reason: ${reason}`);
+                const realizedPnl = (exitPrice - chase.entryPrice) * chase.shares;
+                this.logger.success(`💰 [SCALP COMPLETE] ${chase.matchKey} | PnL: $${realizedPnl.toFixed(2)} | Reason: ${reason}`);
                 this.activeChases.delete(key);
             }
         }
         catch (e) {
-            this.logger.error(`Liquidation Error: ${chase.matchKey}`, e instanceof Error ? e : new Error(String(e)));
+            this.logger.error(`Liquidation failed for ${chase.matchKey}`, e instanceof Error ? e : new Error(String(e)));
         }
     }
     /**
-     * Core Logic: Frontruns goal notifications using stale market prices
+     * Core Arbitrage Logic for Goals
      */
     async handleGoalArb(match) {
         const matchKey = `${match.homeTeam}-${match.awayTeam}`;
         if (this.activeChases.has(matchKey))
             return;
+        this.logger.info(`🎯 Evaluating Frontrunning Edge for ${matchKey}...`);
         try {
-            // 1. Map Sportmonks Fixture to Polymarket Condition
             const conditionId = await this.findPolymarketCondition(match);
-            if (!conditionId) {
-                this.logger.warn(`❌ No mapping found for ${matchKey}`);
+            if (!conditionId)
                 return;
-            }
-            // 2. Identify target token (The team that just scored)
             const market = await this.adapter.getRawClient().getMarket(conditionId);
-            const targetToken = market.clobTokenIds[0]; // Assuming binary Winner Take All
-            // 3. Calculate Edge
+            const targetToken = market.clobTokenIds[0];
             const fairValue = this.calculateFairValue(match.score, match.minute);
             const marketPrice = await this.adapter.getMarketPrice(conditionId, targetToken, 'BUY');
             const edge = fairValue - marketPrice;
-            if (edge >= 0.15) {
-                this.logger.success(`🚀 [ALPHA WINDOW] Frontrunning Goal for ${matchKey}! Edge: ${edge.toFixed(2)}`);
-                // Execute FOK: Only buy if the stale price still exists
+            // World-Class Alpha Check: Minimum 12 cent edge required for taker fees & slippage
+            if (edge >= 0.12) {
+                this.logger.success(`🚀 [ALPHA WINDOW] Frontrunning Goal for ${matchKey}! Edge: ${edge.toFixed(2)} | Fair: ${fairValue.toFixed(2)}`);
                 const execution = await this.executor.createOrder({
                     marketId: conditionId,
                     tokenId: targetToken,
                     outcome: 'YES',
                     side: 'BUY',
-                    sizeUsd: 100, // Default institutional chase size
+                    sizeUsd: 100,
                     orderType: 'FOK'
                 });
                 if (execution.success && execution.sharesFilled > 0) {
+                    // Register for Scalp Monitor
                     this.activeChases.set(matchKey, {
                         matchId: match.id,
                         conditionId,
                         tokenId: targetToken,
                         entryPrice: execution.priceFilled,
-                        targetPrice: fairValue * 0.98, // Take profit slightly before market equilibrium
+                        targetPrice: fairValue * 0.98,
                         startTime: Date.now(),
                         lastBid: marketPrice,
                         stallTicks: 0,
                         shares: execution.sharesFilled,
                         matchKey
                     });
+                    this.logger.info(`📈 [TRACKING] Scalp monitor active for ${matchKey}. Target: $${(fairValue * 0.98).toFixed(2)}`);
                 }
             }
         }
         catch (e) {
-            this.logger.error(`Goal Arb Failure`, e instanceof Error ? e : new Error(String(e)));
+            this.logger.error(`Sports Arb Failure`, e instanceof Error ? e : new Error(String(e)));
         }
     }
     handleVAR(match) {
         const matchKey = `${match.homeTeam}-${match.awayTeam}`;
         if (this.activeChases.has(matchKey)) {
-            this.logger.warn(`🚨 [VAR EMERGENCY] Review detected for ${matchKey}. Aborting scalp...`);
-            this.liquidateScalp(matchKey, 0, "VAR Intervention").catch(() => { });
+            this.logger.warn(`🚨 [VAR EMERGENCY] Review in progress for ${matchKey}. DUMPING POSITION.`);
+            this.liquidateScalp(matchKey, 0, "VAR Panic").catch(() => { });
         }
     }
-    /**
-     * Institutional Match Mapping Logic
-     */
     async findPolymarketCondition(match) {
-        // 1. Check local DB cache first
         const cached = await DbSportsMatch.findOne({ matchId: match.id });
         if (cached)
             return cached.conditionId;
-        // 2. Query Polymarket Gamma API for the match
         try {
             const query = encodeURIComponent(`${match.homeTeam} ${match.awayTeam}`);
-            this.logger.info(`🔍 Searching Polymarket for: ${match.homeTeam} vs ${match.awayTeam}`);
             const res = await axios.get(`https://gamma-api.polymarket.com/markets?active=true&closed=false&q=${query}`);
             if (res.data && res.data.length > 0) {
                 const bestMatch = res.data[0];
-                this.logger.success(`🎯 Found mapping: ${bestMatch.question} (${bestMatch.conditionId})`);
-                // Cache it
                 await DbSportsMatch.create({
                     matchId: match.id,
                     conditionId: bestMatch.conditionId,
                     homeTeam: match.homeTeam,
-                    awayTeam: match.awayTeam
+                    awayTeam: match.awayTeam,
+                    league: match.league
                 });
                 return bestMatch.conditionId;
             }
         }
-        catch (e) {
-            this.logger.debug("Gamma search failed");
-        }
+        catch (e) { }
         return null;
     }
+    /**
+     * WORLD-CLASS FAIR VALUE ENGINE
+     * Implements a Dynamic Power-Curve Decay model for Soccer.
+     * P(win) = Base + (1 - Base) * (t^Decay)
+     */
     calculateFairValue(score, minute) {
-        // High-speed soccer estimation model
         const [h, a] = score;
-        if (Math.abs(h - a) >= 2)
-            return 0.95; // Blowout
-        if (h > a || a > h)
-            return 0.78; // Lead
-        return 0.45; // Draw
+        const absoluteDiff = Math.abs(h - a);
+        // Normalize time to a 0.0 -> 1.0 scale (Cap at 95m for injury time)
+        const timeFactor = Math.min(minute / 95, 0.99);
+        // Case 1: One side is leading
+        if (absoluteDiff > 0) {
+            // A 1-goal lead starts at 65% win probability (industry standard)
+            // A 2-goal lead starts at 88% win probability
+            const baseProb = absoluteDiff === 1 ? 0.65 : 0.88;
+            // Power Factor (2.5) ensures the probability accelerates 
+            // exponentially as the match enters the 'Kill Zone' (70m+)
+            const decaySensitivity = 2.5;
+            const fairValue = baseProb + (1 - baseProb) * Math.pow(timeFactor, decaySensitivity);
+            return Math.min(fairValue, 0.99);
+        }
+        // Case 2: Match is a Draw
+        if (absoluteDiff === 0) {
+            // Draws start at 33% (1/3rd) and climb to 100% at the whistle
+            const baseDraw = 0.33;
+            const drawFairValue = baseDraw + (1 - baseDraw) * Math.pow(timeFactor, 3.0);
+            return Math.min(drawFairValue, 0.99);
+        }
+        return 0.5;
     }
 }

@@ -455,7 +455,7 @@ app.post('/api/bot/start', async (req: any, res: any) => {
         userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s: string) => s.trim()),
         rpcUrl,
         geminiApiKey,
-        sportmonksApiKey: process.env.SPORTSMONK_API_KEY,
+        sportmonksApiKey: process.env.SPORTSMONK_API_KEY || '',  // Provide a default empty string
         multiplier: Number(multiplier),
         riskProfile,
         enableNotifications: false,

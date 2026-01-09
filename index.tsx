@@ -3577,7 +3577,6 @@ return (
 
         {activeTab === 'sports' && (
             <SportsRunner 
-                userId={userAddress} 
                 isRunning={isRunning} 
                 sportsMatches={sportsMatches} 
             />

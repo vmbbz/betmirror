@@ -12,32 +12,41 @@ export interface Team {
     logo?: string;
 }
 
+export interface MarketTriad {
+    homeToken?: string;
+    drawToken?: string;
+    awayToken?: string;
+    homePrice: number;
+    drawPrice: number;
+    awayPrice: number;
+    prevHome: number;
+    prevDraw: number;
+    prevAway: number;
+}
+
 export interface SportsMatch {
     id: string; // eventId
-    matchId?: string; // External: Sportmonks ID
     conditionId: string;
-    tokenId?: string; 
     homeTeam: string;
     awayTeam: string;
-    homeTeamData: Team | null;
-    awayTeamData: Team | null;
-    score: [number, number]; // Official/Verified Score
-    inferredScore: [number, number]; // Inferred from Price Action
-    confidence: number;
+    marketSlug: string;
+    eventSlug: string;
+    score: [number, number]; 
+    inferredScore: [number, number]; 
     minute: number;
-    status: 'LIVE' | 'HT' | 'VAR' | 'FT' | 'GOAL' | 'SCOUTING' | 'PREMATCH';
+    status: 'LIVE' | 'HT' | 'VAR' | 'FT' | 'SCOUTING' | 'PREMATCH';
     correlation: 'ALIGNED' | 'DIVERGENT' | 'UNVERIFIED';
-    league: string;
-    marketPrice?: number;
-    previousPrice?: number;
+    triad: MarketTriad;
     fairValue: number;
-    startTime?: string;
     discoveryEpoch: number;
     priceEvidence?: string;
+    image: string;
+    tokenId?: string; // Legacy compat for executor
+    marketPrice?: number; // Legacy compat for executor
+    confidence: number;
 }
 
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
-const CLOB_BASE = 'https://clob.polymarket.com';
 
 export class SportsIntelService extends EventEmitter {
     private isPolling = false;
@@ -45,108 +54,18 @@ export class SportsIntelService extends EventEmitter {
     private discoveryInterval?: NodeJS.Timeout;
     private matches: Map<string, SportsMatch> = new Map();
     private teamsCache: Team[] = [];
-    private apiToken: string;
 
-    private readonly SURGE_THRESHOLD = 0.08; 
-
-    constructor(private logger: Logger, apiToken?: string) {
+    constructor(private logger: Logger) {
         super();
-        this.apiToken = apiToken || '';
     }
 
-    public isActive(): boolean {
-        return this.isPolling;
-    }
-
-    /**
-     * WORLD-CLASS FAIR VALUE ENGINE
-     */
-    public calculateFairValue(score: [number, number], minute: number): number {
-        const [h, a] = score;
-        const absoluteDiff = Math.abs(h - a);
-        const timeFactor = Math.min(minute / 95, 0.99);
-
-        if (absoluteDiff > 0) {
-            const baseProb = absoluteDiff === 1 ? 0.65 : 0.88;
-            const decaySensitivity = 2.5;
-            const fv = baseProb + (1 - baseProb) * Math.pow(timeFactor, decaySensitivity);
-            return Math.min(fv, 0.99);
-        }
-        if (absoluteDiff === 0) {
-            const baseDraw = 0.33;
-            const drawFairValue = baseDraw + (1 - baseDraw) * Math.pow(timeFactor, 3.0);
-            return Math.min(drawFairValue, 0.99);
-        }
-        return 0.5;
-    }
-
-    // ============================================
-    // DYNAMIC DATA FETCHING & MATCHING
-    // ============================================
-
-    private async fetchTeams(league?: string): Promise<Team[]> {
-        const params: Record<string, any> = { limit: 500 };
-        if (league) params.league = league;
-        try {
-            const response = await axios.get(`${GAMMA_BASE}/teams`, { params });
-            return response.data;
-        } catch (e) {
-            this.logger.error("Failed to fetch Gamma Teams");
-            return [];
-        }
-    }
-
-    private matchTeam(name: string): Team | null {
-        const lower = name.toLowerCase().trim();
-        
-        // 1. Exact name
-        let match = this.teamsCache.find(t => t.name.toLowerCase() === lower);
-        if (match) return match;
-        
-        // 2. Alias
-        match = this.teamsCache.find(t => t.alias?.toLowerCase() === lower);
-        if (match) return match;
-        
-        // 3. Abbreviation
-        match = this.teamsCache.find(t => t.abbreviation.toLowerCase() === lower);
-        if (match) return match;
-        
-        // 4. Partial
-        match = this.teamsCache.find(t => 
-          t.name.toLowerCase().includes(lower) || lower.includes(t.name.toLowerCase())
-        );
-        if (match) return match;
-        
-        return null;
-    }
-
-    private extractTeamsFromTitle(title: string): { home: string; away: string } | null {
-        const patterns = [
-          /(.+?)\s+vs\.?\s+(.+)/i,
-          /(.+?)\s+v\s+(.+)/i,
-          /(.+?)\s+@\s+(.+)/i,
-        ];
-        
-        for (const pattern of patterns) {
-          const match = title.match(pattern);
-          if (match) {
-            return { home: match[1].trim(), away: match[2].trim() };
-          }
-        }
-        return null;
-    }
+    public isActive(): boolean { return this.isPolling; }
 
     public async start() {
         if (this.isPolling) return;
         this.isPolling = true;
-
-        // Load teams database for matching
-        this.logger.info("⚡ Sports Intel: Loading Institutional Teams Database...");
+        this.logger.info("⚽ Sports Intel: Pitch Intelligence Triad Online.");
         this.teamsCache = await this.fetchTeams();
-        this.logger.success(`✓ Cached ${this.teamsCache.length} Global Teams`);
-
-        this.logger.info("⚽ Sports Intel: Dynamic Inference Engine Active.");
-        
         await this.discoverPolymarketSports();
         this.pollInterval = setInterval(() => this.runInference(), 3500);
         this.discoveryInterval = setInterval(() => this.discoverPolymarketSports(), 60000);
@@ -158,103 +77,141 @@ export class SportsIntelService extends EventEmitter {
         if (this.discoveryInterval) clearInterval(this.discoveryInterval);
     }
 
+    private async fetchTeams(): Promise<Team[]> {
+        try {
+            const res = await axios.get(`${GAMMA_BASE}/teams?limit=500`);
+            return res.data;
+        } catch (e) { return []; }
+    }
+
+    private matchTeam(name: string): Team | null {
+        if (!name) return null;
+        const lower = name.toLowerCase().trim();
+        return this.teamsCache.find(t => 
+            t.name.toLowerCase() === lower || 
+            t.alias?.toLowerCase() === lower ||
+            t.abbreviation.toLowerCase() === lower
+        ) || null;
+    }
+
     private async discoverPolymarketSports() {
         try {
-            const tagId = "100639"; // Soccer
-            const url = `${GAMMA_BASE}/events?active=true&closed=false&tag_id=${tagId}&order=startTime&ascending=true&limit=20`;
+            // Tag 100639 = Soccer
+            const url = `${GAMMA_BASE}/events?active=true&closed=false&tag_id=100639&order=startTime&ascending=true&limit=15`;
             const response = await axios.get(url);
-            
             if (!response.data || !Array.isArray(response.data)) return;
 
             for (const event of response.data) {
                 const market = event.markets?.[0];
-                if (!market || !market.conditionId) continue;
+                if (!market || !market.clobTokenIds) continue;
+
+                // Triad Identification Logic
+                const triad: MarketTriad = { 
+                    homePrice: 0, drawPrice: 0, awayPrice: 0,
+                    prevHome: 0, prevDraw: 0, prevAway: 0
+                };
+                const tokenIds = JSON.parse(market.clobTokenIds);
                 
-                const conditionId = market.conditionId;
-                const tokenId = market.clobTokenIds ? JSON.parse(market.clobTokenIds)[0] : null;
-                
-                const extracted = this.extractTeamsFromTitle(event.title);
-                const homeTeam = extracted ? this.matchTeam(extracted.home) : null;
-                const awayTeam = extracted ? this.matchTeam(extracted.away) : null;
+                // Typical Polymarket structure: [Home, Draw, Away]
+                triad.homeToken = tokenIds[0];
+                if (tokenIds.length === 3) {
+                    triad.drawToken = tokenIds[1];
+                    triad.awayToken = tokenIds[2];
+                } else {
+                    triad.awayToken = tokenIds[1];
+                }
+
+                const teams = event.title.split(/ vs | v | @ /i);
+                const home = this.matchTeam(teams[0]?.trim());
+                const away = this.matchTeam(teams[1]?.trim());
 
                 const existing = this.matches.get(event.id);
-
-                const matchData: SportsMatch = {
+                this.matches.set(event.id, {
                     id: event.id,
-                    conditionId: conditionId,
-                    tokenId: tokenId,
-                    homeTeam: homeTeam?.name || extracted?.home || "Home",
-                    awayTeam: awayTeam?.name || extracted?.away || "Away",
-                    homeTeamData: homeTeam,
-                    awayTeamData: awayTeam,
+                    conditionId: market.conditionId,
+                    homeTeam: home?.name || teams[0] || "Home",
+                    awayTeam: away?.name || teams[1] || "Away",
+                    marketSlug: market.market_slug || "",
+                    eventSlug: event.slug || "",
+                    image: event.image || market.image || "",
                     score: existing?.score || [0, 0],
                     inferredScore: existing?.inferredScore || [0, 0],
-                    confidence: existing?.confidence || 0,
                     minute: existing?.minute || 0,
                     status: existing?.status || 'SCOUTING',
                     correlation: existing?.correlation || 'UNVERIFIED',
-                    league: event.category || "Pro League",
-                    startTime: event.startTime,
+                    triad: existing?.triad || triad,
+                    fairValue: existing?.fairValue || 0.5,
                     discoveryEpoch: existing?.discoveryEpoch || Date.now(),
-                    marketPrice: existing?.marketPrice || 0,
-                    previousPrice: existing?.marketPrice || 0,
-                    fairValue: existing?.fairValue || 0.5
-                };
-
-                this.matches.set(event.id, matchData);
+                    tokenId: triad.homeToken, // for executor compat
+                    confidence: existing?.confidence || 0.5,
+                    marketPrice: existing?.marketPrice || 0
+                });
             }
-        } catch (e: any) {
-            this.logger.error(`[Sports Scout] Discovery Fail: ${e.message}`);
+        } catch (e) {
+            this.logger.error(`Discovery Error: ${e instanceof Error ? e.message : 'Unknown'}`);
         }
     }
 
     private async runInference() {
-        for (const [id, match] of this.matches.entries()) {
-            if (match.status === 'FT' || !match.tokenId) continue;
+        for (const match of this.matches.values()) {
+            if (!match.triad.homeToken) continue;
 
-            const currentPrice = match.marketPrice || 0;
-            const prevPrice = match.previousPrice || currentPrice;
+            try {
+                // Poll the triad prices simultaneously
+                const [hPrice, dPrice, aPrice] = await Promise.all([
+                    this.getPrice(match.triad.homeToken),
+                    match.triad.drawToken ? this.getPrice(match.triad.drawToken) : Promise.resolve(0),
+                    match.triad.awayToken ? this.getPrice(match.triad.awayToken) : Promise.resolve(0)
+                ]);
 
-            if (currentPrice === 0 || currentPrice === prevPrice) continue;
+                // Calculate Velocity across Triad
+                const hMove = match.triad.homePrice > 0 ? (hPrice - match.triad.homePrice) / match.triad.homePrice : 0;
+                const aMove = match.triad.awayPrice > 0 ? (aPrice - match.triad.awayPrice) / match.triad.awayPrice : 0;
 
-            const change = currentPrice - prevPrice;
-            const pct = prevPrice > 0 ? change / prevPrice : 0;
+                // SCORE INFERENCE: CORRELATED DIVERGENCE
+                // If Home Win jumps while Away Win drops, confidence of a goal is high
+                if (hMove > 0.08 && aMove < -0.03) {
+                    match.inferredScore[0]++;
+                    match.correlation = 'DIVERGENT';
+                    match.confidence = 0.92;
+                    match.priceEvidence = `HOME GOAL: +${(hMove * 100).toFixed(1)}% Velocity | AWAY: ${(aMove * 100).toFixed(1)}%`;
+                    this.emit('inferredEvent', { match, type: 'HOME_GOAL', magnitude: hMove });
+                } else if (aMove > 0.08 && hMove < -0.03) {
+                    match.inferredScore[1]++;
+                    match.correlation = 'DIVERGENT';
+                    match.confidence = 0.92;
+                    match.priceEvidence = `AWAY GOAL: +${(aMove * 100).toFixed(1)}% Velocity | HOME: ${(hMove * 100).toFixed(1)}%`;
+                    this.emit('inferredEvent', { match, type: 'AWAY_GOAL', magnitude: aMove });
+                }
 
-            if (Math.abs(pct) > this.SURGE_THRESHOLD) {
-                this.handleInferredEvent(match, pct > 0 ? 'HOME_GOAL' : 'AWAY_GOAL', pct);
-            }
+                // Update state
+                match.triad.prevHome = match.triad.homePrice;
+                match.triad.homePrice = hPrice;
+                match.triad.prevDraw = match.triad.drawPrice;
+                match.triad.drawPrice = dPrice;
+                match.triad.prevAway = match.triad.awayPrice;
+                match.triad.awayPrice = aPrice;
+                match.marketPrice = hPrice; // compat
 
-            if (match.minute === 0 && match.discoveryEpoch > 0) {
-                const elapsedMins = Math.floor((Date.now() - match.discoveryEpoch) / 60000);
-                match.minute = Math.min(90, elapsedMins);
-            }
-
-            match.previousPrice = currentPrice;
-            match.fairValue = this.calculateFairValue(match.inferredScore, match.minute);
-
-            if (match.matchId && this.apiToken) {
-                this.verifyWithAPI(match);
-            }
+                // Progress minute
+                const elapsed = Math.floor((Date.now() - match.discoveryEpoch) / 60000);
+                match.minute = Math.min(95, elapsed);
+            } catch (e) {}
         }
     }
 
-    private handleInferredEvent(match: SportsMatch, type: string, magnitude: number) {
-        if (type === 'HOME_GOAL') match.inferredScore[0]++;
-        if (type === 'AWAY_GOAL') match.inferredScore[1]++;
-
-        match.confidence = Math.min(0.9, Math.abs(magnitude) * 6);
-        match.correlation = 'DIVERGENT';
-        match.priceEvidence = `${type}: ${magnitude > 0 ? '+' : ''}${(magnitude * 100).toFixed(1)}% Surge`;
-
-        this.logger.success(`🚀 [INFERENCE] ${type} on ${match.homeTeam} | Confidence: ${match.confidence.toFixed(2)}`);
-        this.emit('inferredEvent', { match, type, magnitude });
-    }
-
-    private async verifyWithAPI(match: SportsMatch) {
-        // Verification logic using match.matchId and this.apiToken
+    private async getPrice(tokenId: string): Promise<number> {
+        try {
+            const res = await axios.get(`https://clob.polymarket.com/price?token_id=${tokenId}&side=buy`);
+            return parseFloat(res.data.price) || 0;
+        } catch (e) { return 0; }
     }
 
     public getLiveMatches(): SportsMatch[] {
         return Array.from(this.matches.values());
+    }
+
+    public forceLink(conditionId: string, matchId: string) {
+        this.logger.info(`Force linking ${conditionId} to ${matchId}`);
     }
 }

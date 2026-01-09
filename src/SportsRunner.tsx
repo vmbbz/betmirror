@@ -1,9 +1,9 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Activity, Cpu, Sword, Zap, ShieldCheck, 
   ExternalLink, TrendingUp, BarChart3, Clock, 
-  Target, AlertTriangle, Globe2, ChevronRight, Loader2
+  Target, AlertTriangle, Globe2, ChevronRight, Loader2, ArrowRightLeft
 } from 'lucide-react';
 
 interface SportsMatch {
@@ -26,17 +26,30 @@ interface SportsMatch {
     priceEvidence?: string;
 }
 
-const OddsCell = ({ label, price, color }: { label: string, price: number, color: string }) => (
+const convertOdds = (price: number, type: 'decimal' | 'american' | 'percent') => {
+    if (price <= 0) return '--';
+    if (type === 'percent') return `${(price * 100).toFixed(0)}%`;
+    if (type === 'decimal') return (1 / price).toFixed(2);
+    
+    // American Odds
+    if (price >= 0.5) {
+        return `-${Math.round((price / (1 - price)) * 100)}`;
+    } else {
+        return `+${Math.round(((1 - price) / price) * 100)}`;
+    }
+};
+
+const OddsCell = ({ label, price, color, oddsType }: { label: string, price: number, color: string, oddsType: any }) => (
     <div className="flex flex-col items-center p-3 bg-black/40 rounded-xl border border-white/[0.03] hover:bg-white/[0.02] transition-colors">
         <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest mb-1">{label}</span>
         <span className={`text-sm font-mono font-black ${color}`}>
-            {price > 0 ? `$${price.toFixed(2)}` : '--'}
+            {price > 0 ? convertOdds(price, oddsType) : '--'}
         </span>
-        <span className="text-[7px] text-gray-600 font-bold">{(price * 100).toFixed(0)}% Implied</span>
+        <span className="text-[7px] text-gray-600 font-bold">{convertOdds(price, 'percent')} Implied</span>
     </div>
 );
 
-const MatchCard = ({ match }: { match: SportsMatch }) => {
+const MatchCard = ({ match, oddsType }: { match: SportsMatch, oddsType: any }) => {
     const isDivergent = match.correlation === 'DIVERGENT';
     const polyUrl = `https://polymarket.com/event/${match.eventSlug}/${match.marketSlug}`;
 
@@ -89,9 +102,9 @@ const MatchCard = ({ match }: { match: SportsMatch }) => {
 
                 {/* Market Triad Grid */}
                 <div className="grid grid-cols-3 gap-3 mb-6">
-                    <OddsCell label="Home Win" price={match.triad.homePrice} color="text-white" />
-                    <OddsCell label="Draw" price={match.triad.drawPrice} color="text-blue-400" />
-                    <OddsCell label="Away Win" price={match.triad.awayPrice} color="text-white" />
+                    <OddsCell label="Home Win" price={match.triad.homePrice} color="text-white" oddsType={oddsType} />
+                    <OddsCell label="Draw" price={match.triad.drawPrice} color="text-blue-400" oddsType={oddsType} />
+                    <OddsCell label="Away Win" price={match.triad.awayPrice} color="text-white" oddsType={oddsType} />
                 </div>
 
                 {/* Evidence Velocity Tape */}
@@ -126,6 +139,8 @@ const MatchCard = ({ match }: { match: SportsMatch }) => {
 };
 
 const SportsRunner = ({ isRunning, sportsMatches = [] }: { isRunning: boolean, sportsMatches?: SportsMatch[] }) => {
+    const [oddsType, setOddsType] = useState<'decimal' | 'american'>('decimal');
+
     return (
         <div className="grid grid-cols-12 gap-8 animate-in fade-in duration-700 max-w-[1600px] mx-auto pb-20 px-4">
             {/* Primary Terminal View */}
@@ -140,6 +155,13 @@ const SportsRunner = ({ isRunning, sportsMatches = [] }: { isRunning: boolean, s
                         </p>
                     </div>
                     <div className="flex gap-4">
+                        <button 
+                            onClick={() => setOddsType(prev => prev === 'decimal' ? 'american' : 'decimal')}
+                            className="px-5 py-2.5 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black text-white uppercase tracking-widest flex items-center gap-2 hover:bg-white/10 transition-colors"
+                        >
+                            <ArrowRightLeft size={14} className="text-blue-400"/>
+                            Display: {oddsType.toUpperCase()}
+                        </button>
                         <div className="px-5 py-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-[9px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-2">
                             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
                             Triad Engine: ONLINE
@@ -156,7 +178,7 @@ const SportsRunner = ({ isRunning, sportsMatches = [] }: { isRunning: boolean, s
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                         {sportsMatches.map(m => (
-                            <MatchCard key={m.id} match={m} />
+                            <MatchCard key={m.id} match={m} oddsType={oddsType} />
                         ))}
                     </div>
                 )}

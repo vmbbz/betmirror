@@ -94,6 +94,25 @@ export class SportsIntelService extends EventEmitter {
         ) || null;
     }
 
+    private extractTeamsFromTitle(title: string): { home: string; away: string } | null {
+        const patterns = [
+            /(.+?)\s+vs\.?\s+(.+)/i,
+            /(.+?)\s+v\s+(.+)/i,
+            /(.+?)\s+@\s+(.+)/i,
+        ];
+        
+        for (const pattern of patterns) {
+            const match = title.match(pattern);
+            if (match) {
+                if (pattern.source.includes('@')) {
+                    return { away: match[1].trim(), home: match[2].trim() };
+                }
+                return { home: match[1].trim(), away: match[2].trim() };
+            }
+        }
+        return null;
+    }
+
     private async discoverPolymarketSports() {
         try {
             // Tag 100639 = Soccer
@@ -121,16 +140,16 @@ export class SportsIntelService extends EventEmitter {
                     triad.awayToken = tokenIds[1];
                 }
 
-                const teams = event.title.split(/ vs | v | @ /i);
-                const home = this.matchTeam(teams[0]?.trim());
-                const away = this.matchTeam(teams[1]?.trim());
+                const teams = this.extractTeamsFromTitle(event.title);
+                const home = teams ? this.matchTeam(teams.home) : null;
+                const away = teams ? this.matchTeam(teams.away) : null;
 
                 const existing = this.matches.get(event.id);
                 this.matches.set(event.id, {
                     id: event.id,
                     conditionId: market.conditionId,
-                    homeTeam: home?.name || teams[0] || "Home",
-                    awayTeam: away?.name || teams[1] || "Away",
+                    homeTeam: home?.name || (teams ? teams.home : "Home"),
+                    awayTeam: away?.name || (teams ? teams.away : "Away"),
                     marketSlug: market.market_slug || "",
                     eventSlug: event.slug || "",
                     image: event.image || market.image || "",
@@ -142,7 +161,7 @@ export class SportsIntelService extends EventEmitter {
                     triad: existing?.triad || triad,
                     fairValue: existing?.fairValue || 0.5,
                     discoveryEpoch: existing?.discoveryEpoch || Date.now(),
-                    tokenId: triad.homeToken, // for executor compat
+                    tokenId: triad.homeToken, 
                     confidence: existing?.confidence || 0.5,
                     marketPrice: existing?.marketPrice || 0
                 });
@@ -182,6 +201,8 @@ export class SportsIntelService extends EventEmitter {
                     match.confidence = 0.92;
                     match.priceEvidence = `AWAY GOAL: +${(aMove * 100).toFixed(1)}% Velocity | HOME: ${(hMove * 100).toFixed(1)}%`;
                     this.emit('inferredEvent', { match, type: 'AWAY_GOAL', magnitude: aMove });
+                } else if (Math.abs(hMove) < 0.01 && Math.abs(aMove) < 0.01) {
+                    match.correlation = 'ALIGNED';
                 }
 
                 // Update state
@@ -191,7 +212,7 @@ export class SportsIntelService extends EventEmitter {
                 match.triad.drawPrice = dPrice;
                 match.triad.prevAway = match.triad.awayPrice;
                 match.triad.awayPrice = aPrice;
-                match.marketPrice = hPrice; // compat
+                match.marketPrice = hPrice; 
 
                 // Progress minute
                 const elapsed = Math.floor((Date.now() - match.discoveryEpoch) / 60000);

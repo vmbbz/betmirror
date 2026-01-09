@@ -38,11 +38,13 @@ export class SportsRunnerService {
         const { match } = data;
         const matchKey = `${match.homeTeam}-${match.awayTeam}`;
         
-        if (this.activeScalps.has(matchKey) || match.confidence < 0.6) return;
+        // Prevent double entry
+        if (this.activeScalps.has(matchKey) || match.confidence < 0.8) return;
 
+        // Frontrunning Edge calculation
         const edge = match.fairValue - (match.marketPrice || 0);
         
-        if (edge < 0.12) {
+        if (edge < 0.10) {
             this.logger.info(`🛡️ Edge too thin ($${edge.toFixed(2)}). Awaiting Alpha Expansion.`);
             return;
         }
@@ -50,6 +52,7 @@ export class SportsRunnerService {
         this.logger.success(`🎯 [ALPHA WINDOW] Frontrunning Edge detected: $${edge.toFixed(2)}. Sweeping stale book for ${match.homeTeam}...`);
 
         try {
+            // ENTER FIRST: Use Fill-or-Kill (FOK) to ensure we only get the stale price
             const result = await this.executor.createOrder({
                 marketId: match.conditionId,
                 tokenId: match.tokenId!,
@@ -72,6 +75,8 @@ export class SportsRunnerService {
                     shares: result.sharesFilled
                 });
                 this.logger.info(`📈 [CAPTURE] Position active. Target: $${(match.fairValue * 0.98).toFixed(2)}`);
+            } else {
+                this.logger.warn(`❌ [FOK REJECTED] Market moved or order book cleared. Edge lost.`);
             }
         } catch (e: any) {
             this.logger.error(`Arb entry failed: ${e.message}`);
@@ -86,11 +91,13 @@ export class SportsRunnerService {
                 const currentBid = await this.adapter.getMarketPrice(scalp.conditionId, scalp.tokenId, 'SELL');
                 const elapsed = (Date.now() - scalp.startTime) / 1000;
 
+                // 1. Target Profit Exit
                 if (currentBid >= scalp.targetPrice) {
                     await this.liquidate(key, currentBid, "Target Reached");
                     continue;
                 }
 
+                // 2. Momentum Stall Exit
                 if (currentBid <= scalp.lastBid) scalp.stallTicks++;
                 else scalp.stallTicks = 0;
                 scalp.lastBid = currentBid;
@@ -100,6 +107,7 @@ export class SportsRunnerService {
                     continue;
                 }
 
+                // 3. Emergency Time Exit (2 mins)
                 if (elapsed >= 120) {
                     await this.liquidate(key, currentBid, "Time Stop");
                     continue;
@@ -115,6 +123,8 @@ export class SportsRunnerService {
         this.logger.info(`🔄 [EXIT] ${reason} for ${scalp.matchKey}. Liquidating via FAK...`);
         
         try {
+            // VERIFY LATER: Check scores via external API here if needed to hedge
+            
             const result = await this.adapter.createOrder({
                 marketId: scalp.conditionId,
                 tokenId: scalp.tokenId,
@@ -122,7 +132,7 @@ export class SportsRunnerService {
                 side: 'SELL',
                 sizeUsd: 0,
                 sizeShares: scalp.shares,
-                orderType: 'FAK'
+                orderType: 'FAK' // Capture all available depth then kill
             });
 
             if (result.success) {

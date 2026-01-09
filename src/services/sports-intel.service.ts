@@ -64,64 +64,94 @@ export class SportsIntelService extends EventEmitter {
   }
 
   private async discoverSportsMarkets() {
-    try {
-      const sportsRes = await axios.get(`${GAMMA_BASE}/sports`);
-      const sports = sportsRes.data || [];
+  try {
+    // Method 1: Get sports metadata first
+    const sportsRes = await axios.get(`${GAMMA_BASE}/sports`);
+    const sports = sportsRes.data || [];
+    
+    this.logger.info(`Found ${sports.length} sports categories`);
 
-      for (const sport of sports) {
-        if (!sport.seriesId) continue;
-
-        const url = `${GAMMA_BASE}/events?series_id=${sport.seriesId}&tag_id=100639&active=true&closed=false&order=startTime&ascending=true&limit=20`;
-        const response = await axios.get(url);
-
-        if (!response.data?.length) continue;
-
-        for (const event of response.data) {
-          const market = event.markets?.[0];
-          if (!market?.clobTokenIds || !market?.conditionId) continue;
-
-          const tokenIds: string[] = JSON.parse(market.clobTokenIds);
-          const outcomes: string[] = JSON.parse(market.outcomes);
-          const outcomePrices: number[] = JSON.parse(market.outcomePrices).map(Number);
-
-          if (this.matches.has(market.conditionId)) {
-            const existing = this.matches.get(market.conditionId)!;
-            existing.outcomePrices = outcomePrices;
-            continue;
+    for (const sport of sports) {
+      // The series array contains leagues with seriesId
+      const seriesList = sport.series || [];
+      
+      for (const league of seriesList) {
+        if (!league.seriesId) continue;
+        
+        // tag_id=100639 = game bets (not futures)
+        const url = `${GAMMA_BASE}/events?series_id=${league.seriesId}&tag_id=100639&active=true&closed=false&order=startTime&ascending=true&limit=20`;
+        
+        try {
+          const response = await axios.get(url);
+          if (!response.data?.length) continue;
+          
+          this.logger.info(`Found ${response.data.length} events for ${league.label || league.seriesId}`);
+          
+          for (const event of response.data) {
+            await this.processEvent(event);
           }
-
-          const matchData: SportsMatch = {
-            id: event.id,
-            conditionId: market.conditionId,
-            question: market.question || event.title,
-            outcomes,
-            outcomePrices,
-            tokenIds,
-            image: event.image || market.image || '',
-            slug: market.slug || '',
-            eventSlug: event.slug || '',
-            startTime: event.startTime,
-            volume: market.volume,
-            liquidity: market.liquidity,
-            status: 'LIVE',
-            correlation: 'ALIGNED'
-          };
-
-          this.matches.set(market.conditionId, matchData);
-
-          tokenIds.forEach(tid => {
-            if (!this.subscribedTokens.has(tid)) {
-              this.subscribeToken(tid);
-            }
-          });
+        } catch (e) {
+          // Some series may have no active events
         }
       }
-
-      this.logger.info(`📊 Tracking ${this.matches.size} global sports markets`);
-    } catch (e: any) {
-      this.logger.error(`Discovery error: ${e.message}`);
     }
+
+    // Method 2: FALLBACK - Also try direct events query without series_id
+    // This catches sports not in /sports endpoint (UFC, Boxing, F1, etc.)
+    const fallbackUrl = `${GAMMA_BASE}/events?tag_id=100639&active=true&closed=false&order=startTime&ascending=true&limit=50`;
+    const fallbackRes = await axios.get(fallbackUrl);
+    
+    if (fallbackRes.data?.length) {
+      this.logger.info(`Fallback found ${fallbackRes.data.length} additional events`);
+      for (const event of fallbackRes.data) {
+        await this.processEvent(event);
+      }
+    }
+
+    this.logger.info(`📊 Total: ${this.matches.size} sports markets tracked`);
+  } catch (e: any) {
+    this.logger.error(`Discovery error: ${e.message}`);
   }
+}
+
+private async processEvent(event: any) {
+  const market = event.markets?.[0];
+  if (!market?.clobTokenIds || !market?.conditionId) return;
+  if (this.matches.has(market.conditionId)) return; // Skip duplicates
+
+  try {
+    const tokenIds: string[] = JSON.parse(market.clobTokenIds);
+    const outcomes: string[] = JSON.parse(market.outcomes);
+    const outcomePrices: number[] = JSON.parse(market.outcomePrices).map(Number);
+
+    const matchData: SportsMatch = {
+      id: event.id,
+      conditionId: market.conditionId,
+      question: market.question || event.title,
+      outcomes,
+      outcomePrices,
+      tokenIds,
+      image: event.image || market.image || '',
+      slug: market.slug || '',
+      eventSlug: event.slug || '',
+      startTime: event.startTime,
+      volume: market.volume,
+      liquidity: market.liquidity,
+      status: 'SCOUTING',
+      correlation: 'UNVERIFIED'
+    };
+
+    this.matches.set(market.conditionId, matchData);
+
+    tokenIds.forEach(tid => {
+      if (!this.subscribedTokens.has(tid)) {
+        this.subscribeToken(tid);
+      }
+    });
+  } catch (e) {
+    // Skip malformed events
+  }
+}
 
   private connectWebSocket() {
     this.ws = new WebSocket(WS_URL);

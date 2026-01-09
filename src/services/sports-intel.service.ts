@@ -53,7 +53,13 @@ export class SportsIntelService extends EventEmitter {
     this.logger.info("⚽ Sports Intel: Starting...");
 
     await this.discoverSportsMarkets();
-    this.connectWebSocket();
+    
+    // Only start WebSocket in non-build environments
+    if (process.env.NODE_ENV !== 'production' || process.env.IS_BUILD !== 'true') {
+      this.connectWebSocket();
+    } else {
+      this.logger.info('Skipping WebSocket connection in build environment');
+    }
     
     // Re-discover every 30s for new markets
     this.discoveryInterval = setInterval(() => this.discoverSportsMarkets(), 30000);
@@ -134,6 +140,12 @@ export class SportsIntelService extends EventEmitter {
   }
 
   private connectWebSocket(attempt = 0) {
+    // Prevent WebSocket connection in build environment
+    if (process.env.IS_BUILD === 'true') {
+      this.logger.info('Skipping WebSocket connection in build environment');
+      return;
+    }
+
     if (this.isManuallyClosed || attempt >= MAX_RECONNECT_ATTEMPTS) {
       if (attempt >= MAX_RECONNECT_ATTEMPTS) {
         this.logger.error('Max reconnection attempts reached. Please check your network connection.');

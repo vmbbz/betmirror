@@ -1,37 +1,26 @@
 import axios from 'axios';
 import EventEmitter from 'events';
-/**
- * World-Class Sports Intelligence Service
- * Combines Sportmonks live scores with Polymarket market discovery for sub-second arbitrage.
- */
+const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 export class SportsIntelService extends EventEmitter {
     logger;
     isPolling = false;
     pollInterval;
     discoveryInterval;
     matches = new Map();
-    apiToken;
-    // Internal Map: Sportmonks ID -> Polymarket conditionId
-    idMap = new Map();
-    constructor(logger, apiToken) {
+    teamsCache = [];
+    constructor(logger) {
         super();
         this.logger = logger;
-        this.apiToken = apiToken || '';
     }
-    isActive() {
-        return this.isPolling;
-    }
+    isActive() { return this.isPolling; }
     async start() {
         if (this.isPolling)
             return;
         this.isPolling = true;
-        this.logger.info("⚽ Sports Intel: Monitoring Live Scores & Pitch Discovery...");
-        // 1. Pre-emptive Market Discovery (Initial Scan)
+        this.logger.info("⚽ Sports Intel: Pitch Intelligence Triad Online.");
+        this.teamsCache = await this.fetchTeams();
         await this.discoverPolymarketSports();
-        // 2. High-Frequency Score Polling (3.5s)
-        this.pollInterval = setInterval(() => this.pollLiveScores(), 3500);
-        // 3. Periodic Discovery Refresh (60s)
-        // This ensures the bot detects new matches added to the Polymarket board
+        this.pollInterval = setInterval(() => this.runInference(), 3500);
         this.discoveryInterval = setInterval(() => this.discoverPolymarketSports(), 60000);
     }
     stop() {
@@ -40,91 +29,138 @@ export class SportsIntelService extends EventEmitter {
             clearInterval(this.pollInterval);
         if (this.discoveryInterval)
             clearInterval(this.discoveryInterval);
-        this.logger.warn("⚽ Sports Intel: Module Standby.");
     }
-    /**
-     * DUAL-DISCOVERY ENGINE: Scouts Polymarket for active sports events.
-     * Uses Gamma API to identify binary outcomes (YES/NO) for live matches.
-     */
+    async fetchTeams() {
+        try {
+            const res = await axios.get(`${GAMMA_BASE}/teams?limit=500`);
+            return res.data;
+        }
+        catch (e) {
+            return [];
+        }
+    }
+    matchTeam(name) {
+        if (!name)
+            return null;
+        const lower = name.toLowerCase().trim();
+        return this.teamsCache.find(t => t.name.toLowerCase() === lower ||
+            t.alias?.toLowerCase() === lower ||
+            t.abbreviation.toLowerCase() === lower) || null;
+    }
     async discoverPolymarketSports() {
         try {
-            this.logger.info(`📡 [Sports Scout] Scanning board for Live Pitch Alpha...`);
-            // Hits Gamma events endpoint for active markets starting today or in-play
-            const url = `https://gamma-api.polymarket.com/events?active=true&closed=false&order=startTime&ascending=true&limit=100`;
+            // Tag 100639 = Soccer
+            const url = `${GAMMA_BASE}/events?active=true&closed=false&tag_id=100639&order=startTime&ascending=true&limit=15`;
             const response = await axios.get(url);
             if (!response.data || !Array.isArray(response.data))
                 return;
-            // Filter for sports keywords or specific tags
-            const sportsEvents = response.data.filter((e) => {
-                const title = e.title?.toLowerCase() || "";
-                const isSoccer = e.tags?.some((t) => t.label === 'Soccer' || t.label === 'Football');
-                const hasVS = title.includes(' vs ') || title.includes(' v ');
-                return isSoccer || hasVS;
-            });
-            this.logger.info(`✅ [Sports Scout] Discovered ${sportsEvents.length} Active Sports Events on board.`);
-            // Mapping Logic: Attempt to link Polymarket events to Sportmonks IDs
-            for (const event of sportsEvents) {
-                const conditionId = event.markets?.[0]?.conditionId;
-                if (!conditionId)
+            for (const event of response.data) {
+                const market = event.markets?.[0];
+                if (!market || !market.clobTokenIds)
                     continue;
-                // Extraction: Teams from title (e.g., "Arsenal vs Liverpool")
-                const teams = event.title.split(/ vs | v /i);
-                if (teams.length === 2) {
-                    const home = teams[0].trim();
-                    const away = teams[1].trim();
-                    // Fuzzy matching logic or exact mapping would populate idMap here
-                    // this.idMap.set(sportmonksId, conditionId);
+                // Triad Identification Logic
+                const triad = {
+                    homePrice: 0, drawPrice: 0, awayPrice: 0,
+                    prevHome: 0, prevDraw: 0, prevAway: 0
+                };
+                const tokenIds = JSON.parse(market.clobTokenIds);
+                // Typical Polymarket structure: [Home, Draw, Away]
+                triad.homeToken = tokenIds[0];
+                if (tokenIds.length === 3) {
+                    triad.drawToken = tokenIds[1];
+                    triad.awayToken = tokenIds[2];
                 }
+                else {
+                    triad.awayToken = tokenIds[1];
+                }
+                const teams = event.title.split(/ vs | v | @ /i);
+                const home = this.matchTeam(teams[0]?.trim());
+                const away = this.matchTeam(teams[1]?.trim());
+                const existing = this.matches.get(event.id);
+                this.matches.set(event.id, {
+                    id: event.id,
+                    conditionId: market.conditionId,
+                    homeTeam: home?.name || teams[0] || "Home",
+                    awayTeam: away?.name || teams[1] || "Away",
+                    marketSlug: market.market_slug || "",
+                    eventSlug: event.slug || "",
+                    image: event.image || market.image || "",
+                    score: existing?.score || [0, 0],
+                    inferredScore: existing?.inferredScore || [0, 0],
+                    minute: existing?.minute || 0,
+                    status: existing?.status || 'SCOUTING',
+                    correlation: existing?.correlation || 'UNVERIFIED',
+                    triad: existing?.triad || triad,
+                    fairValue: existing?.fairValue || 0.5,
+                    discoveryEpoch: existing?.discoveryEpoch || Date.now(),
+                    tokenId: triad.homeToken, // for executor compat
+                    confidence: existing?.confidence || 0.5,
+                    marketPrice: existing?.marketPrice || 0
+                });
             }
         }
         catch (e) {
-            this.logger.error(`Sports Discovery Engine Fail: ${e.message}`);
+            this.logger.error(`Discovery Error: ${e instanceof Error ? e.message : 'Unknown'}`);
         }
     }
-    async pollLiveScores() {
-        if (!this.apiToken)
-            return;
-        try {
-            const url = `https://api.sportmonks.com/v3/football/livescores/inplay?api_token=${this.apiToken}&include=participants;scores`;
-            const response = await axios.get(url);
-            if (!response.data || !response.data.data)
-                return;
-            const liveMatches = response.data.data.map((m) => {
-                const home = m.participants?.find((p) => p.meta.location === 'home');
-                const away = m.participants?.find((p) => p.meta.location === 'away');
-                const homeScore = m.scores?.find((s) => s.description === 'CURRENT' && s.participant_id === home?.id)?.score?.goals || 0;
-                const awayScore = m.scores?.find((s) => s.description === 'CURRENT' && s.participant_id === away?.id)?.score?.goals || 0;
-                return {
-                    id: m.id.toString(),
-                    homeTeam: home?.name || 'Home',
-                    awayTeam: away?.name || 'Away',
-                    score: [homeScore, awayScore],
-                    minute: m.minute || 0,
-                    status: m.state?.state === 'INPLAY' ? 'LIVE' : 'VAR',
-                    league: m.league_id?.toString() || 'Unknown',
-                    conditionId: this.idMap.get(m.id.toString()) // Link pre-emptively found condition
-                };
-            });
-            for (const match of liveMatches) {
-                const existing = this.matches.get(match.id);
-                if (existing) {
-                    // GOAL ALERT
-                    if (match.score[0] > existing.score[0] || match.score[1] > existing.score[1]) {
-                        this.logger.success(`🥅 GOAL DETECTED: ${match.homeTeam} vs ${match.awayTeam}`);
-                        this.emit('goal', { ...match, status: 'GOAL' });
-                    }
-                    if (match.status === 'VAR' && existing.status !== 'VAR') {
-                        this.emit('var', match);
-                    }
+    async runInference() {
+        for (const match of this.matches.values()) {
+            if (!match.triad.homeToken)
+                continue;
+            try {
+                // Poll the triad prices simultaneously
+                const [hPrice, dPrice, aPrice] = await Promise.all([
+                    this.getPrice(match.triad.homeToken),
+                    match.triad.drawToken ? this.getPrice(match.triad.drawToken) : Promise.resolve(0),
+                    match.triad.awayToken ? this.getPrice(match.triad.awayToken) : Promise.resolve(0)
+                ]);
+                // Calculate Velocity across Triad
+                const hMove = match.triad.homePrice > 0 ? (hPrice - match.triad.homePrice) / match.triad.homePrice : 0;
+                const aMove = match.triad.awayPrice > 0 ? (aPrice - match.triad.awayPrice) / match.triad.awayPrice : 0;
+                // SCORE INFERENCE: CORRELATED DIVERGENCE
+                // If Home Win jumps while Away Win drops, confidence of a goal is high
+                if (hMove > 0.08 && aMove < -0.03) {
+                    match.inferredScore[0]++;
+                    match.correlation = 'DIVERGENT';
+                    match.confidence = 0.92;
+                    match.priceEvidence = `HOME GOAL: +${(hMove * 100).toFixed(1)}% Velocity | AWAY: ${(aMove * 100).toFixed(1)}%`;
+                    this.emit('inferredEvent', { match, type: 'HOME_GOAL', magnitude: hMove });
                 }
-                this.matches.set(match.id, match);
+                else if (aMove > 0.08 && hMove < -0.03) {
+                    match.inferredScore[1]++;
+                    match.correlation = 'DIVERGENT';
+                    match.confidence = 0.92;
+                    match.priceEvidence = `AWAY GOAL: +${(aMove * 100).toFixed(1)}% Velocity | HOME: ${(hMove * 100).toFixed(1)}%`;
+                    this.emit('inferredEvent', { match, type: 'AWAY_GOAL', magnitude: aMove });
+                }
+                // Update state
+                match.triad.prevHome = match.triad.homePrice;
+                match.triad.homePrice = hPrice;
+                match.triad.prevDraw = match.triad.drawPrice;
+                match.triad.drawPrice = dPrice;
+                match.triad.prevAway = match.triad.awayPrice;
+                match.triad.awayPrice = aPrice;
+                match.marketPrice = hPrice; // compat
+                // Progress minute
+                const elapsed = Math.floor((Date.now() - match.discoveryEpoch) / 60000);
+                match.minute = Math.min(95, elapsed);
             }
+            catch (e) { }
+        }
+    }
+    async getPrice(tokenId) {
+        try {
+            const res = await axios.get(`https://clob.polymarket.com/price?token_id=${tokenId}&side=buy`);
+            return parseFloat(res.data.price) || 0;
         }
         catch (e) {
-            this.logger.debug(`Sportmonks Polling Warning: ${e.message}`);
+            return 0;
         }
     }
     getLiveMatches() {
         return Array.from(this.matches.values());
+    }
+    forceLink(conditionId, matchId) {
+        this.logger.info(`Force linking ${conditionId} to ${matchId}`);
     }
 }

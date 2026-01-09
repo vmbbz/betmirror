@@ -681,7 +681,8 @@ export class BotEngine {
             }
 
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
-            this.sportsIntel = new SportsIntelService(engineLogger, this.config.sportmonksApiKey);
+            // FIX: Removed second argument (API key) to SportsIntelService constructor because it only expects the logger.
+            this.sportsIntel = new SportsIntelService(engineLogger);
             this.sportsRunner = new SportsRunnerService(this.exchange, this.sportsIntel, this.executor as any, engineLogger);
             
             this.arbScanner.on('opportunity', async (opp: MarketOpportunity) => {

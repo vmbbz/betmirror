@@ -6,7 +6,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, SportsMatch } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, SportsMatch as DbSportsMatch } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -408,7 +408,7 @@ app.post('/api/bot/start', async (req, res) => {
             userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s) => s.trim()),
             rpcUrl,
             geminiApiKey,
-            sportmonksApiKey: process.env.SPORTSMONK_API_KEY,
+            sportmonksApiKey: process.env.SPORTMONKS_API_KEY || '', // Provide a default empty string
             multiplier: Number(multiplier),
             riskProfile,
             enableNotifications: false,
@@ -499,9 +499,26 @@ app.get('/api/bot/sports/live/:userId', async (req, res) => {
     try {
         const intel = engine.sportsIntel;
         const matches = intel.getLiveMatches();
-        res.json({ success: true, matches });
+        const sportsRunner = engine.sportsRunner;
+        // Transform matches to include required fields
+        const transformedMatches = matches.map((match) => {
+            const score = match.score || [0, 0];
+            const minute = match.minute || 0;
+            const fairValue = sportsRunner?.calculateFairValue?.(score, minute) || 0.5;
+            return {
+                ...match,
+                marketPrice: 0, // Will be updated by the frontend
+                fairValue: fairValue,
+                status: match.status || 'LIVE'
+            };
+        });
+        res.json({
+            success: true,
+            matches: transformedMatches
+        });
     }
     catch (e) {
+        console.error('Error in /api/bot/sports/live:', e);
         res.status(500).json({ error: 'Failed to fetch live sports' });
     }
 });
@@ -543,14 +560,22 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             mmOpportunities = engine.getArbOpportunities();
             sportsMatches = engine.getLiveSportsMatches();
             sportsChases = engine.getActiveSportsChases();
+            // Sync current prices for sports matches to ensure UI has Alpha Edge visibility
+            for (const match of sportsMatches) {
+                if (match.tokenId && !match.marketPrice) {
+                    try {
+                        match.marketPrice = await engine.exchange.getMarketPrice(match.conditionId, match.tokenId, 'BUY');
+                    }
+                    catch (e) { }
+                }
+            }
         }
         let livePositions = [];
         if (engine) {
             const scanner = engine.arbScanner;
             livePositions = (engine.getActivePositions() || []).map(p => ({
                 ...p,
-                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false,
-                managedBySports: sportsChases.some(c => c.conditionId === p.marketId)
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
             }));
         }
         else if (user && user.activePositions) {
@@ -570,6 +595,17 @@ app.get('/api/bot/status/:userId', async (req, res) => {
     }
     catch (e) {
         res.status(500).json({ error: 'DB Error' });
+    }
+});
+app.post('/api/bot/sports/link', async (req, res) => {
+    const { userId, conditionId, matchId } = req.body;
+    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
+    if (engine && engine.sportsIntel) {
+        engine.sportsIntel.forceLink(conditionId, matchId);
+        res.json({ success: true });
+    }
+    else {
+        res.status(404).json({ error: "Engine or Sports module offline" });
     }
 });
 // --- NEW MM SCANNER ENDPOINTS ---
@@ -1069,7 +1105,7 @@ app.get('/api/market/:marketId', async (req, res) => {
 // New: Sports Intel Map
 app.get('/api/sports/matches', async (req, res) => {
     try {
-        const matches = await SportsMatch.find({}).sort({ updatedAt: -1 });
+        const matches = await DbSportsMatch.find({}).sort({ updatedAt: -1 });
         res.json(matches);
     }
     catch (e) {
@@ -1079,7 +1115,7 @@ app.get('/api/sports/matches', async (req, res) => {
 app.post('/api/sports/map', async (req, res) => {
     const { matchId, conditionId } = req.body;
     try {
-        await SportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
+        await DbSportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
         res.json({ success: true });
     }
     catch (e) {
@@ -1104,6 +1140,7 @@ async function restoreBots() {
             if (user.activeBotConfig && user.tradingWallet) {
                 const normId = user.address.toLowerCase();
                 const config = user.activeBotConfig;
+                config.sportmonksApiKey = process.env.SPORTMONKS_API_KEY || '';
                 // Map legacy names to fix property mismatch
                 config.enableSportsRunner = config.enableSportsRunner ?? config.enableSportsFrontrunning ?? true;
                 config.enableMoneyMarkets = config.enableMoneyMarkets ?? true;

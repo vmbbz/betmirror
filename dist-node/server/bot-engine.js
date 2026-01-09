@@ -552,7 +552,8 @@ export class BotEngine {
                 throw new Error("SportsRunner enabled but Sportmonks API Key is missing. Check your configuration.");
             }
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
-            this.sportsIntel = new SportsIntelService(engineLogger, this.config.sportmonksApiKey);
+            // FIX: Removed second argument (API key) to SportsIntelService constructor because it only expects the logger.
+            this.sportsIntel = new SportsIntelService(engineLogger);
             this.sportsRunner = new SportsRunnerService(this.exchange, this.sportsIntel, this.executor, engineLogger);
             this.arbScanner.on('opportunity', async (opp) => {
                 if (this.config.enableMoneyMarkets && this.executor) {
@@ -1002,6 +1003,22 @@ export class BotEngine {
             .filter(o => o.category === category) || [];
     }
     // Sports Runner Accessors
-    getLiveSportsMatches() { return this.sportsIntel?.getLiveMatches() || []; }
+    getLiveSportsMatches() {
+        const rawMatches = this.sportsIntel?.getLiveMatches() || [];
+        return rawMatches;
+    }
+    async syncSportsAlpha() {
+        if (!this.exchange || !this.sportsIntel)
+            return;
+        const matches = this.sportsIntel.getLiveMatches();
+        for (const m of matches) {
+            if (m.tokenId) {
+                try {
+                    m.marketPrice = await this.exchange.getMarketPrice(m.conditionId || "", m.tokenId, 'BUY');
+                }
+                catch (e) { }
+            }
+        }
+    }
     getActiveSportsChases() { return Array.from(this.sportsRunner?.activeChases?.values() || []); }
 }

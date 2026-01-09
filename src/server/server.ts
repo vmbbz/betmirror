@@ -612,9 +612,10 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             
             // Sync current prices for sports matches to ensure UI has Alpha Edge visibility
             for (const match of sportsMatches) {
-                if (match.tokenId && !match.marketPrice) {
+                if (match.tokenIds?.length > 0 && !match.marketPrice) {
                     try {
-                        match.marketPrice = await (engine as any).exchange.getMarketPrice(match.conditionId, match.tokenId, 'BUY');
+                        // Use the first token ID from the array
+                        match.marketPrice = await (engine as any).exchange.getMarketPrice(match.conditionId, match.tokenIds[0], 'BUY');
                     } catch (e) {}
                 }
             }

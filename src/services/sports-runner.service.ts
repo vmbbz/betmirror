@@ -1,147 +1,180 @@
-
-import { IExchangeAdapter } from '../adapters/interfaces.js';
+import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
 import { Logger } from '../utils/logger.util.js';
 import { SportsIntelService, SportsMatch } from './sports-intel.service.js';
-import { TradeExecutorService } from './trade-executor.service.js';
+import EventEmitter from 'events';
 
 interface ActiveScalp {
-    matchKey: string;
-    conditionId: string;
-    tokenId: string;
-    entryPrice: number;
-    targetPrice: number;
-    startTime: number;
-    lastBid: number;
-    stallTicks: number;
-    shares: number;
+  matchId: string;
+  conditionId: string;
+  tokenId: string;
+  outcomeIndex: number;
+  entryPrice: number;
+  targetPrice: number;
+  startTime: number;
+  shares: number;
+  stallTicks: number;
+  lastPrice: number;
 }
 
-export class SportsRunnerService {
-    private activeScalps: Map<string, ActiveScalp> = new Map();
-    private monitorInterval?: NodeJS.Timeout;
+export class SportsRunnerService extends EventEmitter {
+  private activeScalps: Map<string, ActiveScalp> = new Map();
+  private monitorInterval?: NodeJS.Timeout;
+  private client: ClobClient;
 
-    constructor(
-        private adapter: IExchangeAdapter,
-        private intel: SportsIntelService,
-        private executor: TradeExecutorService,
-        private logger: Logger
-    ) {
-        this.setupEvents();
-        this.monitorInterval = setInterval(() => this.evaluateScalpExits(), 5000);
+  constructor(
+    private intel: SportsIntelService,
+    private logger: Logger,
+    client: ClobClient
+  ) {
+    super();
+    this.client = client;
+    this.setupEvents();
+  }
+
+  public start() {
+    this.monitorInterval = setInterval(() => this.evaluateExits(), 5000);
+    this.logger.info("🏃 Sports Runner: Monitoring price spikes...");
+  }
+
+  public stop() {
+    if (this.monitorInterval) clearInterval(this.monitorInterval);
+  }
+
+  private setupEvents() {
+    // Listen for price updates from SportsIntelService
+    this.intel.on('priceUpdate', (data) => this.handlePriceSpike(data));
+  }
+
+  private async handlePriceSpike(data: {
+    match: SportsMatch;
+    outcome: string;
+    oldPrice: number;
+    newPrice: number;
+    change: number;
+  }) {
+    const { match, outcome, oldPrice, newPrice, change } = data;
+
+    // Only trigger on significant spikes (>8% move)
+    if (Math.abs(change) < 0.08) return;
+
+    // Prevent double entry
+    if (this.activeScalps.has(match.conditionId)) return;
+
+    // Find the token index for this outcome
+    const outcomeIndex = match.outcomes.indexOf(outcome);
+    if (outcomeIndex === -1) return;
+
+    const tokenId = match.tokenIds[outcomeIndex];
+    const direction = change > 0 ? 'SPIKE UP' : 'SPIKE DOWN';
+
+    this.logger.info(`🎯 ${direction}: ${outcome} in ${match.question} | ${(change * 100).toFixed(1)}%`);
+
+    // Only buy on upward spikes (inferred goal/event)
+    if (change < 0.08) return;
+
+    try {
+      // Use FOK (Fill-Or-Kill) for immediate execution
+      const result = await this.client.createAndPostMarketOrder(
+        {
+          tokenID: tokenId,
+          amount: 50, // $50 USD
+          side: Side.BUY,
+          price: newPrice * 1.02, // 2% slippage tolerance
+        },
+        { tickSize: "0.01" },
+        OrderType.FOK
+      );
+
+      if (result.success) {
+        const sharesFilled = parseFloat(result.takingAmount) / 1e6;
+        const priceFilled = parseFloat(result.makingAmount) / parseFloat(result.takingAmount);
+
+        this.activeScalps.set(match.conditionId, {
+          matchId: match.id,
+          conditionId: match.conditionId,
+          tokenId,
+          outcomeIndex,
+          entryPrice: priceFilled,
+          targetPrice: newPrice * 1.05, // 5% profit target
+          startTime: Date.now(),
+          shares: sharesFilled,
+          stallTicks: 0,
+          lastPrice: newPrice,
+        });
+
+        this.logger.success(`📈 POSITION OPEN: ${sharesFilled.toFixed(2)} shares @ ${priceFilled.toFixed(3)}`);
+      } else {
+        this.logger.warn(`❌ FOK REJECTED: ${result.errorMsg}`);
+      }
+    } catch (e: any) {
+      this.logger.error(`Entry failed: ${e.message}`);
     }
+  }
 
-    private setupEvents() {
-        this.intel.on('inferredEvent', (data) => this.handleSpikeEntry(data));
+  private async evaluateExits() {
+    for (const [conditionId, scalp] of this.activeScalps.entries()) {
+      const match = this.intel.getLiveMatches().find(m => m.conditionId === conditionId);
+      if (!match) continue;
+
+      const currentPrice = match.outcomePrices[scalp.outcomeIndex];
+      const elapsed = (Date.now() - scalp.startTime) / 1000;
+
+      // 1. Target profit exit
+      if (currentPrice >= scalp.targetPrice) {
+        await this.liquidate(conditionId, scalp, currentPrice, "TARGET HIT");
+        continue;
+      }
+
+      // 2. Momentum stall exit
+      if (currentPrice <= scalp.lastPrice) {
+        scalp.stallTicks++;
+      } else {
+        scalp.stallTicks = 0;
+      }
+      scalp.lastPrice = currentPrice;
+
+      if (scalp.stallTicks >= 3 && elapsed > 30) {
+        await this.liquidate(conditionId, scalp, currentPrice, "MOMENTUM STALL");
+        continue;
+      }
+
+      // 3. Time stop (2 mins max hold)
+      if (elapsed >= 120) {
+        await this.liquidate(conditionId, scalp, currentPrice, "TIME STOP");
+        continue;
+      }
+
+      // 4. Stop loss (-5%)
+      if (currentPrice < scalp.entryPrice * 0.95) {
+        await this.liquidate(conditionId, scalp, currentPrice, "STOP LOSS");
+        continue;
+      }
     }
+  }
 
-    private async handleSpikeEntry(data: { match: SportsMatch, type: string, magnitude: number }) {
-        const { match } = data;
-        const matchKey = `${match.homeTeam}-${match.awayTeam}`;
-        
-        // Prevent double entry
-        if (this.activeScalps.has(matchKey) || match.confidence < 0.8) return;
+  private async liquidate(conditionId: string, scalp: ActiveScalp, exitPrice: number, reason: string) {
+    this.logger.info(`🔄 EXIT (${reason}): Selling ${scalp.shares} shares...`);
 
-        // Frontrunning Edge calculation
-        const edge = match.fairValue - (match.marketPrice || 0);
-        
-        if (edge < 0.10) {
-            this.logger.info(`🛡️ Edge too thin ($${edge.toFixed(2)}). Awaiting Alpha Expansion.`);
-            return;
-        }
+    try {
+      // Use FAK (Fill-And-Kill) to get best available price
+      const result = await this.client.createAndPostMarketOrder(
+        {
+          tokenID: scalp.tokenId,
+          amount: scalp.shares, // For SELL, amount = shares
+          side: Side.SELL,
+          price: exitPrice * 0.98, // 2% slippage tolerance
+        },
+        { tickSize: "0.01" },
+        OrderType.FAK
+      );
 
-        this.logger.success(`🎯 [ALPHA WINDOW] Frontrunning Edge detected: $${edge.toFixed(2)}. Sweeping stale book for ${match.homeTeam}...`);
-
-        try {
-            // ENTER FIRST: Use Fill-or-Kill (FOK) to ensure we only get the stale price
-            const result = await this.executor.createOrder({
-                marketId: match.conditionId,
-                tokenId: match.tokenId!,
-                outcome: 'YES',
-                side: 'BUY',
-                sizeUsd: 100, 
-                orderType: 'FOK'
-            });
-
-            if (result.success && result.sharesFilled > 0) {
-                this.activeScalps.set(matchKey, {
-                    matchKey,
-                    conditionId: match.conditionId,
-                    tokenId: match.tokenId!,
-                    entryPrice: result.priceFilled,
-                    targetPrice: match.fairValue * 0.98,
-                    startTime: Date.now(),
-                    lastBid: result.priceFilled,
-                    stallTicks: 0,
-                    shares: result.sharesFilled
-                });
-                this.logger.info(`📈 [CAPTURE] Position active. Target: $${(match.fairValue * 0.98).toFixed(2)}`);
-            } else {
-                this.logger.warn(`❌ [FOK REJECTED] Market moved or order book cleared. Edge lost.`);
-            }
-        } catch (e: any) {
-            this.logger.error(`Arb entry failed: ${e.message}`);
-        }
+      if (result.success) {
+        const pnl = (exitPrice - scalp.entryPrice) * scalp.shares;
+        this.logger.success(`💰 CLOSED: PnL $${pnl.toFixed(2)} | Reason: ${reason}`);
+        this.activeScalps.delete(conditionId);
+      }
+    } catch (e: any) {
+      this.logger.error(`Liquidation failed: ${e.message}`);
     }
-
-    private async evaluateScalpExits() {
-        if (this.activeScalps.size === 0) return;
-
-        for (const [key, scalp] of this.activeScalps.entries()) {
-            try {
-                const currentBid = await this.adapter.getMarketPrice(scalp.conditionId, scalp.tokenId, 'SELL');
-                const elapsed = (Date.now() - scalp.startTime) / 1000;
-
-                // 1. Target Profit Exit
-                if (currentBid >= scalp.targetPrice) {
-                    await this.liquidate(key, currentBid, "Target Reached");
-                    continue;
-                }
-
-                // 2. Momentum Stall Exit
-                if (currentBid <= scalp.lastBid) scalp.stallTicks++;
-                else scalp.stallTicks = 0;
-                scalp.lastBid = currentBid;
-
-                if (scalp.stallTicks >= 3 && elapsed > 30) {
-                    await this.liquidate(key, currentBid, "Momentum Stall");
-                    continue;
-                }
-
-                // 3. Emergency Time Exit (2 mins)
-                if (elapsed >= 120) {
-                    await this.liquidate(key, currentBid, "Time Stop");
-                    continue;
-                }
-            } catch (e) {}
-        }
-    }
-
-    private async liquidate(key: string, exitPrice: number, reason: string) {
-        const scalp = this.activeScalps.get(key);
-        if (!scalp) return;
-
-        this.logger.info(`🔄 [EXIT] ${reason} for ${scalp.matchKey}. Liquidating via FAK...`);
-        
-        try {
-            // VERIFY LATER: Check scores via external API here if needed to hedge
-            
-            const result = await this.adapter.createOrder({
-                marketId: scalp.conditionId,
-                tokenId: scalp.tokenId,
-                outcome: 'YES',
-                side: 'SELL',
-                sizeUsd: 0,
-                sizeShares: scalp.shares,
-                orderType: 'FAK' // Capture all available depth then kill
-            });
-
-            if (result.success) {
-                const pnl = (exitPrice - scalp.entryPrice) * scalp.shares;
-                this.logger.success(`💰 [COMPLETE] PnL: $${pnl.toFixed(2)} | Reason: ${reason}`);
-                this.activeScalps.delete(key);
-            }
-        } catch (e: any) {
-            this.logger.error(`Liquidation failed: ${e.message}`);
-        }
-    }
+  }
 }

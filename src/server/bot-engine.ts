@@ -24,6 +24,10 @@ import { SportsIntelService, SportsMatch } from '../services/sports-intel.servic
 import { SportsRunnerService } from '../services/sports-runner.service.js';
 import crypto from 'crypto';
 
+interface SportsMatchWithPrice extends SportsMatch {
+    marketPrice?: number;
+}
+
 export interface BotConfig {
     userId: string;
     walletConfig?: TradingWalletConfig;
@@ -154,10 +158,10 @@ export class BotEngine {
         }
 
         const sportsEnabled = newConfig.enableSportsRunner ?? newConfig.enableSportsFrontrunning;
-        if (sportsEnabled === false && this.sportsIntel?.isActive()) {
+        if (sportsEnabled === false && this.sportsIntel?.isActive) {
             this.addLog('warn', '⏸️ SportsRunner Module Standby.');
             this.sportsIntel.stop();
-        } else if (sportsEnabled === true && this.sportsIntel && !this.sportsIntel.isActive()) {
+} else if (sportsEnabled === true && this.sportsIntel && !this.sportsIntel.isActive) {
             this.addLog('success', '▶️ SportsRunner Module Online.');
             this.sportsIntel.start();
         }
@@ -683,7 +687,9 @@ export class BotEngine {
             this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
             // FIX: Removed second argument (API key) to SportsIntelService constructor because it only expects the logger.
             this.sportsIntel = new SportsIntelService(engineLogger);
-            this.sportsRunner = new SportsRunnerService(this.exchange, this.sportsIntel, this.executor as any, engineLogger);
+            const clobClient = this.exchange.getRawClient();
+            if (!clobClient) throw new Error("CLOB client not available");
+            this.sportsRunner = new SportsRunnerService(this.sportsIntel, engineLogger, clobClient);
             
             this.arbScanner.on('opportunity', async (opp: MarketOpportunity) => {
                 if (this.config.enableMoneyMarkets && this.executor) {
@@ -1197,19 +1203,26 @@ export class BotEngine {
     }
     
     // Sports Runner Accessors
-    public getLiveSportsMatches(): SportsMatch[] { 
+    public getLiveSportsMatches(): SportsMatchWithPrice[] { 
         const rawMatches = this.sportsIntel?.getLiveMatches() || []; 
         return rawMatches;
     }
 
     public async syncSportsAlpha(): Promise<void> {
         if (!this.exchange || !this.sportsIntel) return;
-        const matches = this.sportsIntel.getLiveMatches();
-        for (const m of matches) {
-            if (m.tokenId) {
+        const matches = this.sportsIntel.getLiveMatches() as SportsMatchWithPrice[];
+        for (const match of matches) {
+            if (match.tokenIds?.[0]) {
                 try {
-                    m.marketPrice = await this.exchange.getMarketPrice(m.conditionId || "", m.tokenId, 'BUY');
-                } catch(e) {}
+                    match.marketPrice = await this.exchange.getMarketPrice(
+                        match.conditionId, 
+                        match.tokenIds[0], 
+                        'BUY'
+                    );
+                } catch (e: unknown) {
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    this.addLog('warn', `Failed to sync price for match ${match.id}: ${errorMessage}`);
+                }
             }
         }
     }

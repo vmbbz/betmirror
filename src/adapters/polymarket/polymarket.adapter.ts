@@ -64,13 +64,14 @@ interface EnrichedPositionData {
     updatedAt?: Date;
 }
 
-interface MarketMetadata {
+export interface MarketMetadata {
     question: string;
     image: string;
     isResolved: boolean;
     acceptingOrders?: boolean;
-    marketSlug?: string;
-    eventSlug?: string;
+    marketSlug: string;
+    eventSlug: string;
+    conditionId: string;
     updatedAt?: Date;
     [key: string]: any;
 }

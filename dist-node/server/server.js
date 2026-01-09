@@ -156,9 +156,7 @@ app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'ok',
         db: dbStatusMap[dbState] || 'unknown',
-        uptime: process.uptime(),
-        activeBots: ACTIVE_BOTS.size,
-        timestamp: new Date()
+        activeBots: ACTIVE_BOTS.size
     });
 });
 // 1. Check Status / Init
@@ -408,7 +406,7 @@ app.post('/api/bot/start', async (req, res) => {
             userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s) => s.trim()),
             rpcUrl,
             geminiApiKey,
-            sportmonksApiKey: process.env.SPORTMONKS_API_KEY || '', // Provide a default empty string
+            sportmonksApiKey: process.env.SPORTMONKS_API_KEY || '',
             multiplier: Number(multiplier),
             riskProfile,
             enableNotifications: false,
@@ -489,59 +487,66 @@ app.post('/api/bot/update', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-app.get('/api/bot/sports/live/:userId', async (req, res) => {
+app.get('/api/bot/status/:userId', async (req, res) => {
     const { userId } = req.params;
     const normId = userId.toLowerCase();
     const engine = ACTIVE_BOTS.get(normId);
-    if (!engine || !engine.sportsIntel) {
-        return res.json({ success: true, matches: [] });
-    }
     try {
-        const intel = engine.sportsIntel;
-        const matches = intel.getLiveMatches();
-        const sportsRunner = engine.sportsRunner;
-        // Transform matches to include required fields
-        const transformedMatches = matches.map((match) => {
-            const score = match.score || [0, 0];
-            const minute = match.minute || 0;
-            const fairValue = sportsRunner?.calculateFairValue?.(score, minute) || 0.5;
-            return {
-                ...match,
-                marketPrice: 0, // Will be updated by the frontend
-                fairValue: fairValue,
-                status: match.status || 'LIVE'
-            };
-        });
+        const user = await User.findOne({ address: normId }).lean();
+        const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
+        const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
+        let mmOpportunities = [];
+        let sportsMatches = [];
+        let sportsChases = [];
+        if (engine) {
+            mmOpportunities = engine.getArbOpportunities();
+            sportsMatches = engine.getLiveSportsMatches();
+            sportsChases = engine.getActiveSportsChases();
+            for (const match of sportsMatches) {
+                if (match.tokenIds?.length > 0 && !match.marketPrice) {
+                    try {
+                        match.marketPrice = await engine.exchange.getMarketPrice(match.conditionId, match.tokenIds[0], 'BUY');
+                    }
+                    catch (e) { }
+                }
+            }
+        }
+        let livePositions = [];
+        if (engine) {
+            const scanner = engine.arbScanner;
+            livePositions = (engine.getActivePositions() || []).map(p => ({
+                ...p,
+                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
+            }));
+        }
+        else if (user && user.activePositions) {
+            livePositions = user.activePositions;
+        }
         res.json({
-            success: true,
-            matches: transformedMatches
+            isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
+            logs: dbLogs.map(l => ({ id: l._id.toString(), time: l.timestamp.toLocaleTimeString(), type: l.type, message: l.message })),
+            history: history.map((t) => ({ ...t, id: t._id.toString() })),
+            positions: livePositions,
+            stats: user?.stats || null,
+            config: user?.activeBotConfig || null,
+            mmOpportunities,
+            sportsMatches,
+            sportsChases
         });
     }
     catch (e) {
-        console.error('Error in /api/bot/sports/live:', e);
-        res.status(500).json({ error: 'Failed to fetch live sports' });
+        res.status(500).json({ error: 'DB Error' });
     }
 });
-// Trigger a forced market discovery scan
-app.post('/api/bot/refresh', async (req, res) => {
-    const { userId } = req.body;
-    if (!userId)
-        return res.status(400).json({ error: "Missing userId" });
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    try {
-        if (engine && engine.arbScanner) {
-            await engine.arbScanner.forceRefresh();
-            res.json({ success: true, message: "Manual scan triggered" });
-        }
-        else {
-            // If bot not running, we could still trigger a global scanner refresh if one existed,
-            // but for now we just return error.
-            res.status(404).json({ error: "Bot engine not running" });
-        }
+app.post('/api/bot/sports/link', async (req, res) => {
+    const { userId, conditionId, matchId } = req.body;
+    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
+    if (engine && engine.sportsIntel) {
+        engine.sportsIntel.forceLink(conditionId, matchId);
+        res.json({ success: true });
     }
-    catch (e) {
-        res.status(500).json({ error: e.message });
+    else {
+        res.status(404).json({ error: "Engine or Sports module offline" });
     }
 });
 // 7. Bot Status & Logs
@@ -607,87 +612,6 @@ app.post('/api/bot/sports/link', async (req, res) => {
     else {
         res.status(404).json({ error: "Engine or Sports module offline" });
     }
-});
-// --- NEW MM SCANNER ENDPOINTS ---
-app.post('/api/bot/mm/add-market', async (req, res) => {
-    const { userId, conditionId, slug } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine)
-        return res.status(404).json({ error: "Engine offline" });
-    try {
-        const success = conditionId
-            ? await engine.addMarketToMM(conditionId)
-            : await engine.addMarketBySlug(slug);
-        res.json({ success });
-    }
-    catch (error) {
-        console.error('Error adding market:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to add market'
-        });
-    }
-});
-// In src/server/server.ts, update the /api/bot/mm/bookmark endpoint
-app.post('/api/bot/mm/bookmark', async (req, res) => {
-    const { userId, marketId, isBookmarked } = req.body;
-    console.log('📌 Bookmark request:', { userId, marketId, isBookmarked });
-    if (!userId) {
-        console.error('❌ No userId provided in request');
-        return res.status(400).json({ error: "userId is required" });
-    }
-    if (marketId === undefined) {
-        console.error('❌ No marketId provided in request');
-        return res.status(400).json({ error: "marketId is required" });
-    }
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) {
-        console.error(`❌ No engine found for user: ${userId}`);
-        return res.status(404).json({ error: "Trading engine is not running. Please start the bot first." });
-    }
-    try {
-        console.log(`🔄 ${isBookmarked ? 'Bookmarking' : 'Unbookmarking'} market:`, marketId);
-        // Update in-memory state
-        if (isBookmarked) {
-            engine.bookmarkMarket(marketId);
-        }
-        else {
-            engine.unbookmarkMarket(marketId);
-        }
-        // Update database
-        const update = isBookmarked
-            ? { $addToSet: { bookmarkedMarkets: marketId } }
-            : { $pull: { bookmarkedMarkets: marketId } };
-        await User.updateOne({ address: normId }, update);
-        console.log(`✅ Successfully ${isBookmarked ? 'bookmarked' : 'unbookmarked'} market:`, marketId);
-        res.json({ success: true });
-    }
-    catch (error) {
-        console.error('❌ Error updating bookmark:', error);
-        res.status(500).json({
-            error: 'Failed to update bookmark',
-            details: error instanceof Error ? error.message : String(error)
-        });
-    }
-});
-app.get('/api/bot/mm/bookmarks', async (req, res) => {
-    const { userId } = req.query;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine)
-        return res.status(404).json({ error: "Engine offline" });
-    res.json({ success: true, bookmarks: engine.getBookmarkedOpportunities() });
-});
-app.get('/api/bot/mm/opportunities/:category', async (req, res) => {
-    const { userId } = req.query;
-    const { category } = req.params;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine)
-        return res.status(404).json({ error: "Engine offline" });
-    res.json({ success: true, opportunities: engine.getOpportunitiesByCategory(category) });
 });
 // 8. Registry Routes
 app.get('/api/registry', async (req, res) => {

@@ -1,4 +1,3 @@
-
 import { OrderBook, PositionData } from '../domain/market.types.js';
 import { TradeSignal, TradeHistoryEntry } from '../domain/trade.types.js';
 
@@ -82,14 +81,12 @@ export interface ArbitrageOpportunity {
     roi: number;
     combinedCost: number;
     capacityUsd: number;
-    // Status & Metadata for UI enrichment
     status: 'active' | 'closed' | 'resolved' | 'paused';
     acceptingOrders: boolean;
     volume24hr?: number;
     category?: string;
     featured?: boolean;
     isBookmarked?: boolean;
-    // NEW: Volatility metrics
     lastPriceMovePct?: number;
     isVolatile?: boolean;
 }
@@ -130,34 +127,14 @@ export interface IExchangeAdapter {
         txHash?: string;
         error?: string;
     }>;
-
-    // Database and metadata methods
-    getDbPositions(): Promise<Array<{ 
-        marketId: string; 
-        [key: string]: any 
-    }>>;
-    
-    /**
-     * Gets market data for a specific market
-     */
+    getDbPositions(): Promise<any[]>;
     getMarketData(marketId: string): Promise<{
         question: string;
         image: string;
         isResolved: boolean;
-        [key: string]: any;
+        marketSlug: string;
+        eventSlug: string;
+        conditionId: string;
     } | null>;
-    
-    /**
-     * Updates position metadata in the database
-     */
-    updatePositionMetadata(
-        marketId: string, 
-        metadata: {
-            question?: string;
-            image?: string;
-            isResolved?: boolean;
-            updatedAt?: Date;
-            [key: string]: any;
-        }
-    ): Promise<void>;
+    updatePositionMetadata(marketId: string, metadata: any): Promise<void>;
 }

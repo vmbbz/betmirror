@@ -1,14 +1,10 @@
+
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import EventEmitter from 'events';
-import WebSocket from 'ws';
 
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
-const WS_RECONNECT_DELAY = 5000; // Start with 5s delay
-const MAX_RECONNECT_ATTEMPTS = 10;
-const PING_INTERVAL = 30000; // 30 seconds
-const PONG_TIMEOUT = 10000; // 10 seconds
 
 export interface SportsMatch {
   id: string;
@@ -23,25 +19,20 @@ export interface SportsMatch {
   startTime?: string;
   volume?: string;
   liquidity?: string;
-  marketPrice?: number;  // Added to track derived market price
+  status: 'LIVE' | 'HT' | 'VAR' | 'FT' | 'SCOUTING' | 'PREMATCH';
+  correlation: 'ALIGNED' | 'DIVERGENT' | 'UNVERIFIED';
+  priceEvidence?: string;
+  // Added optional marketPrice to resolve type errors in bot-engine and server
+  marketPrice?: number;
 }
 
 export class SportsIntelService extends EventEmitter {
   private isPolling = false;
-  
-  public get isActive(): boolean {
-    return this.isPolling;
-  }
-  
   private discoveryInterval?: NodeJS.Timeout;
   private pingInterval?: NodeJS.Timeout;
   private matches: Map<string, SportsMatch> = new Map();
   private ws?: WebSocket;
   private subscribedTokens: Set<string> = new Set();
-  private reconnectAttempts = 0;
-  private lastPong = Date.now();
-  private pongTimeout?: NodeJS.Timeout;
-  private isManuallyClosed = false;
 
   constructor(private logger: Logger) {
     super();
@@ -50,16 +41,10 @@ export class SportsIntelService extends EventEmitter {
   public async start() {
     if (this.isPolling) return;
     this.isPolling = true;
-    this.logger.info("⚽ Sports Intel: Starting...");
+    this.logger.info("⚽ Pitch Intelligence System: ONLINE. Mapping All-Sport Triads.");
 
     await this.discoverSportsMarkets();
-    
-    // Only start WebSocket in non-build environments
-    if (process.env.NODE_ENV !== 'production' || process.env.IS_BUILD !== 'true') {
-      this.connectWebSocket();
-    } else {
-      this.logger.info('Skipping WebSocket connection in build environment');
-    }
+    this.connectWebSocket();
     
     // Re-discover every 30s for new markets
     this.discoveryInterval = setInterval(() => this.discoverSportsMarkets(), 30000);
@@ -67,175 +52,123 @@ export class SportsIntelService extends EventEmitter {
 
   public stop() {
     this.isPolling = false;
-    this.isManuallyClosed = true;
-    this.cleanupWebSocket();
+    this.ws?.close();
     if (this.discoveryInterval) clearInterval(this.discoveryInterval);
     if (this.pingInterval) clearInterval(this.pingInterval);
-    if (this.pongTimeout) clearTimeout(this.pongTimeout);
+    this.logger.warn("⚽ Sports Intel: Offline.");
   }
 
-  private cleanupWebSocket() {
-    if (this.ws) {
-      this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN) {
-        this.ws.close();
-      }
-      this.ws = undefined;
-    }
+  public isActive(): boolean {
+    return this.isPolling;
   }
 
   private async discoverSportsMarkets() {
     try {
-      // tag_id=100639 = Soccer game bets
-      const url = `${GAMMA_BASE}/events?active=true&closed=false&tag_id=100639&order=startTime&ascending=true&limit=50`;
-      const response = await axios.get(url);
+      // Step 1: Discover all sports series
+      const sportsRes = await axios.get(`${GAMMA_BASE}/sports`);
+      const sports = sportsRes.data || [];
 
-      if (!response.data?.length) return;
+      for (const sport of sports) {
+        if (!sport.seriesId) continue;
 
-      for (const event of response.data) {
-        const market = event.markets?.[0];
-        if (!market?.clobTokenIds || !market?.conditionId) continue;
+        // Step 2: Fetch events for each sport tag_id=100639 = game bets
+        const url = `${GAMMA_BASE}/events?series_id=${sport.seriesId}&tag_id=100639&active=true&closed=false&order=startTime&ascending=true&limit=20`;
+        const response = await axios.get(url);
 
-        const tokenIds: string[] = JSON.parse(market.clobTokenIds);
-        const outcomes: string[] = JSON.parse(market.outcomes);
-        const outcomePrices: number[] = JSON.parse(market.outcomePrices).map(Number);
+        if (!response.data?.length) continue;
 
-        // Skip if already tracked
-        if (this.matches.has(market.conditionId)) {
-          // Update prices only
-          const existing = this.matches.get(market.conditionId)!;
-          existing.outcomePrices = outcomePrices;
-          continue;
-        }
+        for (const event of response.data) {
+          const market = event.markets?.[0];
+          if (!market?.clobTokenIds || !market?.conditionId) continue;
 
-        const matchData: SportsMatch = {
-          id: event.id,
-          conditionId: market.conditionId,
-          question: market.question || event.title,
-          outcomes,
-          outcomePrices,
-          tokenIds,
-          image: event.image || market.image || '',
-          slug: market.slug || '',
-          eventSlug: event.slug || '',
-          startTime: event.startTime,
-          volume: market.volume,
-          liquidity: market.liquidity,
-        };
+          const tokenIds: string[] = JSON.parse(market.clobTokenIds);
+          const outcomes: string[] = JSON.parse(market.outcomes);
+          const outcomePrices: number[] = JSON.parse(market.outcomePrices).map(Number);
 
-        this.matches.set(market.conditionId, matchData);
-
-        // Subscribe all tokens to WebSocket
-        tokenIds.forEach(tid => {
-          if (!this.subscribedTokens.has(tid)) {
-            this.subscribeToken(tid);
+          // Skip if already tracked
+          if (this.matches.has(market.conditionId)) {
+            const existing = this.matches.get(market.conditionId)!;
+            existing.outcomePrices = outcomePrices;
+            continue;
           }
-        });
+
+          const matchData: SportsMatch = {
+            id: event.id,
+            conditionId: market.conditionId,
+            question: market.question || event.title,
+            outcomes,
+            outcomePrices,
+            tokenIds,
+            image: event.image || market.image || '',
+            slug: market.slug || '',
+            eventSlug: event.slug || '',
+            startTime: event.startTime,
+            volume: market.volume,
+            liquidity: market.liquidity,
+            status: 'LIVE',
+            correlation: 'ALIGNED'
+          };
+
+          this.matches.set(market.conditionId, matchData);
+
+          // Subscribe all tokens to WebSocket
+          tokenIds.forEach(tid => {
+            if (!this.subscribedTokens.has(tid)) {
+              this.subscribeToken(tid);
+            }
+          });
+        }
       }
 
-      this.logger.info(`📊 Tracking ${this.matches.size} soccer markets`);
+      this.logger.info(`📊 Tracking ${this.matches.size} global sports markets`);
     } catch (e: any) {
       this.logger.error(`Discovery error: ${e.message}`);
     }
   }
 
-  private connectWebSocket(attempt = 0) {
-    // Prevent WebSocket connection in build environment
-    if (process.env.IS_BUILD === 'true') {
-      this.logger.info('Skipping WebSocket connection in build environment');
-      return;
-    }
-
-    if (this.isManuallyClosed || attempt >= MAX_RECONNECT_ATTEMPTS) {
-      if (attempt >= MAX_RECONNECT_ATTEMPTS) {
-        this.logger.error('Max reconnection attempts reached. Please check your network connection.');
-      }
-      return;
-    }
-
-    this.cleanupWebSocket();
+  // Fix: Use standard browser WebSocket property handlers (onopen, onmessage, etc.) instead of Node-style .on()
+  private connectWebSocket() {
     this.ws = new WebSocket(WS_URL);
 
-    this.ws.on('open', () => {
-      this.reconnectAttempts = 0;
-      this.lastPong = Date.now();
-      this.logger.info('🔌 WebSocket connected');
-      
+    this.ws.onopen = () => {
+      this.logger.info('🔌 Sports WebSocket connected');
       // Re-subscribe existing tokens
       this.subscribedTokens.forEach(tid => this.subscribeToken(tid));
-      
       // Start keepalive
-      if (this.pingInterval) clearInterval(this.pingInterval);
-      this.pingInterval = setInterval(() => this.sendPing(), PING_INTERVAL);
-      
-      // Set up pong timeout
-      this.setupPongTimeout();
-    });
+      this.pingInterval = setInterval(() => {
+        // Fix: Use readyState 1 (OPEN) for browser WebSocket compatibility
+        if (this.ws?.readyState === 1) {
+          this.ws.send('PING');
+        }
+      }, 10000);
+    };
 
-    this.ws.on('pong', () => {
-      this.lastPong = Date.now();
-      if (this.pongTimeout) clearTimeout(this.pongTimeout);
-      this.setupPongTimeout();
-    });
-
-    this.ws.on('message', (data) => {
-      const msg = data.toString();
-      if (msg === 'PONG') {
-        this.lastPong = Date.now();
-        return;
-      }
+    this.ws.onmessage = (event: MessageEvent) => {
+      const msg = event.data.toString();
+      if (msg === 'PONG') return;
 
       try {
         const parsed = JSON.parse(msg);
         this.handlePriceUpdate(parsed);
-      } catch (error: unknown) {
-        this.logger.error('Error parsing WebSocket message:', error instanceof Error ? error : new Error(String(error)));
-      }
-    });
+      } catch {}
+    };
 
-    this.ws.on('close', () => {
-      if (this.pingInterval) clearInterval(this.pingInterval);
-      if (this.pongTimeout) clearTimeout(this.pongTimeout);
-      
-      if (!this.isManuallyClosed) {
-        const delay = Math.min(WS_RECONNECT_DELAY * Math.pow(2, attempt), 30000);
-        const jitter = Math.random() * 2000; // Add up to 2s jitter
-        this.logger.warn(`WebSocket closed. Reconnecting in ${Math.round((delay + jitter) / 1000)}s... (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
-        
-        setTimeout(() => this.connectWebSocket(attempt + 1), delay + jitter);
+    this.ws.onclose = () => {
+      if (this.isPolling) {
+        this.logger.warn('WebSocket closed, reconnecting...');
+        if (this.pingInterval) clearInterval(this.pingInterval);
+        setTimeout(() => this.connectWebSocket(), 5000);
       }
-    });
+    };
 
-    this.ws.on('error', (err) => {
-      this.logger.error(`WebSocket error: ${err.message}`);
-    });
-  }
-
-  private sendPing() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      try {
-        this.ws.ping();
-      } catch (error: unknown) {
-        this.logger.error('Error sending ping:', error instanceof Error ? error : new Error(String(error)));
-      }
-    }
-  }
-
-  private setupPongTimeout() {
-    if (this.pongTimeout) clearTimeout(this.pongTimeout);
-    
-    this.pongTimeout = setTimeout(() => {
-      const timeSinceLastPong = Date.now() - this.lastPong;
-      if (timeSinceLastPong > PONG_TIMEOUT * 2) {
-        this.logger.warn('No pong received, forcing reconnect...');
-        this.cleanupWebSocket();
-        this.connectWebSocket(this.reconnectAttempts);
-      }
-    }, PONG_TIMEOUT);
+    this.ws.onerror = () => {
+      this.logger.error(`WebSocket connection error occurred`);
+    };
   }
 
   private subscribeToken(tokenId: string) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    // Fix: Use readyState 1 (OPEN) for browser WebSocket compatibility
+    if (this.ws?.readyState === 1) {
       this.ws.send(JSON.stringify({
         type: 'market',
         assets_ids: [tokenId]
@@ -257,13 +190,27 @@ export class SportsIntelService extends EventEmitter {
       const oldPrice = match.outcomePrices[idx];
       match.outcomePrices[idx] = newPrice;
 
-      // Emit price change event
+      const velocity = oldPrice > 0 ? (newPrice - oldPrice) / oldPrice : 0;
+
+      if (Math.abs(velocity) > 0.08) {
+        match.correlation = 'DIVERGENT';
+        match.priceEvidence = `SPIKE DETECTED: ${(velocity * 100).toFixed(1)}% Velocity on ${match.outcomes[idx]}`;
+        
+        this.emit('inferredEvent', { 
+            match, 
+            tokenId, 
+            outcomeIndex: idx, 
+            newPrice, 
+            velocity 
+        });
+      }
+
       this.emit('priceUpdate', {
         match,
         outcome: match.outcomes[idx],
         oldPrice,
         newPrice,
-        change: oldPrice > 0 ? (newPrice - oldPrice) / oldPrice : 0
+        change: velocity
       });
     }
   }

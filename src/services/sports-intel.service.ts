@@ -3,29 +3,51 @@ import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import EventEmitter from 'events';
 
+export interface Team {
+    id: number;
+    name: string;
+    league: string;
+    abbreviation: string;
+    alias?: string;
+    logo?: string;
+}
+
 export interface SportsMatch {
-    id: string; // Primary Key: conditionId
+    id: string; // eventId
     matchId?: string; // External: Sportmonks ID
     conditionId: string;
     tokenId?: string; 
     homeTeam: string;
     awayTeam: string;
-    score: [number, number];
+    homeTeamData: Team | null;
+    awayTeamData: Team | null;
+    score: [number, number]; // Official/Verified Score
+    inferredScore: [number, number]; // Inferred from Price Action
+    confidence: number;
     minute: number;
     status: 'LIVE' | 'HT' | 'VAR' | 'FT' | 'GOAL' | 'SCOUTING' | 'PREMATCH';
+    correlation: 'ALIGNED' | 'DIVERGENT' | 'UNVERIFIED';
     league: string;
     marketPrice?: number;
-    fairValue?: number;
+    previousPrice?: number;
+    fairValue: number;
     startTime?: string;
+    discoveryEpoch: number;
+    priceEvidence?: string;
 }
+
+const GAMMA_BASE = 'https://gamma-api.polymarket.com';
+const CLOB_BASE = 'https://clob.polymarket.com';
 
 export class SportsIntelService extends EventEmitter {
     private isPolling = false;
     private pollInterval?: NodeJS.Timeout;
     private discoveryInterval?: NodeJS.Timeout;
-    private matches: Map<string, SportsMatch> = new Map(); // Keyed by conditionId
+    private matches: Map<string, SportsMatch> = new Map();
+    private teamsCache: Team[] = [];
     private apiToken: string;
-    private externalToInternal: Map<string, string> = new Map(); // matchId -> conditionId
+
+    private readonly SURGE_THRESHOLD = 0.08; 
 
     constructor(private logger: Logger, apiToken?: string) {
         super();
@@ -36,38 +58,97 @@ export class SportsIntelService extends EventEmitter {
         return this.isPolling;
     }
 
-    private cleanName(name: string): string {
-        return name.toLowerCase()
-            .replace(/\bfc\b|\butd\b|\bunited\b|\bcity\b|\breal\b|\batletico\b|\bcf\b/g, '')
-            .replace(/[^a-z0-9]/g, '')
-            .trim();
+    /**
+     * WORLD-CLASS FAIR VALUE ENGINE
+     */
+    public calculateFairValue(score: [number, number], minute: number): number {
+        const [h, a] = score;
+        const absoluteDiff = Math.abs(h - a);
+        const timeFactor = Math.min(minute / 95, 0.99);
+
+        if (absoluteDiff > 0) {
+            const baseProb = absoluteDiff === 1 ? 0.65 : 0.88;
+            const decaySensitivity = 2.5;
+            const fv = baseProb + (1 - baseProb) * Math.pow(timeFactor, decaySensitivity);
+            return Math.min(fv, 0.99);
+        }
+        if (absoluteDiff === 0) {
+            const baseDraw = 0.33;
+            const drawFairValue = baseDraw + (1 - baseDraw) * Math.pow(timeFactor, 3.0);
+            return Math.min(drawFairValue, 0.99);
+        }
+        return 0.5;
     }
 
-    private fuzzyMatch(pmTitle: string, smHome: string, smAway: string): boolean {
-        const cleanPm = pmTitle.toLowerCase().replace(/ vs | v /i, ' ');
-        const cHome = this.cleanName(smHome);
-        const cAway = this.cleanName(smAway);
+    // ============================================
+    // DYNAMIC DATA FETCHING & MATCHING
+    // ============================================
+
+    private async fetchTeams(league?: string): Promise<Team[]> {
+        const params: Record<string, any> = { limit: 500 };
+        if (league) params.league = league;
+        try {
+            const response = await axios.get(`${GAMMA_BASE}/teams`, { params });
+            return response.data;
+        } catch (e) {
+            this.logger.error("Failed to fetch Gamma Teams");
+            return [];
+        }
+    }
+
+    private matchTeam(name: string): Team | null {
+        const lower = name.toLowerCase().trim();
         
-        if (cHome.length < 3 || cAway.length < 3) return false;
+        // 1. Exact name
+        let match = this.teamsCache.find(t => t.name.toLowerCase() === lower);
+        if (match) return match;
+        
+        // 2. Alias
+        match = this.teamsCache.find(t => t.alias?.toLowerCase() === lower);
+        if (match) return match;
+        
+        // 3. Abbreviation
+        match = this.teamsCache.find(t => t.abbreviation.toLowerCase() === lower);
+        if (match) return match;
+        
+        // 4. Partial
+        match = this.teamsCache.find(t => 
+          t.name.toLowerCase().includes(lower) || lower.includes(t.name.toLowerCase())
+        );
+        if (match) return match;
+        
+        return null;
+    }
 
-        // Regex check: Does the cleaned Polymarket title contain significant parts of cleaned SM names
-        const homeRegex = new RegExp(cHome.substring(0, 5));
-        const awayRegex = new RegExp(cAway.substring(0, 5));
-
-        return homeRegex.test(cleanPm) && awayRegex.test(cleanPm);
+    private extractTeamsFromTitle(title: string): { home: string; away: string } | null {
+        const patterns = [
+          /(.+?)\s+vs\.?\s+(.+)/i,
+          /(.+?)\s+v\s+(.+)/i,
+          /(.+?)\s+@\s+(.+)/i,
+        ];
+        
+        for (const pattern of patterns) {
+          const match = title.match(pattern);
+          if (match) {
+            return { home: match[1].trim(), away: match[2].trim() };
+          }
+        }
+        return null;
     }
 
     public async start() {
         if (this.isPolling) return;
         this.isPolling = true;
-        this.logger.info("⚽ Sports Intel: Monitoring Live Scores & Structural Discovery...");
+
+        // Load teams database for matching
+        this.logger.info("⚡ Sports Intel: Loading Institutional Teams Database...");
+        this.teamsCache = await this.fetchTeams();
+        this.logger.success(`✓ Cached ${this.teamsCache.length} Global Teams`);
+
+        this.logger.info("⚽ Sports Intel: Dynamic Inference Engine Active.");
         
         await this.discoverPolymarketSports();
-        
-        if (this.apiToken) {
-            this.pollInterval = setInterval(() => this.pollLiveScores(), 3500);
-        }
-        
+        this.pollInterval = setInterval(() => this.runInference(), 3500);
         this.discoveryInterval = setInterval(() => this.discoverPolymarketSports(), 60000);
     }
 
@@ -79,14 +160,11 @@ export class SportsIntelService extends EventEmitter {
 
     private async discoverPolymarketSports() {
         try {
-            this.logger.info(`📡 [Sports Scout] Querying Sports Metadata...`);
-            const tagId = "100639"; 
-            const url = `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&order=startTime&ascending=true&limit=50`;
+            const tagId = "100639"; // Soccer
+            const url = `${GAMMA_BASE}/events?active=true&closed=false&tag_id=${tagId}&order=startTime&ascending=true&limit=20`;
             const response = await axios.get(url);
             
             if (!response.data || !Array.isArray(response.data)) return;
-
-            this.logger.info(`✅ [Sports Scout] Found ${response.data.length} Structural Sports Events.`);
 
             for (const event of response.data) {
                 const market = event.markets?.[0];
@@ -94,109 +172,89 @@ export class SportsIntelService extends EventEmitter {
                 
                 const conditionId = market.conditionId;
                 const tokenId = market.clobTokenIds ? JSON.parse(market.clobTokenIds)[0] : null;
-                const teams = event.title.split(/ vs | v /i);
-                const existing = this.matches.get(conditionId);
+                
+                const extracted = this.extractTeamsFromTitle(event.title);
+                const homeTeam = extracted ? this.matchTeam(extracted.home) : null;
+                const awayTeam = extracted ? this.matchTeam(extracted.away) : null;
+
+                const existing = this.matches.get(event.id);
 
                 const matchData: SportsMatch = {
-                    id: conditionId,
+                    id: event.id,
                     conditionId: conditionId,
                     tokenId: tokenId,
-                    homeTeam: teams[0]?.trim() || "Home",
-                    awayTeam: teams[1]?.trim() || "Away",
+                    homeTeam: homeTeam?.name || extracted?.home || "Home",
+                    awayTeam: awayTeam?.name || extracted?.away || "Away",
+                    homeTeamData: homeTeam,
+                    awayTeamData: awayTeam,
                     score: existing?.score || [0, 0],
+                    inferredScore: existing?.inferredScore || [0, 0],
+                    confidence: existing?.confidence || 0,
                     minute: existing?.minute || 0,
                     status: existing?.status || 'SCOUTING',
+                    correlation: existing?.correlation || 'UNVERIFIED',
                     league: event.category || "Pro League",
                     startTime: event.startTime,
-                    marketPrice: existing?.marketPrice || 0
+                    discoveryEpoch: existing?.discoveryEpoch || Date.now(),
+                    marketPrice: existing?.marketPrice || 0,
+                    previousPrice: existing?.marketPrice || 0,
+                    fairValue: existing?.fairValue || 0.5
                 };
 
-                this.matches.set(conditionId, matchData);
-                this.attemptMapping(conditionId, event.title);
+                this.matches.set(event.id, matchData);
             }
         } catch (e: any) {
             this.logger.error(`[Sports Scout] Discovery Fail: ${e.message}`);
         }
     }
 
-    private async attemptMapping(conditionId: string, eventTitle: string) {
-        if (!this.apiToken) return;
-        
-        try {
-            const today = new Date().toISOString().split('T')[0];
-            const url = `https://api.sportmonks.com/v3/football/fixtures/date/${today}?api_token=${this.apiToken}&include=participants`;
-            const response = await axios.get(url);
-            if (!response.data || !response.data.data) return;
+    private async runInference() {
+        for (const [id, match] of this.matches.entries()) {
+            if (match.status === 'FT' || !match.tokenId) continue;
 
-            for (const f of response.data.data) {
-                const home = f.participants?.find((p: any) => p.meta.location === 'home')?.name || "";
-                const away = f.participants?.find((p: any) => p.meta.location === 'away')?.name || "";
+            const currentPrice = match.marketPrice || 0;
+            const prevPrice = match.previousPrice || currentPrice;
 
-                if (this.fuzzyMatch(eventTitle, home, away)) {
-                    const match = this.matches.get(conditionId);
-                    if (match) {
-                        match.matchId = f.id.toString();
-                        this.externalToInternal.set(f.id.toString(), conditionId);
-                        this.logger.success(`🔗 AUTO-LINK: ${eventTitle} matched to SM:${f.id}`);
-                        return;
-                    }
-                }
+            if (currentPrice === 0 || currentPrice === prevPrice) continue;
+
+            const change = currentPrice - prevPrice;
+            const pct = prevPrice > 0 ? change / prevPrice : 0;
+
+            if (Math.abs(pct) > this.SURGE_THRESHOLD) {
+                this.handleInferredEvent(match, pct > 0 ? 'HOME_GOAL' : 'AWAY_GOAL', pct);
             }
-        } catch (e) {}
+
+            if (match.minute === 0 && match.discoveryEpoch > 0) {
+                const elapsedMins = Math.floor((Date.now() - match.discoveryEpoch) / 60000);
+                match.minute = Math.min(90, elapsedMins);
+            }
+
+            match.previousPrice = currentPrice;
+            match.fairValue = this.calculateFairValue(match.inferredScore, match.minute);
+
+            if (match.matchId && this.apiToken) {
+                this.verifyWithAPI(match);
+            }
+        }
     }
 
-    private async pollLiveScores() {
-        if (!this.apiToken) return;
-        try {
-            const url = `https://api.sportmonks.com/v3/football/livescores/inplay?api_token=${this.apiToken}&include=participants;scores`;
-            const response = await axios.get(url);
-            if (!response.data || !response.data.data) return;
+    private handleInferredEvent(match: SportsMatch, type: string, magnitude: number) {
+        if (type === 'HOME_GOAL') match.inferredScore[0]++;
+        if (type === 'AWAY_GOAL') match.inferredScore[1]++;
 
-            for (const m of response.data.data) {
-                const matchId = m.id.toString();
-                const conditionId = this.externalToInternal.get(matchId);
-                if (!conditionId) continue;
+        match.confidence = Math.min(0.9, Math.abs(magnitude) * 6);
+        match.correlation = 'DIVERGENT';
+        match.priceEvidence = `${type}: ${magnitude > 0 ? '+' : ''}${(magnitude * 100).toFixed(1)}% Surge`;
 
-                const existing = this.matches.get(conditionId);
-                if (!existing) continue;
+        this.logger.success(`🚀 [INFERENCE] ${type} on ${match.homeTeam} | Confidence: ${match.confidence.toFixed(2)}`);
+        this.emit('inferredEvent', { match, type, magnitude });
+    }
 
-                const home = m.participants?.find((p: any) => p.meta.location === 'home');
-                const homeScore = m.scores?.find((s: any) => s.description === 'CURRENT' && s.participant_id === home?.id)?.score?.goals || 0;
-                const away = m.participants?.find((p: any) => p.meta.location === 'away');
-                const awayScore = m.scores?.find((s: any) => s.description === 'CURRENT' && s.participant_id === away?.id)?.score?.goals || 0;
-
-                // Handle VAR
-                if (m.state?.state === 'VAR') {
-                    if (existing.status !== 'VAR') this.emit('var', existing);
-                    existing.status = 'VAR';
-                }
-
-                // Detection for real-time goal bursts
-                if ((homeScore > existing.score[0] || awayScore > existing.score[1]) && existing.status !== 'SCOUTING') {
-                    this.logger.success(`🥅 GOAL BURST: ${existing.homeTeam} ${homeScore}-${awayScore} ${existing.awayTeam}`);
-                    this.emit('goal', { ...existing, score: [homeScore, awayScore], status: 'GOAL' });
-                }
-                
-                this.matches.set(conditionId, {
-                    ...existing,
-                    score: [homeScore, awayScore],
-                    minute: m.minute || existing.minute,
-                    status: m.state?.state === 'INPLAY' ? 'LIVE' : (m.state?.state === 'VAR' ? 'VAR' : 'LIVE')
-                });
-            }
-        } catch (e) {}
+    private async verifyWithAPI(match: SportsMatch) {
+        // Verification logic using match.matchId and this.apiToken
     }
 
     public getLiveMatches(): SportsMatch[] {
         return Array.from(this.matches.values());
-    }
-
-    public forceLink(conditionId: string, matchId: string) {
-        const match = this.matches.get(conditionId);
-        if (match) {
-            match.matchId = matchId;
-            this.externalToInternal.set(matchId, conditionId);
-            this.logger.success(`🎯 MANUAL-LINK: ${conditionId} -> SM:${matchId}`);
-        }
     }
 }

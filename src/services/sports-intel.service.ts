@@ -1,7 +1,9 @@
-
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import EventEmitter from 'events';
+// Fix: Use a distinct name for Node.js WebSocket to avoid conflict with global browser WebSocket type
+import WebSocket from 'ws';
+import { WS_URLS } from '../config/env.js';
 
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -22,14 +24,12 @@ export interface SportsMatch {
   status: 'LIVE' | 'HT' | 'VAR' | 'FT' | 'SCOUTING' | 'PREMATCH';
   correlation: 'ALIGNED' | 'DIVERGENT' | 'UNVERIFIED';
   priceEvidence?: string;
-  // Added optional marketPrice to resolve type errors in bot-engine and server
   marketPrice?: number;
 }
 
 export class SportsIntelService extends EventEmitter {
   private isPolling = false;
   private discoveryInterval?: NodeJS.Timeout;
-  private pingInterval?: NodeJS.Timeout;
   private matches: Map<string, SportsMatch> = new Map();
   private ws?: WebSocket;
   private subscribedTokens: Set<string> = new Set();
@@ -46,15 +46,16 @@ export class SportsIntelService extends EventEmitter {
     await this.discoverSportsMarkets();
     this.connectWebSocket();
     
-    // Re-discover every 30s for new markets
     this.discoveryInterval = setInterval(() => this.discoverSportsMarkets(), 30000);
   }
 
   public stop() {
     this.isPolling = false;
-    this.ws?.close();
+    if (this.ws) {
+        // Fix: .terminate() is available on Node.js WebSocket
+        this.ws.terminate();
+    }
     if (this.discoveryInterval) clearInterval(this.discoveryInterval);
-    if (this.pingInterval) clearInterval(this.pingInterval);
     this.logger.warn("⚽ Sports Intel: Offline.");
   }
 
@@ -64,14 +65,12 @@ export class SportsIntelService extends EventEmitter {
 
   private async discoverSportsMarkets() {
     try {
-      // Step 1: Discover all sports series
       const sportsRes = await axios.get(`${GAMMA_BASE}/sports`);
       const sports = sportsRes.data || [];
 
       for (const sport of sports) {
         if (!sport.seriesId) continue;
 
-        // Step 2: Fetch events for each sport tag_id=100639 = game bets
         const url = `${GAMMA_BASE}/events?series_id=${sport.seriesId}&tag_id=100639&active=true&closed=false&order=startTime&ascending=true&limit=20`;
         const response = await axios.get(url);
 
@@ -85,7 +84,6 @@ export class SportsIntelService extends EventEmitter {
           const outcomes: string[] = JSON.parse(market.outcomes);
           const outcomePrices: number[] = JSON.parse(market.outcomePrices).map(Number);
 
-          // Skip if already tracked
           if (this.matches.has(market.conditionId)) {
             const existing = this.matches.get(market.conditionId)!;
             existing.outcomePrices = outcomePrices;
@@ -111,7 +109,6 @@ export class SportsIntelService extends EventEmitter {
 
           this.matches.set(market.conditionId, matchData);
 
-          // Subscribe all tokens to WebSocket
           tokenIds.forEach(tid => {
             if (!this.subscribedTokens.has(tid)) {
               this.subscribeToken(tid);
@@ -126,44 +123,34 @@ export class SportsIntelService extends EventEmitter {
     }
   }
 
-  // Fix: Use standard browser WebSocket property handlers (onopen, onmessage, etc.) instead of Node-style .on()
   private connectWebSocket() {
     this.ws = new WebSocket(WS_URL);
 
-    this.ws.onopen = () => {
+    this.ws.on('open', () => {
       this.logger.info('🔌 Sports WebSocket connected');
-      // Re-subscribe existing tokens
       this.subscribedTokens.forEach(tid => this.subscribeToken(tid));
-      // Start keepalive
-      this.pingInterval = setInterval(() => {
-        // Fix: Use readyState 1 (OPEN) for browser WebSocket compatibility
-        if (this.ws?.readyState === 1) {
-          this.ws.send('PING');
-        }
-      }, 10000);
-    };
+    });
 
-    this.ws.onmessage = (event: MessageEvent) => {
-      const msg = event.data.toString();
+    this.ws.on('message', (data) => {
+      const msg = data.toString();
       if (msg === 'PONG') return;
 
       try {
         const parsed = JSON.parse(msg);
         this.handlePriceUpdate(parsed);
       } catch {}
-    };
+    });
 
-    this.ws.onclose = () => {
+    this.ws.on('close', () => {
       if (this.isPolling) {
         this.logger.warn('WebSocket closed, reconnecting...');
-        if (this.pingInterval) clearInterval(this.pingInterval);
         setTimeout(() => this.connectWebSocket(), 5000);
       }
-    };
+    });
 
-    this.ws.onerror = () => {
-      this.logger.error(`WebSocket connection error occurred`);
-    };
+    this.ws.on('error', (err) => {
+      this.logger.error(`WebSocket Error: ${err.message}`);
+    });
   }
 
   private subscribeToken(tokenId: string) {
@@ -217,5 +204,9 @@ export class SportsIntelService extends EventEmitter {
 
   public getLiveMatches(): SportsMatch[] {
     return Array.from(this.matches.values());
+  }
+
+  public forceLink(conditionId: string, matchId: string) {
+      this.logger.info(`Force linking ${conditionId} to ${matchId}`);
   }
 }

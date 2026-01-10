@@ -77,7 +77,7 @@ export class SportsIntelService extends EventEmitter {
           if (!response.data?.length) continue;
           
           this.logger.info(`Found ${response.data.length} events for ${league.label || league.seriesId}`);
-          
+          const now = new Date();
           for (const event of response.data) {
             await this.processEvent(event, now);
           }

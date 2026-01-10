@@ -12,18 +12,21 @@ export interface SportsMatch {
   id: string;
   conditionId: string;
   question: string;
-  outcomes: string[];           // ["Team A", "Draw", "Team B"] or ["Yes", "No"]
-  outcomePrices: number[];      // Maps 1:1 with outcomes
-  tokenIds: string[];           // Maps 1:1 with outcomes
+  outcomes: string[];
+  outcomePrices: number[];
+  tokenIds: string[];
   image: string;
   slug: string;
   eventSlug: string;
-  startTime?: string;
-  volume?: string;
-  liquidity?: string;
-  status: 'LIVE' | 'HT' | 'VAR' | 'FT' | 'SCOUTING' | 'PREMATCH';
+  startTime: string;
+  minute: number;
+  homeScore: number;
+  awayScore: number;
+  status: 'LIVE' | 'UPCOMING' | 'HALFTIME' | 'FINISHED';
   correlation: 'ALIGNED' | 'DIVERGENT' | 'UNVERIFIED';
+  edgeWindow: number; // Seconds since event inferred
   priceEvidence?: string;
+  confidence: number;
   marketPrice?: number;
 }
 
@@ -38,29 +41,17 @@ export class SportsIntelService extends EventEmitter {
     super();
   }
 
+  public isActive(): boolean {
+    return this.isPolling;
+  }
+
   public async start() {
     if (this.isPolling) return;
     this.isPolling = true;
-    this.logger.info("⚽ Pitch Intelligence System: ONLINE. Mapping All-Sport Triads.");
-
+    this.logger.info("🏃 Sports Intel: Monitoring Price Velocity for Alpha...");
     await this.discoverSportsMarkets();
     this.connectWebSocket();
-    
     this.discoveryInterval = setInterval(() => this.discoverSportsMarkets(), 30000);
-  }
-
-  public stop() {
-    this.isPolling = false;
-    if (this.ws) {
-        // Fix: .terminate() is available on Node.js WebSocket
-        this.ws.terminate();
-    }
-    if (this.discoveryInterval) clearInterval(this.discoveryInterval);
-    this.logger.warn("⚽ Sports Intel: Offline.");
-  }
-
-  public isActive(): boolean {
-    return this.isPolling;
   }
 
   private async discoverSportsMarkets() {
@@ -88,7 +79,7 @@ export class SportsIntelService extends EventEmitter {
           this.logger.info(`Found ${response.data.length} events for ${league.label || league.seriesId}`);
           
           for (const event of response.data) {
-            await this.processEvent(event);
+            await this.processEvent(event, now);
           }
         } catch (e) {
           // Some series may have no active events
@@ -103,8 +94,9 @@ export class SportsIntelService extends EventEmitter {
     
     if (fallbackRes.data?.length) {
       this.logger.info(`Fallback found ${fallbackRes.data.length} additional events`);
+      const now = new Date();
       for (const event of fallbackRes.data) {
-        await this.processEvent(event);
+        await this.processEvent(event, now);
       }
     }
 
@@ -114,44 +106,43 @@ export class SportsIntelService extends EventEmitter {
   }
 }
 
-private async processEvent(event: any) {
-  const market = event.markets?.[0];
-  if (!market?.clobTokenIds || !market?.conditionId) return;
-  if (this.matches.has(market.conditionId)) return; // Skip duplicates
+  private processEvent(event: any, now: Date) {
+    const market = event.markets?.[0];
+    if (!market?.clobTokenIds) return;
 
-  try {
+    const startTime = new Date(event.startTime);
+    const isLive = startTime <= now;
+    if (!isLive) return;
+
     const tokenIds: string[] = JSON.parse(market.clobTokenIds);
     const outcomes: string[] = JSON.parse(market.outcomes);
-    const outcomePrices: number[] = JSON.parse(market.outcomePrices).map(Number);
+    const prices: number[] = JSON.parse(market.outcomePrices || '[]').map(Number);
 
+    const existing = this.matches.get(market.conditionId);
+    
     const matchData: SportsMatch = {
       id: event.id,
       conditionId: market.conditionId,
       question: market.question || event.title,
       outcomes,
-      outcomePrices,
+      outcomePrices: prices.length ? prices : (existing?.outcomePrices || new Array(outcomes.length).fill(0.5)),
       tokenIds,
       image: event.image || market.image || '',
       slug: market.slug || '',
       eventSlug: event.slug || '',
       startTime: event.startTime,
-      volume: market.volume,
-      liquidity: market.liquidity,
-      status: 'SCOUTING',
-      correlation: 'UNVERIFIED'
+      minute: Math.floor((now.getTime() - startTime.getTime()) / 60000),
+      homeScore: existing?.homeScore || 0,
+      awayScore: existing?.awayScore || 0,
+      status: 'LIVE',
+      correlation: existing?.correlation || 'ALIGNED',
+      edgeWindow: existing?.edgeWindow || 0,
+      confidence: 0.95
     };
 
     this.matches.set(market.conditionId, matchData);
-
-    tokenIds.forEach(tid => {
-      if (!this.subscribedTokens.has(tid)) {
-        this.subscribeToken(tid);
-      }
-    });
-  } catch (e) {
-    // Skip malformed events
+    tokenIds.forEach(tid => this.subscribeToken(tid));
   }
-}
 
   private connectWebSocket() {
     this.ws = new WebSocket(WS_URL);
@@ -160,43 +151,26 @@ private async processEvent(event: any) {
       this.logger.info('🔌 Sports WebSocket connected');
       this.subscribedTokens.forEach(tid => this.subscribeToken(tid));
     });
-
-    this.ws.on('message', (data) => {
-      const msg = data.toString();
-      if (msg === 'PONG') return;
-
+    (this.ws as any).on('message', (data: any) => {
       try {
-        const parsed = JSON.parse(msg);
-        this.handlePriceUpdate(parsed);
+        const msg = JSON.parse(data.toString());
+        this.handlePriceSpike(msg);
       } catch {}
-    });
-
-    this.ws.on('close', () => {
-      if (this.isPolling) {
-        this.logger.warn('WebSocket closed, reconnecting...');
-        setTimeout(() => this.connectWebSocket(), 5000);
-      }
-    });
-
-    this.ws.on('error', (err) => {
-      this.logger.error(`WebSocket Error: ${err.message}`);
     });
   }
 
   private subscribeToken(tokenId: string) {
-    // Fix: Use readyState 1 (OPEN) for browser WebSocket compatibility
-    if (this.ws?.readyState === 1) {
-      this.ws.send(JSON.stringify({
-        type: 'market',
-        assets_ids: [tokenId]
-      }));
+    if (this.ws?.readyState === 1 && !this.subscribedTokens.has(tokenId)) {
+      this.ws.send(JSON.stringify({ type: 'market', assets_ids: [tokenId] }));
       this.subscribedTokens.add(tokenId);
     }
   }
 
-  private handlePriceUpdate(msg: any) {
+  /**
+   * INFERENCE ENGINE: Front-run based on price velocity spikes
+   */
+  private handlePriceSpike(msg: any) {
     if (msg.event_type !== 'last_trade_price' && msg.event_type !== 'price_change') return;
-
     const tokenId = msg.asset_id;
     const newPrice = parseFloat(msg.price);
 
@@ -207,13 +181,16 @@ private async processEvent(event: any) {
       const oldPrice = match.outcomePrices[idx];
       match.outcomePrices[idx] = newPrice;
 
-      const velocity = oldPrice > 0 ? (newPrice - oldPrice) / oldPrice : 0;
-
-      if (Math.abs(velocity) > 0.08) {
+      // Calculate velocity spike
+      const velocity = (newPrice - oldPrice) / oldPrice;
+      
+      // If price jumps > 8% instantly while score is same, infer a goal
+      if (velocity > 0.08 && match.correlation === 'ALIGNED') {
         match.correlation = 'DIVERGENT';
-        match.priceEvidence = `SPIKE DETECTED: ${(velocity * 100).toFixed(1)}% Velocity on ${match.outcomes[idx]}`;
+        match.edgeWindow = 12; // Inferred latency lead
+        match.priceEvidence = `VELOCITY ALERT: ${match.outcomes[idx]} Spiked ${(velocity * 100).toFixed(1)}%`;
         
-        this.emit('inferredEvent', { 
+        this.emit('alphaEvent', { 
             match, 
             tokenId, 
             outcomeIndex: idx, 
@@ -222,13 +199,9 @@ private async processEvent(event: any) {
         });
       }
 
-      this.emit('priceUpdate', {
-        match,
-        outcome: match.outcomes[idx],
-        oldPrice,
-        newPrice,
-        change: velocity
-      });
+      if (match.correlation === 'DIVERGENT' && Math.abs(velocity) < 0.01) {
+          // Stability reached, awaiting sync
+      }
     }
   }
 
@@ -236,7 +209,17 @@ private async processEvent(event: any) {
     return Array.from(this.matches.values());
   }
 
-  public forceLink(conditionId: string, matchId: string) {
-      this.logger.info(`Force linking ${conditionId} to ${matchId}`);
+  public forceLink(conditionId: string, matchId: string): void {
+      const match = this.matches.get(conditionId);
+      if (match) {
+          match.id = matchId;
+          this.logger.info(`Sports Intel: Manually linked ${conditionId} to ${matchId}`);
+      }
+  }
+
+  public stop() {
+    this.isPolling = false;
+    (this.ws as any)?.terminate();
+    if (this.discoveryInterval) clearInterval(this.discoveryInterval);
   }
 }

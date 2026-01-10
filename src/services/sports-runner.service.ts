@@ -30,7 +30,7 @@ export class SportsRunnerService extends EventEmitter {
 
   public start() {
     this.monitorInterval = setInterval(() => this.evaluateExits(), 3000);
-    this.logger.info("🏃 Sports Runner: Snipe Engine Online.");
+    this.logger.info("🏃 Sports Runner: Snipe & Verify Engine Online.");
   }
 
   public stop() {
@@ -39,10 +39,11 @@ export class SportsRunnerService extends EventEmitter {
   }
 
   private setupEvents() {
-    this.intel.on('alphaEvent', (data) => this.handleSnipeEntry(data));
+    // React to the Inference Engine signals
+    this.intel.on('alphaEvent', (data) => this.handlePriceSpike(data));
   }
 
-  private async handleSnipeEntry(data: {
+  private async handlePriceSpike(data: {
     match: SportsMatch;
     tokenId: string;
     outcomeIndex: number;
@@ -53,16 +54,16 @@ export class SportsRunnerService extends EventEmitter {
 
     if (this.activeScalps.has(match.conditionId)) return;
 
-    this.logger.success(`🎯 [FRONT-RUN] Velocity Spike on ${match.outcomes[outcomeIndex]}. Sniping stale liquidity...`);
+    this.logger.success(`🎯 [SNIPE] Velocity Spike on ${match.outcomes[outcomeIndex]}. Front-running...`);
 
     try {
-      // EXECUTE IMMEDIATELY: Fill-or-Kill (FOK) only captures the stale price
+      // EXECUTE IMMEDIATELY: Use FOK to ensure we capture the STALE price or nothing at all
       const result = await this.client.createAndPostMarketOrder(
         {
           tokenID: tokenId,
-          amount: 100, // Institutional snipe size
+          amount: 100, // $100 Alpha Snipe
           side: Side.BUY,
-          price: newPrice * 1.01, 
+          price: newPrice * 1.01, // 1% slippage cap
         },
         { tickSize: "0.01" },
         OrderType.FOK
@@ -77,14 +78,14 @@ export class SportsRunnerService extends EventEmitter {
           tokenId,
           outcomeIndex,
           entryPrice: priceFilled,
-          targetPrice: priceFilled * 1.05, 
+          targetPrice: priceFilled * 1.04, // 4% Scalp Target
           startTime: Date.now(),
           shares: sharesFilled,
           lastPrice: priceFilled,
           verified: false
         });
 
-        this.logger.info(`📈 [POSITION] Snipe filled @ $${priceFilled.toFixed(3)}. Starting verification timer...`);
+        this.logger.info(`📈 [POSITION] Snipe filled @ $${priceFilled.toFixed(3)}. Waiting for score verification...`);
       }
     } catch (e: any) {
       this.logger.error(`Snipe failed: ${e.message}`);
@@ -101,16 +102,16 @@ export class SportsRunnerService extends EventEmitter {
       const currentPrice = match.outcomePrices[scalp.outcomeIndex];
       const elapsed = (Date.now() - scalp.startTime) / 1000;
 
-      // VERIFY SECOND: If score hasn't updated within 45s, inference was false
+      // VERIFY SECOND: If after 45s the score hasn't updated, the inference was likely false
       if (!scalp.verified && elapsed > 45) {
-          this.logger.warn(`⚠️ [VERIFY] No score change detected after 45s. False positive. Liquidating...`);
+          this.logger.warn(`⚠️ [VERIFY] Inference timeout. No score change detected. Liquidating position...`);
           await this.liquidate(conditionId, scalp, currentPrice, "FALSE INFERENCE");
           continue;
       }
 
-      // 1. Target Reach
+      // 1. Profit Target Hit
       if (currentPrice >= scalp.targetPrice) {
-        await this.liquidate(conditionId, scalp, currentPrice, "TARGET HIT");
+        await this.liquidate(conditionId, scalp, currentPrice, "PROFIT TARGET");
         continue;
       }
 

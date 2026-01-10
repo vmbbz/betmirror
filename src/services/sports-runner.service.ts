@@ -1,4 +1,3 @@
-
 import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
 import { Logger } from '../utils/logger.util.js';
 import { SportsIntelService, SportsMatch } from './sports-intel.service.js';
@@ -12,8 +11,8 @@ interface ActiveScalp {
   targetPrice: number;
   startTime: number;
   shares: number;
-  stallTicks: number;
   lastPrice: number;
+  verified: boolean;
 }
 
 export class SportsRunnerService extends EventEmitter {
@@ -30,8 +29,8 @@ export class SportsRunnerService extends EventEmitter {
   }
 
   public start() {
-    this.monitorInterval = setInterval(() => this.evaluateExits(), 5000);
-    this.logger.info("🏃 Sports Runner: Cloud Snipe Engine Online.");
+    this.monitorInterval = setInterval(() => this.evaluateExits(), 3000);
+    this.logger.info("🏃 Sports Runner: Snipe Engine Online.");
   }
 
   public stop() {
@@ -40,33 +39,30 @@ export class SportsRunnerService extends EventEmitter {
   }
 
   private setupEvents() {
-    this.intel.on('inferredEvent', (data) => this.handleSpikeEntry(data));
+    this.intel.on('alphaEvent', (data) => this.handleSnipeEntry(data));
   }
 
-  private async handleSpikeEntry(data: {
+  private async handleSnipeEntry(data: {
     match: SportsMatch;
     tokenId: string;
     outcomeIndex: number;
     newPrice: number;
     velocity: number;
   }) {
-    const { match, tokenId, outcomeIndex, newPrice, velocity } = data;
+    const { match, tokenId, outcomeIndex, newPrice } = data;
 
-    // Sniping only on upward momentum (inferred event)
-    if (velocity < 0.08) return;
     if (this.activeScalps.has(match.conditionId)) return;
 
-    this.logger.success(`🎯 [ALPHA WINDOW] Edge Detected for ${match.outcomes[outcomeIndex]}. Sweeping stale book...`);
+    this.logger.success(`🎯 [FRONT-RUN] Velocity Spike on ${match.outcomes[outcomeIndex]}. Sniping stale liquidity...`);
 
     try {
-      // ENTER FIRST: Use Fill-Or-Kill (FOK) to ensure we only get the stale price
-      // Size fixed at $100 for sniping window
+      // EXECUTE IMMEDIATELY: Fill-or-Kill (FOK) only captures the stale price
       const result = await this.client.createAndPostMarketOrder(
         {
           tokenID: tokenId,
-          amount: 100, 
+          amount: 100, // Institutional snipe size
           side: Side.BUY,
-          price: newPrice * 1.02, // 2% slippage buffer
+          price: newPrice * 1.01, 
         },
         { tickSize: "0.01" },
         OrderType.FOK
@@ -81,19 +77,17 @@ export class SportsRunnerService extends EventEmitter {
           tokenId,
           outcomeIndex,
           entryPrice: priceFilled,
-          targetPrice: priceFilled * 1.05, // 5% profit target
+          targetPrice: priceFilled * 1.05, 
           startTime: Date.now(),
           shares: sharesFilled,
-          stallTicks: 0,
           lastPrice: priceFilled,
+          verified: false
         });
 
-        this.logger.info(`📈 [CAPTURE] Snipe active. Target: $${(priceFilled * 1.05).toFixed(2)}`);
-      } else {
-        this.logger.warn(`❌ Snipe Rejected (Price Moved): ${result.errorMsg}`);
+        this.logger.info(`📈 [POSITION] Snipe filled @ $${priceFilled.toFixed(3)}. Starting verification timer...`);
       }
     } catch (e: any) {
-      this.logger.error(`Scalp entry failed: ${e.message}`);
+      this.logger.error(`Snipe failed: ${e.message}`);
     }
   }
 
@@ -107,50 +101,35 @@ export class SportsRunnerService extends EventEmitter {
       const currentPrice = match.outcomePrices[scalp.outcomeIndex];
       const elapsed = (Date.now() - scalp.startTime) / 1000;
 
-      // 1. Profit Target reached
+      // VERIFY SECOND: If score hasn't updated within 45s, inference was false
+      if (!scalp.verified && elapsed > 45) {
+          this.logger.warn(`⚠️ [VERIFY] No score change detected after 45s. False positive. Liquidating...`);
+          await this.liquidate(conditionId, scalp, currentPrice, "FALSE INFERENCE");
+          continue;
+      }
+
+      // 1. Target Reach
       if (currentPrice >= scalp.targetPrice) {
         await this.liquidate(conditionId, scalp, currentPrice, "TARGET HIT");
         continue;
       }
 
-      // 2. Momentum stall (3 ticks no movement)
-      if (currentPrice <= scalp.lastPrice) {
-        scalp.stallTicks++;
-      } else {
-        scalp.stallTicks = 0;
-      }
-      scalp.lastPrice = currentPrice;
-
-      if (scalp.stallTicks >= 3 && elapsed > 20) {
-        await this.liquidate(conditionId, scalp, currentPrice, "MOMENTUM STALL");
-        continue;
-      }
-
-      // 3. Hard Stop Loss (-5%)
-      if (currentPrice <= scalp.entryPrice * 0.95) {
+      // 2. Stop Loss
+      if (currentPrice <= scalp.entryPrice * 0.96) {
         await this.liquidate(conditionId, scalp, currentPrice, "STOP LOSS");
-        continue;
-      }
-
-      // 4. Time Stop (120s max hold for sports scalp)
-      if (elapsed >= 120) {
-        await this.liquidate(conditionId, scalp, currentPrice, "TIME STOP");
         continue;
       }
     }
   }
 
   private async liquidate(conditionId: string, scalp: ActiveScalp, exitPrice: number, reason: string) {
-    this.logger.info(`🔄 [EXIT] ${reason} for ${conditionId}. Liquidating via FAK...`);
-
     try {
-      // Use FAK (Fill-And-Kill) to capture all available liquidity at the floor
       const result = await this.client.createAndPostMarketOrder(
         {
           tokenID: scalp.tokenId,
           amount: scalp.shares, 
           side: Side.SELL,
-          price: exitPrice * 0.98, // 2% slippage tolerance
+          price: exitPrice * 0.99,
         },
         { tickSize: "0.01" },
         OrderType.FAK
@@ -158,7 +137,7 @@ export class SportsRunnerService extends EventEmitter {
 
       if (result.success) {
         const pnl = (exitPrice - scalp.entryPrice) * scalp.shares;
-        this.logger.success(`💰 [COMPLETE] PnL: $${pnl.toFixed(2)} | Reason: ${reason}`);
+        this.logger.success(`💰 [EXIT] PnL: $${pnl.toFixed(2)} | Reason: ${reason}`);
         this.activeScalps.delete(conditionId);
       }
     } catch (e: any) {

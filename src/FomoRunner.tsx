@@ -22,8 +22,18 @@ interface FlashMove {
 }
 
 const FlashCard = ({ move }: { move: FlashMove }) => {
-    const isUp = move.velocity > 0;
-    const polyUrl = `https://polymarket.com/event/${move.eventSlug}/${move.marketSlug}`;
+    // Add defensive checks for move
+    if (!move) {
+        console.error('FlashCard received null/undefined move');
+        return null;
+    }
+    
+    const isUp = (move.velocity || 0) > 0;
+    // Ensure we have valid slugs before constructing URL
+    const hasValidSlugs = move.eventSlug && move.marketSlug;
+    const polyUrl = hasValidSlugs 
+        ? `https://polymarket.com/event/${move.eventSlug}/${move.marketSlug}`
+        : '#';
 
     return (
         <div className="relative transition-all duration-500 w-full max-w-[420px] mx-auto scale-[1.03] z-10 group">
@@ -126,20 +136,29 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
 }) => {
     // Ensure flashMoves is always an array and has the expected structure
     const processedMoves = useMemo(() => {
-        if (!Array.isArray(flashMoves)) return [];
-        return flashMoves.map(move => ({
-            ...move,
-            // Ensure required fields have defaults if missing
-            tokenId: move.tokenId || '',
-            question: move.question || 'Unknown Market',
-            oldPrice: move.oldPrice || 0,
-            newPrice: move.newPrice || 0,
-            velocity: move.velocity || 0,
-            timestamp: move.timestamp || Date.now(),
-            marketSlug: move.marketSlug || '',
-            eventSlug: move.eventSlug || '',
-            image: move.image || undefined
-        }));
+        try {
+            if (!flashMoves) return [];
+            if (!Array.isArray(flashMoves)) {
+                console.error('Expected flashMoves to be an array, got:', typeof flashMoves);
+                return [];
+            }
+            return flashMoves.map(move => ({
+                ...move,
+                // Ensure required fields have defaults if missing
+                tokenId: move.tokenId || '',
+                question: move.question || 'Unknown Market',
+                oldPrice: move.oldPrice || 0,
+                newPrice: move.newPrice || 0,
+                velocity: move.velocity || 0,
+                timestamp: move.timestamp || Date.now(),
+                marketSlug: move.marketSlug || '',
+                eventSlug: move.eventSlug || '',
+                image: move.image || undefined
+            }));
+        } catch (error) {
+            console.error('Error processing flash moves:', error);
+            return [];
+        }
     }, [flashMoves]);
     if (isLoading) {
         return (

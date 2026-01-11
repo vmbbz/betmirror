@@ -160,12 +160,34 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
             return [];
         }
     }, [flashMoves]);
+    // Handle loading state
     if (isLoading) {
         return (
             <div className="max-w-[1600px] mx-auto py-20 px-4 md:px-8 flex items-center justify-center">
                 <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-rose-500 mx-auto mb-4"></div>
                     <p className="text-gray-400 text-sm">Scanning for flash moves...</p>
+                </div>
+            </div>
+        );
+    }
+
+    // Handle error state
+    if (!Array.isArray(flashMoves)) {
+        return (
+            <div className="max-w-[1600px] mx-auto py-20 px-4 md:px-8 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="w-12 h-12 rounded-full bg-rose-500/20 flex items-center justify-center mx-auto mb-4">
+                        <Target className="text-rose-500" size={24} />
+                    </div>
+                    <h3 className="text-lg font-bold text-white mb-2">Error Loading Data</h3>
+                    <p className="text-gray-400 text-sm mb-4">Unable to load flash moves. Please try again.</p>
+                    <button
+                        onClick={() => onRefresh?.()}
+                        className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-sm font-medium transition-colors"
+                    >
+                        Retry
+                    </button>
                 </div>
             </div>
         );

@@ -15,19 +15,13 @@ export interface ActiveSnipe {
     currentPrice?: number;
 }
 
-/**
- * FomoRunnerService
- * Autonomous momentum sniper with liquidity guard and safety stop-loss.
- * Logic: Detect velocity -> Check Liquidity -> FOK Entry -> GTC Exit Chain.
- */
 export class FomoRunnerService extends EventEmitter {
     private isEnabled = false;
     private autoTpPercent = 0.20; 
     private activeSnipes: Map<string, ActiveSnipe> = new Map();
     
-    // Constraints for Pro Performance
-    private readonly LIQUIDITY_FLOOR = 1000; // $1,000 min depth to avoid slippage traps
-    private readonly STOP_LOSS_PCT = 0.10;   // 10% hard exit to protect capital
+    private readonly LIQUIDITY_FLOOR = 1000;
+    private readonly STOP_LOSS_PCT = 0.10;
 
     constructor(
         private intelligence: MarketIntelligenceService,
@@ -36,8 +30,8 @@ export class FomoRunnerService extends EventEmitter {
         private logger: Logger
     ) {
         super();
-        this.intelligence.on('flash_move', (event: FlashMoveEvent) => this.handleFlashMove(event));
-        this.intelligence.on('price_update', (data: { tokenId: string, price: number }) => this.handlePriceUpdate(data));
+        this.intelligence.on('flash_move', (e) => this.handleFlashMove(e));
+        this.intelligence.on('price_update', (d) => this.handlePriceUpdate(d));
     }
 
     public setConfig(enabled: boolean, tpPercent: number) {
@@ -51,48 +45,27 @@ export class FomoRunnerService extends EventEmitter {
         return Array.from(this.activeSnipes.values());
     }
 
-    /**
-     * Entry Logic with Liquidity Guard
-     */
     private async handleFlashMove(event: FlashMoveEvent) {
-        if (!this.isEnabled) return;
-        if (this.activeSnipes.has(event.tokenId)) return;
-
-        // 1. Direction Filter: Only chase upward velocity
+        if (!this.isEnabled || this.activeSnipes.has(event.tokenId)) return;
         if (event.velocity < 0.05) return; 
 
-        // 2. Liquidity Guard: Check depth before committing capital
         try {
             const metrics = await this.adapter.getLiquidityMetrics?.(event.tokenId, 'BUY');
-            const liquidity = metrics?.availableDepthUsd || 0;
+            if (metrics && metrics.availableDepthUsd < this.LIQUIDITY_FLOOR) return;
 
-            if (liquidity < this.LIQUIDITY_FLOOR) {
-                this.logger.warn(`🛡️ [FOMO] Snipe Aborted: ${event.tokenId.slice(0,8)} depth ($${liquidity.toFixed(0)}) below safety floor.`);
-                return;
-            }
-        } catch (e) {
-            this.logger.debug("Liquidity check bypassed due to RPC timeout");
-        }
-
-        this.logger.success(`🚀 [FOMO] Sniper Triggered: ${event.tokenId.slice(0,8)} (+${(event.velocity * 100).toFixed(1)}%). Executing...`);
-
-        try {
-            // Calculate a tight entry window (1% slippage cap)
             const slippagePrice = Math.min(0.99, event.newPrice * 1.01);
-            
             const result = await this.executor.createOrder({
                 marketId: event.conditionId,
                 tokenId: event.tokenId,
                 outcome: 'YES',
                 side: 'BUY',
-                sizeUsd: 50, // Standard test size for flash entries
+                sizeUsd: 50,
                 orderType: 'FOK',
                 priceLimit: slippagePrice
             });
 
             if (result.success && result.sharesFilled > 0) {
                 const tpPrice = Math.min(0.99, result.priceFilled * (1 + this.autoTpPercent));
-                
                 this.activeSnipes.set(event.tokenId, {
                     tokenId: event.tokenId,
                     conditionId: event.conditionId,
@@ -103,7 +76,6 @@ export class FomoRunnerService extends EventEmitter {
                     currentPrice: result.priceFilled
                 });
 
-                // Immediate Take-Profit Chain: Post a GTC sell limit order instantly
                 await this.executor.createOrder({
                     marketId: event.conditionId,
                     tokenId: event.tokenId,
@@ -122,9 +94,7 @@ export class FomoRunnerService extends EventEmitter {
                     targetPrice: tpPrice
                 });
             }
-        } catch (e: any) {
-            this.logger.error(`❌ [FOMO] Entry failed: ${e.message}`);
-        }
+        } catch (e) {}
     }
 
     /**
@@ -141,27 +111,16 @@ export class FomoRunnerService extends EventEmitter {
 
         // Exit if position loses 10% of its entry value
         if (currentDrop >= this.STOP_LOSS_PCT) {
-            this.logger.error(`🚨 [FOMO] Stop-Loss Hit! Reversal of ${(currentDrop * 100).toFixed(1)}% detected on ${data.tokenId.slice(0,8)}...`);
-            
-            try {
-                // Market sell to exit the position immediately (Kill all existing orders first)
-                const result = await this.executor.createOrder({
-                    marketId: snipe.conditionId,
-                    tokenId: snipe.tokenId,
-                    outcome: 'YES',
-                    side: 'SELL',
-                    sizeShares: snipe.shares,
-                    sizeUsd: snipe.shares * data.price,
-                    orderType: 'FAK' 
-                });
-
-                if (result.success) {
-                    this.logger.success(`🛡️ [FOMO] Emergency exit confirmed. Portfolio protected.`);
-                    this.activeSnipes.delete(data.tokenId);
-                }
-            } catch (e: any) {
-                this.logger.error(`❌ [FOMO] Emergency exit failed: ${e.message}`);
-            }
+            await this.executor.createOrder({
+                marketId: snipe.conditionId,
+                tokenId: snipe.tokenId,
+                outcome: 'YES',
+                side: 'SELL',
+                sizeShares: snipe.shares,
+                sizeUsd: snipe.shares * data.price,
+                orderType: 'FAK' 
+            });
+            this.activeSnipes.delete(data.tokenId);
         }
     }
 }

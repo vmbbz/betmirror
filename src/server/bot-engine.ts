@@ -725,6 +725,14 @@ export class BotEngine {
         }
     }
 
+    public getActiveFomoMoves() {
+        return this.intelligence?.getLatestMoves() || [];
+    }
+
+    public getActiveSnipes() {
+        return this.fomoRunner?.getActiveSnipes() || [];
+    }
+    
     public getActivePositions(): ActivePosition[] { return this.activePositions; }
     public getArbOpportunities(): ArbitrageOpportunity[] { return this.arbScanner?.getOpportunities() || []; }
     public getActiveFomoChases(): any[] { return this.fomoRunner ? [] : []; }

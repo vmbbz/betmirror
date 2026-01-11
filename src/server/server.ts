@@ -567,7 +567,8 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
             mmOpportunities,
-            fomoChases
+            fomoMoves: engine?.getActiveFomoMoves() || [],
+            fomoSnipes: engine?.getActiveSnipes() || []
         });
     } catch (e) { res.status(500).json({ error: 'DB Error' }); }
 });

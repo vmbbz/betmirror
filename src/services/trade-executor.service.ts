@@ -188,10 +188,9 @@ export class TradeExecutorService {
 
     this.userWs.on('open', () => {
         this.deps.logger.success('✅ Executor Fill Monitor Connected.');
-        // Authenticate if required by exchange spec
     });
 
-    this.userWs.on('message', (data) => {
+    this.userWs.on('message', (data: any) => {
         try {
             const msg = JSON.parse(data.toString());
             if (msg.event_type === 'order_filled') {
@@ -812,24 +811,14 @@ export class TradeExecutorService {
    */
   public async cancelExistingQuotes(tokenId: string): Promise<void> {
       const { adapter, logger } = this.deps;
-      const client = (adapter as any).getRawClient?.();
+      logger.info(`[Executor] Purging existing quotes for token: ${tokenId}`);
       
-      const existing = this.activeQuotes.get(tokenId);
-      if (!existing) return;
-
-      try {
-          const orderIds = [existing.bidOrderId, existing.askOrderId].filter(Boolean) as string[];
-          
-          if (orderIds.length > 0 && client) {
-              // Per docs: cancelOrders for multiple orders
-              await client.cancelOrders(orderIds);
-              logger.debug(`[MM] Cancelled ${orderIds.length} existing quotes for ${tokenId}`);
+      const orders = await adapter.getOpenOrders();
+      for (const order of orders) {
+          if (order.tokenId === tokenId || order.asset_id === tokenId) {
+              await adapter.cancelOrder(order.orderID || order.id);
+              logger.debug(`[MM] Cancelled order ${order.orderID || order.id} for token ${tokenId}`);
           }
-          
-          this.activeQuotes.delete(tokenId);
-      } catch (error) {
-          // Non-fatal - orders may have already been filled/cancelled
-          logger.debug(`[MM] Cancel existing quotes warning: ${error}`);
       }
   }
 

@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
-import { toast } from 'react-toastify';
+import { toast, ToastContainer } from 'react-toastify';
 import axios from 'axios';
 import { getMarketWebSocketService } from './src/services/market-ws.service';
 import './src/index.css';
@@ -12,7 +11,7 @@ TrendingUp, History, Copy, ExternalLink, AlertTriangle, Smartphone, Coins, PlusC
 CheckCircle2, ArrowDownCircle, ArrowUpCircle, Brain, AlertCircle, Trophy, Globe, Zap, LogOut,
 Info, HelpCircle, ChevronRight, Rocket, Gauge, MessageSquare, Star, ArrowRightLeft, LifeBuoy,
 Sun, Moon, Loader2, Timer, Fuel, Check, BarChart3, ChevronDown, MousePointerClick,
-Zap as ZapIcon, FileText, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle,
+Zap as ZapIcon, FileText, Flame, Twitter, Github, LockKeyhole, BadgeCheck, Search, BookOpen, ArrowRightCircle,
 Volume2, VolumeX, Menu, ArrowUpDown, Clipboard, Wallet2, ArrowDown, Sliders, Bell, ShieldAlert,
 Wrench, Fingerprint, ShieldCheck, Clock, Scale, Landmark, ArrowLeft, ArrowRight, Target, Sword, Recycle, ShieldIcon
 } from 'lucide-react';
@@ -23,7 +22,7 @@ import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/al
 import { UserStats } from './src/domain/user.types';
 import { ArbitrageOpportunity } from './src/adapters/interfaces';
 import ProTerminal from './src/proTerminal';
-import SportsRunner from './src/SportsRunner';
+import FomoRunner from './src/FomoRunner';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -136,12 +135,10 @@ const PerformanceChart = ({ userId, selectedRange }: {
     useEffect(() => {
         const fetchPortfolioData = async () => {
             if (!userId) return;
-            
             try {
                 setLoading(true);
                 const response = await axios.get(`/api/portfolio/snapshots/${userId}?period=${selectedRange}`);
                 const data = response.data;
-                // Ensure we always set an array
                 setPortfolioData(Array.isArray(data) ? data : []);
             } catch (error: any) {
                 console.error('Failed to fetch portfolio data:', error);
@@ -150,16 +147,15 @@ const PerformanceChart = ({ userId, selectedRange }: {
                 setLoading(false);
             }
         };
-
         fetchPortfolioData();
     }, [userId, selectedRange]);
 
     if (loading) {
         return (
-            <div className="h-32 flex items-center justify-center text-gray-400 dark:text-gray-600">
+            <div className="h-48 flex items-center justify-center text-gray-400 dark:text-gray-600">
                 <div className="text-center">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-500 mx-auto mb-2"></div>
-                    <p className="text-xs">Loading...</p>
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
+                    <p className="text-[10px] font-black uppercase tracking-widest">Syncing Snapshots...</p>
                 </div>
             </div>
         );
@@ -167,78 +163,74 @@ const PerformanceChart = ({ userId, selectedRange }: {
 
     if (portfolioData.length === 0) {
         return (
-            <div className="h-32 flex items-center justify-center text-gray-400 dark:text-gray-600">
+            <div className="h-48 flex items-center justify-center text-gray-400 dark:text-gray-600">
                 <div className="text-center">
-                    <TrendingUp size={24} className="opacity-50" />
-                    <p className="text-xs mt-2">No performance data yet</p>
+                    <TrendingUp size={32} className="opacity-20 mx-auto mb-3" />
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em]">No snapshot data for {selectedRange}</p>
                 </div>
             </div>
         );
     }
 
-    // Transform data for chart
-    const chartData = Array.isArray(portfolioData) && portfolioData.length > 0 ? portfolioData.map(snapshot => ({
+    const chartData = portfolioData.map(snapshot => ({
         timestamp: new Date(snapshot.timestamp).getTime(),
-        date: new Date(snapshot.timestamp).toLocaleDateString(),
-        portfolioValue: snapshot.totalValue,
-        cash: snapshot.cashBalance,
-        positionsValue: snapshot.positionsValue,
+        date: new Date(snapshot.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+        value: snapshot.totalValue,
         pnl: snapshot.totalPnL,
-        pnlPercent: snapshot.totalPnLPercent,
-        trades: snapshot.positionsCount
-    })) : [];
+        cash: snapshot.cashBalance,
+        positions: snapshot.positionsValue
+    }));
 
     return (
-        <div className="h-32">
+        <div className="h-48 w-full mt-4">
             <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
+                <AreaChart data={chartData}>
                     <defs>
-                        {/* Corrected duplicate x1 attribute to y1 on line 123 */}
-                        <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
-                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.1}/>
+                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                         </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.1} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
                     <XAxis 
                         dataKey="date" 
-                        tick={{ fontSize: 10, fill: '#6b7280' }}
-                        axisLine={{ stroke: '#374151', opacity: 0.2 }}
+                        tick={{ fontSize: 9, fill: '#64748b' }}
+                        axisLine={false}
+                        tickLine={false}
                     />
                     <YAxis 
-                        tick={{ fontSize: 10, fill: '#6b7280' }}
-                        axisLine={{ stroke: '#374151', opacity: 0.2 }}
-                        tickFormatter={(value) => `$${value}`}
+                        hide 
+                        domain={['auto', 'auto']}
                     />
                     <RechartsTooltip 
                         contentStyle={{ 
-                            backgroundColor: '#1f2937', 
-                            border: '1px solid #374151',
-                            borderRadius: '8px',
-                            fontSize: '12px'
+                            backgroundColor: '#0f172a', 
+                            border: '1px solid #1e293b',
+                            borderRadius: '12px',
+                            fontSize: '11px',
+                            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'
                         }}
-                        labelStyle={{ color: '#f3f4f6' }}
-                        formatter={(value: number | undefined, name: string | undefined) => [
-                            `$${(value || 0).toFixed(2)}`, 
-                            name === 'portfolioValue' ? 'Portfolio' : 
-                            name === 'pnl' ? 'P&L' : 
-                            name === 'cash' ? 'Cash' : 
-                            name === 'positionsValue' ? 'Positions' : value
-                        ]}
-                        labelFormatter={(label: string) => `Date: ${label}`}
+                        itemStyle={{ padding: '2px 0' }}
+                        formatter={(value: number | undefined) => {
+                            const displayValue = typeof value === 'number' ? value.toFixed(2) : '0.00';
+                            return [`$${displayValue}`, 'Value'];
+                        }}
                     />
                     <Area 
                         type="monotone" 
-                        dataKey="portfolioValue" 
-                        stroke="#3b82f6"
-                        fill="url(#colorPortfolio)"
-                        strokeWidth={2}
+                        dataKey="value" 
+                        stroke="#3b82f6" 
+                        strokeWidth={2.5}
+                        fillOpacity={1} 
+                        fill="url(#colorValue)" 
+                        animationDuration={1500}
                     />
                 </AreaChart>
             </ResponsiveContainer>
         </div>
     );
 };
+
 
 // --- Types ---
 interface Log {
@@ -266,7 +258,7 @@ enableSounds: boolean;
 enableAutoArb: boolean;
 enableCopyTrading: boolean;
 enableMoneyMarkets: boolean;
-enableSportsRunner: boolean;
+enableFomoRunner: boolean;
 }
 
 interface WalletBalances {
@@ -1893,7 +1885,7 @@ const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
-type TabId = 'dashboard' | 'money-market' | 'sports' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help';
+type TabId = 'dashboard' | 'money-market' | 'fomo' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help';
 const [activeTab, setActiveTab] = useState<TabId>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
@@ -1932,9 +1924,8 @@ const [selectedPosition, setSelectedPosition] = useState<ActivePosition | null>(
 const [openOrders, setOpenOrders] = useState<any[]>([]);
 const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
 const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
-
-const [sportsChases, setSportsChases] = useState<any[]>([]);
-const [sportsMatches, setSportsMatches] = useState<any[]>([]);
+// --- FOMO the Fomo Runner STATE ---
+const [fomoChases, setFomoChases] = useState<any[]>([]);
 
 // --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
 const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
@@ -1967,9 +1958,9 @@ const [config, setConfig] = useState<AppConfig>({
     targets: [],
     rpcUrl: 'https://polygon-rpc.com',
     geminiApiKey: '',
+    enableFomoRunner: true,
     enableCopyTrading: true,
     enableMoneyMarkets: true,
-    enableSportsRunner: true,
     multiplier: 1.0,
     riskProfile: 'balanced',
     minLiquidityFilter: 'LOW',
@@ -1997,7 +1988,7 @@ const updateConfig = (updates: Partial<AppConfig>) => {
             const { 
                 targets, multiplier, riskProfile, minLiquidityFilter, 
                 autoTp, maxTradeAmount, enableAutoCashout, maxRetentionAmount,
-                coldWalletAddress, enableNotifications, userPhoneNumber, enableAutoArb
+                coldWalletAddress, enableNotifications, userPhoneNumber, enableAutoArb, enableFomoRunner
             } = newConfig;
             
             // Fire and forget the server update
@@ -2010,6 +2001,7 @@ const updateConfig = (updates: Partial<AppConfig>) => {
                 autoTp,
                 maxTradeAmount,
                 enableAutoArb,
+                enableFomoRunner,
                 autoCashout: {
                     enabled: enableAutoCashout,
                     maxAmount: maxRetentionAmount,
@@ -2133,9 +2125,8 @@ const copyToClipboard = (text: string) => {
     toast.info("Copied to clipboard");
 };
 
-// --- POLL DATA ---
-/* fetchBotStatus now accepts an optional force parameter to satisfy 1-arg calls if compiler inferred */
-const fetchBotStatus = useCallback(async (force?: boolean) => {
+// --- POLL BOT STATUS DATA ---
+const fetchBotStatus = useCallback(async (force: boolean = false) => {
     console.log('🔍 fetchBotStatus called');
     if (!isConnected || !userAddress || needsActivation) {
         console.log('⏭️ Skipping fetch - not connected, no user address, or needs activation');
@@ -2189,8 +2180,7 @@ const fetchBotStatus = useCallback(async (force?: boolean) => {
             setActivePositions(res.data.positions);
         }
 
-        if (res.data.sportsMatches) setSportsMatches(res.data.sportsMatches);
-        if (res.data.sportsChases) setSportsChases(res.data.sportsChases);
+        if (res.data.fomoChases) setFomoChases(res.data.fomoChases);
 
         // Track latest ID instead of length
         const latestHistory = res.data.history || [];
@@ -2240,7 +2230,8 @@ const fetchBotStatus = useCallback(async (force?: boolean) => {
                 userPhoneNumber: serverConfig.userPhoneNumber,
                 enableAutoCashout: serverConfig.autoCashout?.enabled,
                 maxRetentionAmount: serverConfig.autoCashout?.maxAmount,
-                coldWalletAddress: serverConfig.autoCashout?.destinationAddress
+                coldWalletAddress: serverConfig.autoCashout?.destinationAddress,
+                enableFomoRunner: serverConfig.enableFomoRunner ?? prev.enableFomoRunner
             }));
         }
 
@@ -2748,6 +2739,9 @@ const handleStart = async () => {
         riskProfile: config.riskProfile,
         autoTp: config.autoTp,
         maxTradeAmount: config.maxTradeAmount,
+        enableMoneyMarkets: config.enableMoneyMarkets,
+        enableCopyTrading: config.enableCopyTrading,
+        enableFomoRunner: config.enableFomoRunner,
         notifications: {
             enabled: config.enableNotifications,
             phoneNumber: config.userPhoneNumber
@@ -2966,7 +2960,7 @@ return (
                 {[
                 { id: 'dashboard', icon: Activity, label: 'Dashboard' },
                 { id: 'money-market', icon: Scale, label: 'M.Market' },
-                { id: 'sports', icon: Trophy, label: 'Sports Runner' },
+                { id: 'fomo', icon: Flame, label: 'FOMO Runner' },
                 { id: 'system', icon: Gauge, label: 'System' },
                 { id: 'bridge', icon: Globe, label: 'Bridge' },
                 { id: 'marketplace', icon: Users, label: 'Alpha' },
@@ -3062,7 +3056,7 @@ return (
                     { id: 'dashboard', icon: Activity, label: 'Dashboard' },
                     { id: 'system', icon: Gauge, label: 'System' },
                     { id: 'money-market', icon: Scale, label: 'Money Market' },
-                    { id: 'sports', icon: Trophy, label: 'Sports Runner' },
+                    { id: 'fomo', icon: Flame, label: 'FOMO Runner' },
                     { id: 'bridge', icon: Globe, label: 'Bridge' },
                     { id: 'marketplace', icon: Users, label: 'Marketplace' },
                     { id: 'history', icon: History, label: 'History' },
@@ -3575,9 +3569,9 @@ return (
             />
         )}
 
-        {activeTab === 'sports' && (
-            <SportsRunner 
-                sportsMatches={sportsMatches} 
+        {activeTab === 'fomo' && (
+            <FomoRunner 
+                flashMoves={fomoChases} 
             />
         )}
         
@@ -4186,18 +4180,6 @@ return (
                             <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Autonomous Market Making & Spread capture via GTC maker orders.</p>
                         </div>
 
-                        {/* Sport Runner (Rebranded Pulse Scout) */}
-                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableSportsRunner ? 'bg-emerald-600/10 border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
-                            <div className="flex justify-between items-start mb-6">
-                                <div className="p-3 bg-emerald-600 rounded-xl text-white shadow-lg"><Sword size={22} /></div>
-                                <label className="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" checked={config.enableSportsRunner} onChange={(e) => updateConfig({ enableSportsRunner: e.target.checked })} className="sr-only peer" />
-                                    <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-emerald-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                                </label>
-                            </div>
-                            <h4 className="text-lg font-black text-white uppercase italic mb-1">Sport Runner</h4>
-                            <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Low-latency frontrunning of live sports scores and event arbitrage.</p>
-                        </div>
                     </div>
                 </section>
 

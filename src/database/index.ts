@@ -1,4 +1,3 @@
-
 import mongoose, { Schema, Document } from 'mongoose';
 import { TraderProfile } from '../domain/alpha.types.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
@@ -43,6 +42,8 @@ export interface ITrade extends Document {
   timestamp: Date;
   marketSlug?: string;
   eventSlug?: string;
+  // Added serviceOrigin to support origin tracking for trades
+  serviceOrigin?: string;
 }
 
 export interface IRegistry extends Document, TraderProfile {
@@ -282,7 +283,9 @@ const TradeSchema = new Schema<ITrade>({
         },
         message: 'eventSlug must be lowercase with hyphens only'
     }
-}
+},
+  // Added serviceOrigin to the schema for DB persistence
+  serviceOrigin: { type: String, index: true }
 });
 
 const RegistrySchema = new Schema<IRegistry>({

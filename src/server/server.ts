@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -8,7 +7,7 @@ import mongoose from 'mongoose';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, SportsMatch as DbSportsMatch, ITrade } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -18,7 +17,6 @@ import { SafeManagerService } from '../services/safe-manager.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
-import { SportsMatch } from '../services/sports-intel.service.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -77,7 +75,9 @@ async function startUserBot(userId: string, config: BotConfig) {
         },
         onTradeComplete: async (trade) => {
             try {
-                serverLogger.info(`Trade Complete for ${normId}: ${trade.side} ${trade.outcome} | Executed: $${trade.executedSize?.toFixed(2) || 0} | PnL: $${trade.pnl?.toFixed(2) || 0}`);
+                // FOMO UPDATE: Handle the service origin for sniper tracking
+                const origin = (trade as any).serviceOrigin || 'COPY';
+                serverLogger.info(`Trade Complete [${origin}] for ${normId}: ${trade.side} ${trade.outcome} | Executed: $${trade.executedSize?.toFixed(2) || 0}`);
                 
                 // ATOMIC STATS UPDATE
                 const update: any = {
@@ -115,7 +115,8 @@ async function startUserBot(userId: string, config: BotConfig) {
                         riskScore: trade.riskScore,
                         timestamp: trade.timestamp,
                         marketSlug: trade.marketSlug,
-                        eventSlug: trade.eventSlug
+                        eventSlug: trade.eventSlug,
+                        serviceOrigin: origin 
                     });
                 } else {
                     // Update existing trade entry (e.g. closing an open position)
@@ -439,7 +440,7 @@ app.post('/api/feedback', async (req: any, res: any) => {
 
 // 5. Start Bot
 app.post('/api/bot/start', async (req: any, res: any) => {
-  const { userId, userAddresses, rpcUrl, geminiApiKey, sportmonksApiKey, multiplier, riskProfile, enableSportsRunner, enableMoneyMarkets, enableCopyTrading, maxTradeAmount } = req.body;
+  const { userId, userAddresses, rpcUrl, geminiApiKey, multiplier, riskProfile, enableMoneyMarkets, enableCopyTrading, enableFomoRunner = true, maxTradeAmount } = req.body;
   if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
   const normId = userId.toLowerCase();
   try {
@@ -452,13 +453,12 @@ app.post('/api/bot/start', async (req: any, res: any) => {
         userAddresses: Array.isArray(userAddresses) ? userAddresses : userAddresses.split(',').map((s: string) => s.trim()),
         rpcUrl,
         geminiApiKey,
-        sportmonksApiKey: process.env.SPORTMONKS_API_KEY || '',  
         multiplier: Number(multiplier),
         riskProfile,
         enableNotifications: false,
         enableCopyTrading: enableCopyTrading ?? true,
         enableMoneyMarkets: enableMoneyMarkets ?? true,
-        enableSportsRunner: enableSportsRunner ?? true,
+        enableFomoRunner: enableFomoRunner,
         maxTradeAmount: maxTradeAmount || 100, 
         mongoEncryptionKey: ENV.mongoEncryptionKey,
         l2ApiCredentials: user.tradingWallet.l2ApiCredentials
@@ -484,7 +484,7 @@ app.post('/api/bot/stop', async (req: any, res: any) => {
 
 // Live Update Bot
 app.post('/api/bot/update', async (req: any, res: any) => {
-    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount } = req.body;
+    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount, enableFomoRunner } = req.body;
     
     if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
     const normId = userId.toLowerCase();
@@ -502,6 +502,7 @@ app.post('/api/bot/update', async (req: any, res: any) => {
         if (autoTp) cfg.autoTp = autoTp;
         if (autoCashout) cfg.autoCashout = autoCashout;
         if (maxTradeAmount) cfg.maxTradeAmount = maxTradeAmount;
+        if (enableFomoRunner !== undefined) cfg.enableFomoRunner = enableFomoRunner;
         if (notifications) {
             cfg.enableNotifications = notifications.enabled;
             cfg.userPhoneNumber = notifications.phoneNumber;
@@ -517,7 +518,8 @@ app.post('/api/bot/update', async (req: any, res: any) => {
                 riskProfile: riskProfile,
                 autoTp: autoTp ? Number(autoTp) : undefined,
                 autoCashout: autoCashout,
-                maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : undefined
+                maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : undefined,
+                enableFomoRunner: enableFomoRunner
             });
         }
 
@@ -525,69 +527,6 @@ app.post('/api/bot/update', async (req: any, res: any) => {
     } catch (e: any) {
         console.error("Failed to update bot config:", e);
         res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/bot/status/:userId', async (req: any, res: any) => {
-    const { userId } = req.params;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    try {
-        const user = await User.findOne({ address: normId }).lean();
-        const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
-        const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
-
-        let mmOpportunities: ArbitrageOpportunity[] = [];
-        let sportsMatches: SportsMatch[] = [];
-        let sportsChases: any[] = [];
-
-        if (engine) {
-            mmOpportunities = engine.getArbOpportunities();
-            sportsMatches = engine.getLiveSportsMatches();
-            sportsChases = engine.getActiveSportsChases();
-            
-            for (const match of sportsMatches) {
-                if (match.tokenIds?.length > 0 && !match.marketPrice) {
-                    try {
-                        match.marketPrice = await (engine as any).exchange.getMarketPrice(match.conditionId, match.tokenIds[0], 'BUY');
-                    } catch (e) {}
-                }
-            }
-        }
-
-        let livePositions: ActivePosition[] = [];
-        if (engine) {
-            const scanner = (engine as any).arbScanner;
-            livePositions = (engine.getActivePositions() || []).map(p => ({
-                ...p,
-                managedByMM: scanner?.hasActiveQuotes(p.tokenId) || false
-            }));
-        } else if (user && user.activePositions) {
-            livePositions = user.activePositions as ActivePosition[];
-        }
-
-        res.json({ 
-            isRunning: engine ? engine.isRunning : (user?.isBotRunning || false),
-            logs: dbLogs.map(l => ({ id: l._id.toString(), time: l.timestamp.toLocaleTimeString(), type: l.type, message: l.message })),
-            history: history.map((t: any) => ({ ...t, id: t._id.toString() })),
-            positions: livePositions,
-            stats: user?.stats || null,
-            config: user?.activeBotConfig || null,
-            mmOpportunities,
-            sportsMatches,
-            sportsChases
-        });
-    } catch (e) { res.status(500).json({ error: 'DB Error' }); }
-});
-
-app.post('/api/bot/sports/link', async (req: any, res: any) => {
-    const { userId, conditionId, matchId } = req.body;
-    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
-    if (engine && (engine as any).sportsIntel) {
-        (engine as any).sportsIntel.forceLink(conditionId, matchId);
-        res.json({ success: true });
-    } else {
-        res.status(404).json({ error: "Engine or Sports module offline" });
     }
 });
 
@@ -602,22 +541,11 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
 
         let mmOpportunities: ArbitrageOpportunity[] = [];
-        let sportsMatches: any[] = [];
-        let sportsChases: any[] = [];
+        let fomoChases: any[] = [];
 
         if (engine) {
             mmOpportunities = engine.getArbOpportunities();
-            sportsMatches = engine.getLiveSportsMatches();
-            sportsChases = engine.getActiveSportsChases();
-            
-            // Sync current prices for sports matches to ensure UI has Alpha Edge visibility
-            for (const match of sportsMatches) {
-                if (match.tokenId && !match.marketPrice) {
-                    try {
-                        match.marketPrice = await (engine as any).exchange.getMarketPrice(match.conditionId, match.tokenId, 'BUY');
-                    } catch (e) {}
-                }
-            }
+            fomoChases = engine.getActiveFomoChases();
         }
 
         let livePositions: ActivePosition[] = [];
@@ -639,21 +567,9 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
             mmOpportunities,
-            sportsMatches,
-            sportsChases
+            fomoChases
         });
     } catch (e) { res.status(500).json({ error: 'DB Error' }); }
-});
-
-app.post('/api/bot/sports/link', async (req: any, res: any) => {
-    const { userId, conditionId, matchId } = req.body;
-    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
-    if (engine && (engine as any).sportsIntel) {
-        (engine as any).sportsIntel.forceLink(conditionId, matchId);
-        res.json({ success: true });
-    } else {
-        res.status(404).json({ error: "Engine or Sports module offline" });
-    }
 });
 
 // 8. Registry Routes
@@ -770,7 +686,7 @@ app.post('/api/deposit/record', async (req: any, res: any) => {
 app.post('/api/wallet/withdraw', async (req: any, res: any) => {
     const { userId, tokenType, toAddress, forceEoa, targetSafeAddress } = req.body;
     const normId = userId.toLowerCase();
-    const isForceEoa = forceEoa === true; // Explicit boolean conversion
+    const isForceEoa = forceEoa === true; 
     try {
         // MUST explicitly select encrypted field for withdrawal
         const user = await User.findOne({ address: normId })
@@ -792,7 +708,7 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
             if (!targetSafeAddress) eoaBalance = await provider.getBalance(walletConfig.address);
         } else { 
             try { 
-                balanceToWithdraw = await usdcContract.of(safeAddr); 
+                balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
                 if (!targetSafeAddress) eoaBalance = await usdcContract.balanceOf(walletConfig.address);
             } catch(e) {} 
         }
@@ -956,7 +872,6 @@ app.post('/api/redeem', async (req: any, res: any) => {
             const costBasis = (position as any).investedValue || (position.balance * position.entryPrice);
             const realizedPnl = (result.amountUsd || 0) - costBasis;
             
-            const Trade = (await import('../database/index.js')).Trade;
             const activePositions = engine.getActivePositions();
             const activePosition = activePositions.find(p => p.marketId === marketId && p.outcome === outcome);
             
@@ -997,9 +912,7 @@ app.post('/api/redeem', async (req: any, res: any) => {
             res.json({ 
                 success: true, 
                 amountUsd: result.amountUsd,
-                realizedPnl: realizedPnl,
-                txHash: result.txHash,
-                message: `Successfully redeemed $${result.amountUsd?.toFixed(2)} USDC (PnL: $${realizedPnl.toFixed(2)})` 
+                message: `Successfully redeemed $${result.amountUsd?.toFixed(2)} USDC` 
             });
         } else {
             res.status(500).json({ error: result.error || 'Redemption failed' });
@@ -1047,26 +960,6 @@ app.get('/api/market/:marketId', async (req: any, res: any) => {
     }
 });
 
-// New: Sports Intel Map
-app.get('/api/sports/matches', async (req: any, res: any) => {
-    try {
-        const matches = await DbSportsMatch.find({}).sort({ updatedAt: -1 });
-        res.json(matches);
-    } catch (e) {
-        res.status(500).json({ error: 'DB Error' });
-    }
-});
-
-app.post('/api/sports/map', async (req: any, res: any) => {
-    const { matchId, conditionId } = req.body;
-    try {
-        await DbSportsMatch.updateOne({ matchId }, { conditionId, updatedAt: new Date() }, { upsert: true });
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: 'Mapping failed' });
-    }
-});
-
 app.get('*', (req, res) => {
     const indexPath = path.join(distPath, 'index.html');
     if (!fs.existsSync(indexPath)) {
@@ -1088,10 +981,8 @@ async function restoreBots() {
                  const normId = user.address.toLowerCase();
                  const config = user.activeBotConfig;
 
-                 config.sportmonksApiKey = process.env.SPORTMONKS_API_KEY || '';
-                 
-                 // Map legacy names to fix property mismatch
-                 config.enableSportsRunner = config.enableSportsRunner ?? config.enableSportsFrontrunning ?? true;
+                 // Set default Fomo Runner config
+                 config.enableFomoRunner = config.enableFomoRunner ?? true;
                  config.enableMoneyMarkets = config.enableMoneyMarkets ?? true;
                  config.enableCopyTrading = config.enableCopyTrading ?? true;
                  
@@ -1185,12 +1076,13 @@ app.get('/api/portfolio/snapshots/:userId', async (req: any, res: any) => {
                 break;
         }
         
+        // Use lean to ensure clean objects for the frontend
         const snapshots = await PortfolioSnapshotModel.find({
             userId: normId,
             timestamp: { $gte: startDate }
-        }).sort({ timestamp: 1 });
+        }).sort({ timestamp: 1 }).lean();
         
-        res.json(snapshots);
+        res.json(snapshots.map((s: any) => ({ ...s, id: s._id.toString() })));
     } catch (e: any) {
         serverLogger.error(`Portfolio snapshots error: ${e.message}`);
         res.status(500).json({ error: e.message });
@@ -1218,8 +1110,14 @@ app.get('/api/portfolio/latest/:userId', async (req: any, res: any) => {
     try {
         const snapshot = await PortfolioSnapshotModel
             .findOne({ userId: normId })
-            .sort({ timestamp: -1 });
-        res.json(snapshot);
+            .sort({ timestamp: -1 })
+            .lean();
+        
+        if (snapshot) {
+            res.json({ ...snapshot, id: (snapshot as any)._id.toString() });
+        } else {
+            res.json(null);
+        }
     } catch (e: any) {
         serverLogger.error(`Portfolio latest error: ${e.message}`);
         res.status(500).json({ error: e.message });

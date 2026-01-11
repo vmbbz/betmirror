@@ -1,6 +1,7 @@
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { Logger } from '../utils/logger.util.js';
 import { WS_URLS } from '../config/env.js';
+import { MarketIntelligenceService } from './market-intelligence.service.js';
 import { MoneyMarketOpportunity } from '../database/index.js';
 import EventEmitter from 'events';
 // Use default import for WebSocket
@@ -145,7 +146,7 @@ export class MarketMakingScanner extends EventEmitter {
     private ws?: WebSocket;
     private userWs?: WebSocket; // NEW: Private User Channel
     private trackedMarkets: Map<string, TrackedMarket> = new Map();
-    private monitoredMarkets: Map<string, MarketOpportunity> = new Map(); // All discovered markets for tab filtering
+    private monitoredMarkets: Map<string, MarketOpportunity> = new Map();// All discovered markets for tab filtering
     private opportunities: MarketOpportunity[] = [];
     private pingInterval?: NodeJS.Timeout;
     private refreshInterval?: NodeJS.Timeout;
@@ -191,12 +192,12 @@ export class MarketMakingScanner extends EventEmitter {
     };
 
     constructor(
-        private adapter: IExchangeAdapter,
-        private logger: Logger,
-        config?: Partial<MarketMakerConfig>
+        private intelligence: MarketIntelligenceService,
+        private adapter: IExchangeAdapter, 
+        private logger: Logger
     ) {
         super();
-        if (config) this.config = { ...this.config, ...config };
+        this.intelligence.on('price_update', (data) => this.handlePriceUpdate(data));
     }
 
     async start() {
@@ -850,7 +851,7 @@ export class MarketMakingScanner extends EventEmitter {
 
         const wsUrl = `${WS_URLS.CLOB}/ws/market`;
         this.logger.info(`🔌 Connecting to ${wsUrl}`);
-        // FIX: Use named import for WebSocket to resolve constructor error in Node.js ESM
+        // Fixed: Use standard WebSocket constructor for constructability in Node ESM
         this.ws = new WebSocket(wsUrl);
 
         const wsAny = this.ws as any;
@@ -901,7 +902,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         // This requires standard WebSocket logic with Auth Headers or Token
         // Assuming the adapter has the current valid Auth token
-        // FIX: Use named import for WebSocket to resolve constructor error in Node.js ESM
+        // Fixed: Use standard WebSocket constructor for constructability in Node ESM
         this.userWs = new WebSocket(userWsUrl);
         const wsAny = this.userWs as any;
 
@@ -1003,6 +1004,18 @@ export class MarketMakingScanner extends EventEmitter {
                 break;
             default:
                 this.logger.debug(`Unhandled message type: ${msg.event_type || 'unknown'} - ${JSON.stringify(msg)}`);
+        }
+    }
+
+    private handlePriceUpdate(data: { tokenId: string, price: number }) {
+        if (!this.isScanning) return;
+        
+        // Update local opportunity cache
+        const opp = this.opportunities.find(o => o.tokenId === data.tokenId);
+        if (opp) {
+            // Simplified update; real implementation would refresh full metrics
+            opp.midpoint = data.price;
+            opp.timestamp = Date.now();
         }
     }
 
@@ -1146,6 +1159,13 @@ export class MarketMakingScanner extends EventEmitter {
 
                 // We only trigger kill switch if move is extreme (e.g. > 25%) 
                 // and user has enabled the safety feature
+
+                // WE ARE EMBRACING FLASH MOVES NOW TO CHASE THE WAVE
+                // - Build out engine to power sports runner now called flash runner. send data thru whatver mechanism is bets: events, function calling, etc
+               // - caching this comploete market card, globally, then accessing it from sports runner may be the smoothest approach
+               // - remebering to clean up closed or ended events
+               // - same with money market disoovery we should clean up whats tracked
+
                 if (this.config.enableKillSwitch && movePct > 25) {
                     this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
                 }
@@ -1399,7 +1419,7 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     getMonitoredMarkets(): MarketOpportunity[] {
-        return this.getOpportunities();
+        return Array.from(this.monitoredMarkets.values());
     }
 
     getInventorySkew(conditionId: string): number {
@@ -1431,7 +1451,7 @@ export class MarketMakingScanner extends EventEmitter {
         return this.killSwitchActive;
     }
 
-    getTrackedMarket(tokenId: string): TrackedMarket | undefined {
-        return this.trackedMarkets.get(tokenId);
+    getTrackedMarket(marketId: string): MarketOpportunity | undefined {
+        return this.monitoredMarkets.get(marketId) || this.opportunities.find(o => o.marketId === marketId);
     }
 }

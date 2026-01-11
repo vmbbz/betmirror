@@ -48,6 +48,8 @@ export type TradeHistoryEntry = {
   assetId?: string;
   marketSlug?: string;
   eventSlug?: string;
+  // Origin Tracking
+  serviceOrigin?: 'COPY' | 'MM' | 'FOMO' | 'MANUAL';
 };
 
 // Tracks open positions to calculate REAL PnL on sell
@@ -87,6 +89,9 @@ export interface ActivePosition {
   inventorySkew?: number;     // -1.0 to 1.0 (Shows if we are heavy on YES or NO)
   activeBidPrice?: number;    // Current resting bid
   activeAskPrice?: number;    // Current resting ask
+  // ---
+  // Origin Tracking
+  serviceOrigin?: 'COPY' | 'MM' | 'FOMO' | 'MANUAL';
   // ---
   // Resolution and Metadata
   isResolved?: boolean; // Whether the market has been resolved

@@ -4,7 +4,7 @@
 
 **Institutional-Grade Trading Infrastructure for Polymarket. Powered by AI, Multi-Strategy Execution, and Enterprise Risk Management.**
 
-**Bet Mirror Pro** redefines professional prediction market trading copy-trading and market-making with its **institutional-grade execution** and **sophisticated risk management** framework. Our platform combines the power of **quantitative algorithms** with **AI-driven decision making** to deliver consistent alpha in prediction markets.
+**Bet Mirror Pro** redefines professional prediction market trading copy-trading and market-making with its **institutional-grade execution** and **sophisticated risk management** framework.
 
 ### 🏆 Why Choose Bet Mirror Pro?
 - **Institutional Infrastructure**: Bank-grade security with **Gnosis Safe** multi-sig wallets and **enterprise-grade** encryption
@@ -206,8 +206,8 @@ graph TD
     subgraph "Cloud Infrastructure"
         API["⚙️ Node.js API Cluster"]
         DB[("🗄️ MongoDB Atlas")]
-        Gemini["🧠 Gemini 2.5 AI"]
-        Scanner["🔍 MM Scanner"]
+        Gemini["🧠 Gemini 3 Pro AI"]
+        Scanner["🔍 Intelligence Engine"]
     end
 
     subgraph "Blockchain & Execution"
@@ -226,11 +226,12 @@ graph TD
     API -->|"4. Deploy Safe & Encrypt Signer"| DB
     
     API -->|"5. Risk Analysis"| Gemini
-    Scanner -->|"6. Yield Signals"| API
+    Scanner -->|"6. Yield/Velocity Signals"| API
     
-    API -->|"7. Sign Intent (EOA Key)"| API
-    API -->|"8. Submit to Relayer"| Relayer
-    Relayer -->|"9. Execute via Safe"| CLOB
+    API -->|"7. Sign Intent (Encrypted EOA Key)"| API
+    API -->|"8. Submit Meta-Tx"| Relayer
+    Relayer -->|"9. Execute Meta-Tx via Safe"| Safe
+    Safe -->|"10. Settle Trade"| CLOB
 ```
 
 ---
@@ -316,22 +317,6 @@ Deploying to a cloud provider (Railway, Sliplane, DigitalOcean)? Use the Dockerf
 docker build -t bet-mirror .
 docker run -p 3000:3000 -e MONGODB_URI=... bet-mirror
 ```
-
----
-
-## 🚑 Troubleshooting
-
-### MongoDB Connection Error on Deployment
-If you see `MongooseServerSelectionError` in your cloud logs (Sliplane, Railway, etc.), it means the server cannot reach MongoDB Atlas.
-
-**Cause:** MongoDB Atlas blocks unknown IP addresses by default. Cloud providers use dynamic IPs.
-
-**Fix:**
-1.  Log in to **MongoDB Atlas**.
-2.  Go to **Network Access** (Security sidebar).
-3.  Click **+ Add IP Address**.
-4.  Select **"Allow Access from Anywhere"** (0.0.0.0/0).
-5.  Confirm. The deployment should now succeed on retry.
 
 ---
 

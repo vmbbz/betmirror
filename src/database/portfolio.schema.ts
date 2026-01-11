@@ -1,10 +1,9 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
-import { PortfolioSnapshot } from '../domain/portfolio.types.js';
+import { PortfolioSnapshot, PortfolioAnalytics } from '../domain/portfolio.types.js';
 
 // Interface for the model with static methods
-// FIX: Ensure the interface correctly represents a Mongoose Model with our custom statics
 interface IPortfolioSnapshotModel extends Model<PortfolioSnapshot & Document> {
-  getAnalytics(userId: string, period: '1D' | '1W' | '30D' | 'ALL'): Promise<any>;
+  getAnalytics(userId: string, period: '1D' | '1W' | '30D' | 'ALL'): Promise<PortfolioAnalytics | null>;
   createSnapshot(
     userId: string,
     totalValue: number,
@@ -21,7 +20,7 @@ interface IPortfolioSnapshotModel extends Model<PortfolioSnapshot & Document> {
 // Portfolio Snapshot Schema
 const portfolioSnapshotSchema = new Schema<PortfolioSnapshot & Document>({
   userId: { type: String, required: true, index: true },
-  timestamp: { type: Date, required: true },
+  timestamp: { type: Date, required: true, default: Date.now },
   totalValue: { type: Number, required: true },
   cashBalance: { type: Number, required: true },
   positionsValue: { type: Number, required: true },
@@ -38,19 +37,20 @@ const portfolioSnapshotSchema = new Schema<PortfolioSnapshot & Document>({
     pnl: { type: Number, required: true }
   }]
 }, {
-  timestamps: true
+  timestamps: true,
+  versionKey: false
 });
 
 // Create indexes for performance
 portfolioSnapshotSchema.index({ userId: 1, timestamp: 1 });
-portfolioSnapshotSchema.index({ timestamp: 1 }); // For cleanup of old snapshots
-portfolioSnapshotSchema.index({ userId: 1, timestamp: -1 }); // Latest snapshots first for each user
+portfolioSnapshotSchema.index({ timestamp: 1 }); 
+portfolioSnapshotSchema.index({ userId: 1, timestamp: -1 }); 
 
 // Static methods for portfolio analytics
 portfolioSnapshotSchema.statics.getAnalytics = async function(
   userId: string, 
   period: '1D' | '1W' | '30D' | 'ALL'
-) {
+): Promise<PortfolioAnalytics | null> {
   const now = new Date();
   let startDate: Date;
   
@@ -66,14 +66,14 @@ portfolioSnapshotSchema.statics.getAnalytics = async function(
       break;
     case 'ALL':
     default:
-      startDate = new Date(0); // Beginning of time
+      startDate = new Date(0); 
       break;
   }
   
   const snapshots = await this.find({
-    userId,
+    userId: userId.toLowerCase(),
     timestamp: { $gte: startDate }
-  }).sort({ timestamp: 1 });
+  }).sort({ timestamp: 1 }).lean();
   
   if (snapshots.length === 0) {
     return null;
@@ -103,7 +103,7 @@ portfolioSnapshotSchema.statics.getAnalytics = async function(
   return {
     userId,
     period,
-    snapshots,
+    snapshots: snapshots.map((s: any) => ({ ...s, id: s._id.toString() })),
     startingValue,
     endingValue,
     totalReturn,
@@ -125,7 +125,7 @@ portfolioSnapshotSchema.statics.createSnapshot = async function(
   positionsBreakdown?: any[]
 ) {
   return this.create({
-    userId,
+    userId: userId.toLowerCase(),
     timestamp: new Date(),
     totalValue,
     cashBalance,
@@ -137,7 +137,7 @@ portfolioSnapshotSchema.statics.createSnapshot = async function(
   });
 };
 
-// Cleanup old snapshots (keep only last 90 days)
+// Cleanup old snapshots (keep last 90 days)
 portfolioSnapshotSchema.statics.cleanupOldSnapshots = async function() {
   const cutoffDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
   return this.deleteMany({
@@ -145,5 +145,4 @@ portfolioSnapshotSchema.statics.cleanupOldSnapshots = async function() {
   });
 };
 
-// FIX: Use named generic parameters to ensure the exported model has both base and custom methods
 export const PortfolioSnapshotModel = mongoose.model<PortfolioSnapshot & Document, IPortfolioSnapshotModel>('PortfolioSnapshot', portfolioSnapshotSchema);

@@ -1,4 +1,3 @@
-import mongoose from 'mongoose';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { PortfolioSnapshot, PortfolioAnalytics } from '../domain/portfolio.types.js';
 import { ActivePosition } from '../domain/trade.types.js';
@@ -69,7 +68,7 @@ export class PortfolioService {
         entryPrice: pos.entryPrice,
         currentPrice: pos.currentPrice || pos.entryPrice,
         value: pos.shares * (pos.currentPrice || pos.entryPrice),
-        pnl: pos.unrealizedPnL || 0
+        pnl: (pos.shares * (pos.currentPrice || pos.entryPrice)) - (pos.shares * pos.entryPrice)
       }));
 
       // Calculate starting value for P&L percentage
@@ -134,9 +133,8 @@ export class PortfolioService {
           break;
       }
       
-      // Fix for Error at line 142: Using lean() and mapping _id to id ensures objects match the PortfolioSnapshot interface
       const snapshots = await PortfolioSnapshotModel.find({
-        userId,
+        userId: userId.toLowerCase(),
         timestamp: { $gte: startDate }
       }).sort({ timestamp: 1 }).lean();
       
@@ -165,7 +163,6 @@ export class PortfolioService {
       this.logger.info(`[Portfolio] Trade snapshot created for ${userId}`);
     } catch (error: any) {
       this.logger.error(`[Portfolio] Failed to create trade snapshot: ${error.message}`);
-      // Don't throw - trade shouldn't fail if snapshot fails
     }
   }
 
@@ -184,9 +181,8 @@ export class PortfolioService {
   // Get latest snapshot
   async getLatestSnapshot(userId: string): Promise<PortfolioSnapshot | null> {
     try {
-      // Fix for Error at line 186: Using lean() and mapping _id to id ensures returned object matches the PortfolioSnapshot interface
       const snapshot = await PortfolioSnapshotModel
-        .findOne({ userId })
+        .findOne({ userId: userId.toLowerCase() })
         .sort({ timestamp: -1 })
         .lean();
       

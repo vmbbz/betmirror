@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, Socket } from 'socket.io';
 import { createServer } from 'http';
 import { ethers, JsonRpcProvider, Contract } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
@@ -209,7 +209,7 @@ async function startUserBot(userId: string, config: BotConfig) {
 }
 
 // Socket.io Room Management
-io.on('connection', (socket) => {
+io.on('connection', (socket: Socket) => {
     socket.on('join', (userId: string) => {
         const normId = userId.toLowerCase();
         socket.join(normId);

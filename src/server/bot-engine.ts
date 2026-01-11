@@ -66,6 +66,7 @@ export interface BotCallbacks {
     onArbUpdate?: (opportunities: ArbitrageOpportunity[]) => Promise<void>;
     onFomoVelocity?: (moves: FlashMoveEvent[]) => void;
     onFomoSnipes?: (snipes: ActiveSnipe[]) => void;
+    onLog?: (log: any) => void;
 }
 
 export class BotEngine {

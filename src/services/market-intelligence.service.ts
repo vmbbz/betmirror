@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { WS_URLS } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
+import axios from 'axios';
 
 export interface PriceSnapshot {
     price: number;
@@ -37,10 +38,33 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     /**
-     * Called by ArbitrageScanner to bridge metadata to the Intelligence Engine
+     * Update metadata for a token (called by other scanners or internal fetch)
      */
     public updateMetadata(tokenId: string, data: any) {
         this.marketMetadata.set(tokenId, data);
+    }
+
+    /**
+     * Proactive fetch for missing metadata to ensure UI cards have context
+     */
+    private async fetchMissingMetadata(tokenId: string) {
+        try {
+            // Attempt to find market by token ID via Polymarket's Gamma API
+            const response = await axios.get(`https://gamma-api.polymarket.com/markets?token_id=${tokenId}`);
+            const data = response.data?.[0];
+            if (data) {
+                this.updateMetadata(tokenId, {
+                    conditionId: data.conditionId,
+                    question: data.question,
+                    image: data.image,
+                    marketSlug: data.slug
+                });
+                return this.marketMetadata.get(tokenId);
+            }
+        } catch (e) {
+            this.logger.debug(`Could not fetch metadata for token ${tokenId}`);
+        }
+        return null;
     }
 
     public async start() {
@@ -51,7 +75,6 @@ export class MarketIntelligenceService extends EventEmitter {
 
     public getLatestMoves(): FlashMoveEvent[] {
         const now = Date.now();
-        // Return moves from the last 15 minutes
         return this.moveHistory
             .filter(m => now - m.timestamp < 900000)
             .sort((a, b) => b.timestamp - a.timestamp);
@@ -67,7 +90,6 @@ export class MarketIntelligenceService extends EventEmitter {
 
         (this.ws as any).on('open', () => {
             this.logger.success('🔌 Global Intelligence Stream Online.');
-            // Subscribe to BOTH trade prices and price change updates
             this.ws?.send(JSON.stringify({
                 type: "subscribe",
                 topic: "last_trade_price" 
@@ -78,13 +100,23 @@ export class MarketIntelligenceService extends EventEmitter {
             }));
         });
 
-        (this.ws as any).on('message', (data: any) => {
+        (this.ws as any).on('message', async (data: any) => {
             try {
                 const msg = JSON.parse(data.toString());
+                
+                // Unified handler for different message formats
                 if (msg.event_type === 'last_trade_price' || msg.event_type === 'price_change') {
                     const tokenId = msg.asset_id || msg.token_id;
-                    if (tokenId && msg.price) {
-                        this.processPriceUpdate(tokenId, parseFloat(msg.price));
+                    const price = parseFloat(msg.price);
+                    if (tokenId && !isNaN(price)) {
+                        await this.processPriceUpdate(tokenId, price);
+                    }
+                } else if (msg.price_changes) {
+                    for (const change of msg.price_changes) {
+                        const price = parseFloat(change.price || change.best_bid || change.best_ask);
+                        if (change.asset_id && !isNaN(price)) {
+                            await this.processPriceUpdate(change.asset_id, price);
+                        }
                     }
                 }
             } catch (e) {}
@@ -98,8 +130,11 @@ export class MarketIntelligenceService extends EventEmitter {
         });
     }
 
-    private processPriceUpdate(tokenId: string, price: number) {
+    private async processPriceUpdate(tokenId: string, price: number) {
         const now = Date.now();
+        
+        // Broadcast price update for all listeners (FomoRunner, UI, etc)
+        this.emit('price_update', { tokenId, price, timestamp: now });
         this.emit(`price_${tokenId}`, { price, timestamp: now });
 
         const history = this.priceHistory.get(tokenId) || [];
@@ -109,8 +144,11 @@ export class MarketIntelligenceService extends EventEmitter {
             if (now - oldest.timestamp < this.LOOKBACK_MS) {
                 const velocity = (price - oldest.price) / oldest.price;
                 if (Math.abs(velocity) >= this.VELOCITY_THRESHOLD) {
-                    // Enrich with metadata if available
-                    const meta = this.marketMetadata.get(tokenId);
+                    // Enrich with metadata
+                    let meta = this.marketMetadata.get(tokenId);
+                    if (!meta) {
+                        meta = await this.fetchMissingMetadata(tokenId);
+                    }
                     
                     const event: FlashMoveEvent = {
                         tokenId,
@@ -126,7 +164,6 @@ export class MarketIntelligenceService extends EventEmitter {
 
                     this.logger.success(`🚀 FLASH MOVE: ${(velocity * 100).toFixed(1)}% Velocity on ${event.question || tokenId.slice(0, 8)}`);
 
-                    // Add to history and prune
                     this.moveHistory.unshift(event);
                     if (this.moveHistory.length > this.MAX_HISTORY) {
                         this.moveHistory.pop();

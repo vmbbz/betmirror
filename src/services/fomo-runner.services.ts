@@ -32,7 +32,7 @@ export class FomoRunnerService extends EventEmitter {
     ) {
         super();
         this.intelligence.on('flash_move', (e) => this.handleFlashMove(e));
-        // Use the event emitted by intelligence for price updates
+        // FIX: Listener now matches the correctly emitted event name from Intelligence service
         this.intelligence.on('price_update', (d) => this.handlePriceUpdate(d));
     }
 
@@ -48,7 +48,11 @@ export class FomoRunnerService extends EventEmitter {
     }
 
     private async handleFlashMove(event: FlashMoveEvent) {
-        if (!this.isEnabled) return;
+        if (!this.isEnabled) {
+            this.logger.debug(`[FOMO] Move detected on ${event.tokenId.slice(0,8)} but trader is disabled (Fund bot to activate)`);
+            return;
+        }
+
         if (this.activeSnipes.has(event.tokenId)) return;
         if (event.velocity < 0.05) return; 
 
@@ -113,9 +117,6 @@ export class FomoRunnerService extends EventEmitter {
         }
     }
 
-    /**
-     * Hard Stop-Loss: Monitors the global WebSocket for price reversals
-     */
     private async handlePriceUpdate(data: { tokenId: string, price: number }) {
         const snipe = this.activeSnipes.get(data.tokenId);
         if (!snipe) return;
@@ -125,7 +126,7 @@ export class FomoRunnerService extends EventEmitter {
 
         const currentDrop = (snipe.entryPrice - data.price) / snipe.entryPrice;
 
-        // Exit if position loses 10% of its entry value
+        // Exit if position loses 10% of its entry value (Hard Stop Loss)
         if (currentDrop >= this.STOP_LOSS_PCT) {
             this.logger.error(`🚨 [FOMO] STOP LOSS TRIGGERED for ${snipe.tokenId.slice(0,8)}. Reversing position...`);
             await this.executor.createOrder({

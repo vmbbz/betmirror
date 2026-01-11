@@ -112,7 +112,7 @@ export class BotEngine {
 
     constructor(
         private config: BotConfig,
-        private intelligence: MarketIntelligenceService, // This is the SHARED singleton
+        private intelligence: MarketIntelligenceService, 
         private registryService: IRegistryService,
         private callbacks?: BotCallbacks
     ) {
@@ -518,7 +518,7 @@ export class BotEngine {
         this.uiHeartbeatLoop = setInterval(() => {
             if (!this.isRunning) return;
             
-            // Scalable: Read from the SHARED singleton's memory instead of polling the API
+            // Broadcast moves even if trader is disabled so UI cards appear
             if (this.intelligence && this.callbacks?.onFomoVelocity) {
                 this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
             }
@@ -562,9 +562,6 @@ export class BotEngine {
             await this.exchange.initialize();
             await this.exchange.authenticate();
 
-            // CRITICAL FIX: Removed shadowing of 'intelligence' that was re-instantiating a new service.
-            // Using the shared singleton provided in the constructor.
-            
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,
                 proxyWallet: this.exchange.getFunderAddress(),
@@ -573,7 +570,7 @@ export class BotEngine {
             });
 
             this.initializeCoreModules(engineLogger);
-            this.startFomoSync();
+            this.startFomoSync(); // Start UI updates immediately
             this.startFundWatcher();
 
             this.addLog('success', 'Bot Engine Activated.');
@@ -586,8 +583,6 @@ export class BotEngine {
     public stop() {
         this.isRunning = false;
         this.arbScanner?.stop();
-        // Removed this.intelligence?.stop() because it is a shared singleton.
-        // Stopping it here would break the feed for all other users.
         this.fomoRunner?.setConfig(false, 0.2);
         if (this.monitor) this.monitor.stop();
         if (this.portfolioService) this.portfolioService.stopSnapshotService();

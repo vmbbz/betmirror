@@ -4,17 +4,21 @@ import { MarketIntelligenceService, FlashMoveEvent } from './market-intelligence
 import { Logger } from '../utils/logger.util.js';
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 
-interface ActiveSnipe {
+export interface ActiveSnipe {
     tokenId: string;
     conditionId: string;
     entryPrice: number;
     shares: number;
     timestamp: number;
+    question?: string;
+    targetPrice?: number;
+    currentPrice?: number;
 }
 
 /**
  * FomoRunnerService
  * Autonomous momentum sniper with liquidity guard and safety stop-loss.
+ * Logic: Detect velocity -> Check Liquidity -> FOK Entry -> GTC Exit Chain.
  */
 export class FomoRunnerService extends EventEmitter {
     private isEnabled = false;
@@ -40,6 +44,11 @@ export class FomoRunnerService extends EventEmitter {
         this.isEnabled = enabled;
         this.autoTpPercent = tpPercent;
         if (!enabled) this.activeSnipes.clear();
+        this.logger.info(`🚀 [FOMO] Engine ${enabled ? 'ONLINE' : 'OFFLINE'} | TP: ${tpPercent * 100}%`);
+    }
+
+    public getActiveSnipes(): ActiveSnipe[] {
+        return Array.from(this.activeSnipes.values());
     }
 
     /**
@@ -82,16 +91,19 @@ export class FomoRunnerService extends EventEmitter {
             });
 
             if (result.success && result.sharesFilled > 0) {
+                const tpPrice = Math.min(0.99, result.priceFilled * (1 + this.autoTpPercent));
+                
                 this.activeSnipes.set(event.tokenId, {
                     tokenId: event.tokenId,
                     conditionId: event.conditionId,
                     entryPrice: result.priceFilled,
                     shares: result.sharesFilled,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    targetPrice: tpPrice,
+                    currentPrice: result.priceFilled
                 });
 
                 // Immediate Take-Profit Chain: Post a GTC sell limit order instantly
-                const tpPrice = Math.min(0.99, result.priceFilled * (1 + this.autoTpPercent));
                 await this.executor.createOrder({
                     marketId: event.conditionId,
                     tokenId: event.tokenId,
@@ -103,7 +115,12 @@ export class FomoRunnerService extends EventEmitter {
                     orderType: 'GTC'
                 });
 
-                this.emit('fomo_trade_filled', { ...result, serviceOrigin: 'FOMO', marketId: event.conditionId });
+                this.emit('fomo_trade_filled', { 
+                    ...result, 
+                    serviceOrigin: 'FOMO', 
+                    marketId: event.conditionId,
+                    targetPrice: tpPrice
+                });
             }
         } catch (e: any) {
             this.logger.error(`❌ [FOMO] Entry failed: ${e.message}`);
@@ -117,6 +134,9 @@ export class FomoRunnerService extends EventEmitter {
         const snipe = this.activeSnipes.get(data.tokenId);
         if (!snipe) return;
 
+        // Update current price for UI tracking
+        snipe.currentPrice = data.price;
+
         const currentDrop = (snipe.entryPrice - data.price) / snipe.entryPrice;
 
         // Exit if position loses 10% of its entry value
@@ -124,10 +144,7 @@ export class FomoRunnerService extends EventEmitter {
             this.logger.error(`🚨 [FOMO] Stop-Loss Hit! Reversal of ${(currentDrop * 100).toFixed(1)}% detected on ${data.tokenId.slice(0,8)}...`);
             
             try {
-                // Cancel the resting TP order first
-                await this.executor.cancelExistingQuotes(data.tokenId);
-                
-                // Market sell to exit the position immediately
+                // Market sell to exit the position immediately (Kill all existing orders first)
                 const result = await this.executor.createOrder({
                     marketId: snipe.conditionId,
                     tokenId: snipe.tokenId,

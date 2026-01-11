@@ -130,21 +130,16 @@ interface FomoRunnerProps {
 }
 
 const FomoRunner: React.FC<FomoRunnerProps> = ({ 
-    flashMoves = [],
+    flashMoves: initialFlashMoves = [],
     onRefresh,
     isLoading = false
 }) => {
-    // Ensure flashMoves is always an array and has the expected structure
+    // Process flash moves data
     const processedMoves = useMemo(() => {
         try {
-            if (!flashMoves) return [];
-            if (!Array.isArray(flashMoves)) {
-                console.error('Expected flashMoves to be an array, got:', typeof flashMoves);
-                return [];
-            }
-            return flashMoves.map(move => ({
+            const moves = Array.isArray(initialFlashMoves) ? initialFlashMoves : [];
+            return moves.map(move => ({
                 ...move,
-                // Ensure required fields have defaults if missing
                 tokenId: move.tokenId || '',
                 question: move.question || 'Unknown Market',
                 oldPrice: move.oldPrice || 0,
@@ -159,7 +154,21 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
             console.error('Error processing flash moves:', error);
             return [];
         }
-    }, [flashMoves]);
+    }, [initialFlashMoves]);
+
+    // Handle refresh
+    const handleRefresh = useCallback(async () => {
+        if (onRefresh) {
+            try {
+                await onRefresh();
+                toast.success('Flash moves refreshed');
+            } catch (error) {
+                console.error('Error refreshing data:', error);
+                toast.error('Failed to refresh data');
+            }
+        }
+    }, [onRefresh]);
+
     // Handle loading state
     if (isLoading) {
         return (
@@ -172,8 +181,8 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
         );
     }
 
-    // Handle error state
-    if (!Array.isArray(flashMoves)) {
+    // Handle error state - using initialFlashMoves instead of flashMoves
+    if (!Array.isArray(initialFlashMoves)) {
         return (
             <div className="max-w-[1600px] mx-auto py-20 px-4 md:px-8 flex items-center justify-center">
                 <div className="text-center">
@@ -183,7 +192,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                     <h3 className="text-lg font-bold text-white mb-2">Error Loading Data</h3>
                     <p className="text-gray-400 text-sm mb-4">Unable to load flash moves. Please try again.</p>
                     <button
-                        onClick={() => onRefresh?.()}
+                        onClick={handleRefresh}
                         className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-sm font-medium transition-colors"
                     >
                         Retry
@@ -192,13 +201,6 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
             </div>
         );
     }
-
-    const handleRefresh = useCallback(async () => {
-        if (onRefresh) {
-            await onRefresh();
-            toast.success('Flash moves refreshed');
-        }
-    }, [onRefresh]);
 
     return (
         <div className="max-w-[1600px] mx-auto pb-20 px-4 md:px-8 animate-in fade-in duration-1000">
@@ -255,7 +257,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
 
             <div className="grid grid-cols-12 gap-10">
                 <div className="col-span-12 xl:col-span-9">
-                    {flashMoves.length === 0 ? (
+                    {initialFlashMoves.length === 0 ? (
                         <div className="glass-panel p-20 rounded-[3rem] border-white/5 text-center flex flex-col items-center justify-center bg-black/20 min-h-[550px] relative overflow-hidden">
                              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(244,63,94,0.03)_0%,transparent_70%)]"></div>
                             <Loader2 className="animate-spin text-rose-500/20 mb-10" size={72}/>
@@ -263,7 +265,9 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
-                            {flashMoves.map(m => <FlashCard key={m.id} move={m} />)}
+                            {initialFlashMoves.map((move: FlashMove) => (
+                                <FlashCard key={move.id} move={move} />
+                            ))}
                         </div>
                     )}
                 </div>

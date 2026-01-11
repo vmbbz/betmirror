@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 import { TradeExecutorService } from './trade-executor.service.js';
 import { MarketIntelligenceService, FlashMoveEvent } from './market-intelligence.service.js';
@@ -31,6 +32,7 @@ export class FomoRunnerService extends EventEmitter {
     ) {
         super();
         this.intelligence.on('flash_move', (e) => this.handleFlashMove(e));
+        // Use the event emitted by intelligence for price updates
         this.intelligence.on('price_update', (d) => this.handlePriceUpdate(d));
     }
 
@@ -46,14 +48,21 @@ export class FomoRunnerService extends EventEmitter {
     }
 
     private async handleFlashMove(event: FlashMoveEvent) {
-        if (!this.isEnabled || this.activeSnipes.has(event.tokenId)) return;
+        if (!this.isEnabled) return;
+        if (this.activeSnipes.has(event.tokenId)) return;
         if (event.velocity < 0.05) return; 
 
         try {
             const metrics = await this.adapter.getLiquidityMetrics?.(event.tokenId, 'BUY');
-            if (metrics && metrics.availableDepthUsd < this.LIQUIDITY_FLOOR) return;
+            if (metrics && metrics.availableDepthUsd < this.LIQUIDITY_FLOOR) {
+                this.logger.warn(`[FOMO] Skipping ${event.tokenId.slice(0,8)}: Low liquidity ($${metrics.availableDepthUsd.toFixed(0)})`);
+                return;
+            }
 
             const slippagePrice = Math.min(0.99, event.newPrice * 1.01);
+            
+            this.logger.info(`[FOMO] Attempting SNIPE Entry on ${event.question || event.tokenId.slice(0,8)} @ $${event.newPrice}`);
+
             const result = await this.executor.createOrder({
                 marketId: event.conditionId,
                 tokenId: event.tokenId,
@@ -73,8 +82,11 @@ export class FomoRunnerService extends EventEmitter {
                     shares: result.sharesFilled,
                     timestamp: Date.now(),
                     targetPrice: tpPrice,
-                    currentPrice: result.priceFilled
+                    currentPrice: result.priceFilled,
+                    question: event.question
                 });
+
+                this.logger.success(`[FOMO] Entry FILLED. Parking TP Limit at $${tpPrice.toFixed(2)}`);
 
                 await this.executor.createOrder({
                     marketId: event.conditionId,
@@ -93,8 +105,12 @@ export class FomoRunnerService extends EventEmitter {
                     marketId: event.conditionId,
                     targetPrice: tpPrice
                 });
+            } else {
+                this.logger.warn(`[FOMO] Snipe entry FAILED or FOK expired: ${result.error || 'No liquidity at target price'}`);
             }
-        } catch (e) {}
+        } catch (e: any) {
+            this.logger.error(`[FOMO] Error processing flash move: ${e.message}`);
+        }
     }
 
     /**
@@ -111,6 +127,7 @@ export class FomoRunnerService extends EventEmitter {
 
         // Exit if position loses 10% of its entry value
         if (currentDrop >= this.STOP_LOSS_PCT) {
+            this.logger.error(`🚨 [FOMO] STOP LOSS TRIGGERED for ${snipe.tokenId.slice(0,8)}. Reversing position...`);
             await this.executor.createOrder({
                 marketId: snipe.conditionId,
                 tokenId: snipe.tokenId,

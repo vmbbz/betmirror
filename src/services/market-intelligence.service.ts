@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { WS_URLS } from '../config/env.js';
@@ -24,7 +25,6 @@ export class MarketIntelligenceService extends EventEmitter {
     private ws?: WebSocket;
     private isRunning = false;
     private priceHistory: Map<string, PriceSnapshot[]> = new Map();
-    // CHANGED: Use array for history instead of Map to prevent overwrites
     private moveHistory: FlashMoveEvent[] = [];
     private marketMetadata: Map<string, any> = new Map();
     
@@ -67,9 +67,14 @@ export class MarketIntelligenceService extends EventEmitter {
 
         (this.ws as any).on('open', () => {
             this.logger.success('🔌 Global Intelligence Stream Online.');
+            // Subscribe to BOTH trade prices and price change updates
             this.ws?.send(JSON.stringify({
                 type: "subscribe",
                 topic: "last_trade_price" 
+            }));
+            this.ws?.send(JSON.stringify({
+                type: "subscribe",
+                topic: "price_change" 
             }));
         });
 
@@ -77,7 +82,10 @@ export class MarketIntelligenceService extends EventEmitter {
             try {
                 const msg = JSON.parse(data.toString());
                 if (msg.event_type === 'last_trade_price' || msg.event_type === 'price_change') {
-                    this.processPriceUpdate(msg.asset_id, parseFloat(msg.price));
+                    const tokenId = msg.asset_id || msg.token_id;
+                    if (tokenId && msg.price) {
+                        this.processPriceUpdate(tokenId, parseFloat(msg.price));
+                    }
                 }
             } catch (e) {}
         });
@@ -116,6 +124,8 @@ export class MarketIntelligenceService extends EventEmitter {
                         marketSlug: meta?.marketSlug
                     };
 
+                    this.logger.success(`🚀 FLASH MOVE: ${(velocity * 100).toFixed(1)}% Velocity on ${event.question || tokenId.slice(0, 8)}`);
+
                     // Add to history and prune
                     this.moveHistory.unshift(event);
                     if (this.moveHistory.length > this.MAX_HISTORY) {
@@ -128,7 +138,7 @@ export class MarketIntelligenceService extends EventEmitter {
         }
 
         history.push({ price, timestamp: now });
-        if (history.length > 5) history.shift();
+        if (history.length > 10) history.shift();
         this.priceHistory.set(tokenId, history);
     }
 }

@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -1154,6 +1155,8 @@ connectDB()
     .then(async () => {
         console.log("✅ DB Connected. Syncing system...");
         await seedRegistry(); 
+        // Explicitly start intelligence service on the global singleton
+        await intelligence.start();
         restoreBots();
     })
     .catch((err) => {

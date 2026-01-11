@@ -1,3 +1,4 @@
+
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -561,8 +562,8 @@ export class BotEngine {
             await this.exchange.initialize();
             await this.exchange.authenticate();
 
-            // CRITICAL FIX: DO NOT instantiate a new intelligence service here.
-            // Use the shared singleton provided in the constructor.
+            // CRITICAL FIX: Removed shadowing of 'intelligence' that was re-instantiating a new service.
+            // Using the shared singleton provided in the constructor.
             
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,

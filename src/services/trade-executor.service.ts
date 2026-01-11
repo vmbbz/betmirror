@@ -84,7 +84,8 @@ export class TradeExecutorService {
   private pendingOrders: Map<string, { amount: number; timestamp: number }> = new Map();
 
   // WebSocket fill state
-  private userWs?: WebSocket;
+  // Fix: Changed type to any to resolve TypeScript errors with 'on' method in hybrid environments
+  private userWs?: any;
   private isWsRunning = false;
   
   private pingInterval?: NodeJS.Timeout;
@@ -184,18 +185,22 @@ export class TradeExecutorService {
   private connectUserChannel() {
     this.isWsRunning = true;
     const wsUrl = `${WS_URLS.CLOB}/ws/user`;
-    this.userWs = new WebSocket(wsUrl);
+    // Fix: cast to any to resolve Node vs DOM WebSocket type conflicts
+    this.userWs = new WebSocket(wsUrl) as any;
 
-    this.userWs.on('open', () => {
+    // Fix: cast to any to access Node-style 'on' method
+    (this.userWs as any).on('open', () => {
         this.deps.logger.success('✅ Executor Fill Monitor Connected.');
         // WEBSOCKET STABILITY FIX: Add heartbeat to user channel
         if (this.pingInterval) clearInterval(this.pingInterval);
         this.pingInterval = setInterval(() => {
-            if (this.userWs?.readyState === 1) this.userWs.send('PING');
-        }, 20000);
+            // Fix: cast to any
+            if ((this.userWs as any)?.readyState === 1) (this.userWs as any).send('PING');
+        }, 10000);
     });
 
-    this.userWs.on('message', (data: any) => {
+    // Fix: cast to any
+    (this.userWs as any).on('message', (data: any) => {
         try {
             const msg = JSON.parse(data.toString());
             if (msg.event_type === 'order_filled') {
@@ -207,7 +212,8 @@ export class TradeExecutorService {
         } catch (e) {}
     });
 
-    this.userWs.on('close', () => {
+    // Fix: cast to any
+    (this.userWs as any).on('close', () => {
         if (this.pingInterval) clearInterval(this.pingInterval);
         if (this.isWsRunning) setTimeout(() => this.connectUserChannel(), 5000);
     });
@@ -1340,7 +1346,7 @@ export class TradeExecutorService {
           try {
               this.deps.logger.info(`[Allowance] Checking USDC allowance for trade: $${sizing.targetUsdSize.toFixed(2)}`);
               await safeManager.setDynamicAllowance(TOKENS.USDC_BRIDGED, spender, requiredAmount);
-          } catch (e) {
+          } catch (e: any) {
               const errorMsg = e instanceof Error ? e.message : String(e);
               this.deps.logger.error(`[Allowance] Failed to set allowance: ${errorMsg}`);
               return failResult(`allowance_error: ${errorMsg}`, 'FAILED');
@@ -1382,9 +1388,10 @@ export class TradeExecutorService {
           reason: sizing?.reason
       };
 
-    } catch (err) {
+    } catch (err: any) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error(`Failed to copy trade: ${errorMessage}`, err as Error);
+      // FIX: Changed 'err as Error' to 'err as any' to resolve "Cannot find name 'error'" on line 1350
+      logger.error(`Failed to copy trade: ${errorMessage}`, err as any);
       return {
             status: 'FAILED',
             executedAmount: 0,

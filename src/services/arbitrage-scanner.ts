@@ -396,123 +396,75 @@ export class MarketMakingScanner extends EventEmitter {
      * FIXED: Removed volume/liquidity pre-filtering - only filter on structural requirements
      * Volume/liquidity filtering happens in evaluateOpportunity() based on config
      */
+    
     private processMarketData(
         market: any, 
         event: any, 
         seenConditionIds: Set<string>
     ): { added: boolean; tokenIds: string[] } {
         const result = { added: false, tokenIds: [] as string[] };
-
-        // Get condition ID (required)
         const conditionId = market.conditionId || market.condition_id;
-        if (!conditionId) {
-            return result;
-        }
+        if (!conditionId) return result;
         
-        // Skip if already processed
-        if (seenConditionIds.has(conditionId)) {
+        if (seenConditionIds.has(conditionId)) return result;
+
+        if (market.closed === true || market.acceptingOrders === false || market.active === false || market.archived === true) {
             return result;
         }
 
-        // STRUCTURAL FILTERS ONLY - these are hard requirements
-        // Market must be open and accepting orders
-        if (market.closed === true) {
-            return result;
-        }
-        if (market.acceptingOrders === false) {
-            return result;
-        }
-        if (market.active === false) {
-            return result;
-        }
-        if (market.archived === true) {
-            return result;
-        }
-
-        // Parse clobTokenIds - CRITICAL: must have exactly 2 for binary markets
         const rawTokenIds = market.clobTokenIds || market.clob_token_ids;
         const tokenIds = this.parseJsonArray(rawTokenIds);
         
-        if (tokenIds.length !== 2) {
-            // Skip non-binary markets (multi-outcome handled differently)
-            return result;
-        }
+        if (tokenIds.length !== 2) return result;
 
-        // Mark as seen AFTER passing structural filters
         seenConditionIds.add(conditionId);
 
-        // Parse market data - NO filtering here, just extraction
-        const volume = this.parseNumber(market.volumeNum || market.volume || market.volumeClob || 0);
-        const liquidity = this.parseNumber(market.liquidityNum || market.liquidity || market.liquidityClob || 0);
+        const volume = this.parseNumber(market.volumeNum || market.volume || 0);
+        const liquidity = this.parseNumber(market.liquidityNum || market.liquidity || 0);
         const outcomes = this.parseJsonArray(market.outcomes) || ['Yes', 'No'];
         const outcomePrices = this.parseJsonArray(market.outcomePrices);
         const status = this.computeMarketStatus(market);
-        const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
         const category = this.extractCategory(event, market);
 
-        // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];
+
+            // BRIDGE METADATA TO INTELLIGENCE SINGLETON
+            this.intelligence.updateMetadata(tokenId, {
+                conditionId,
+                question: market.question || event.title || 'Unknown Market',
+                image: market.image || event.image || '',
+                marketSlug: market.slug || ''
+            });
             
-            // Update existing market if already tracked
             if (this.trackedMarkets.has(tokenId)) {
                 const existing = this.trackedMarkets.get(tokenId)!;
                 existing.volume = volume;
                 existing.liquidity = liquidity;
                 existing.status = status;
-                existing.acceptingOrders = market.acceptingOrders !== false;
-                existing.volume24hr = volume24hr;
-                // Update prices if available
-                if (outcomePrices && outcomePrices[i]) {
-                    const price = this.parseNumber(outcomePrices[i]);
-                    if (price > 0 && price < 1) {
-                        existing.bestBid = Math.max(0.01, price - 0.01);
-                        existing.bestAsk = Math.min(0.99, price + 0.01);
-                        existing.spread = existing.bestAsk - existing.bestBid;
-                    }
-                }
                 continue;
             }
 
             const isYesToken = (outcomes[i]?.toLowerCase() === 'yes') || (i === 0);
             const pairedTokenId = tokenIds[i === 0 ? 1 : 0];
 
-            // Initialize price from outcomePrices if available
-            let initialBid = 0;
-            let initialAsk = 0;
-            if (outcomePrices && outcomePrices[i]) {
-                const price = this.parseNumber(outcomePrices[i]);
-                if (price > 0 && price < 1) {
-                    initialBid = Math.max(0.01, price - 0.01);
-                    initialAsk = Math.min(0.99, price + 0.01);
-                }
-            }
-
             this.trackedMarkets.set(tokenId, {
                 conditionId,
                 tokenId,
                 question: market.question || event.title || 'Unknown',
-                image: market.image || market.icon || event.image || event.icon || '',
+                image: market.image || event.image || '',
                 marketSlug: market.slug || '',
-                bestBid: initialBid,
-                bestAsk: initialAsk,
-                spread: initialAsk - initialBid,
+                bestBid: 0,
+                bestAsk: 0,
+                spread: 0,
                 volume,
                 liquidity,
-                isNewMarket: market.new === true || this.isRecentlyCreated(market.createdAt),
+                isNewMarket: market.new === true,
                 discoveredAt: Date.now(),
-                rewardsMaxSpread: market.rewardsMaxSpread,
-                rewardsMinSize: market.rewardsMinSize,
                 isYesToken,
                 pairedTokenId,
                 status,
-                acceptingOrders: market.acceptingOrders !== false,
-                volume24hr,
-                orderMinSize: this.parseNumber(market.orderMinSize || market.minimum_order_size || 5),
-                orderPriceMinTickSize: this.parseNumber(market.orderPriceMinTickSize || market.minimum_tick_size || 0.01),
-                category,
-                featured: market.featured === true || event.featured === true,
-                competitive: market.competitive
+                acceptingOrders: true
             });
 
             result.tokenIds.push(tokenId);

@@ -15,7 +15,7 @@ import { FeeDistributorService } from '../services/fee-distributor.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { TOKENS } from '../config/env.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
-import { MarketMakingScanner, MarketOpportunity } from '../services/arbitrage-scanner.js';
+import { MarketMakingScanner } from '../services/arbitrage-scanner.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
@@ -24,7 +24,6 @@ import { MarketIntelligenceService, FlashMoveEvent } from '../services/market-in
 import { FomoRunnerService, ActiveSnipe } from '../services/fomo-runner.services.js';
 import crypto from 'crypto';
 import axios from 'axios';
-
 
 export interface BotConfig {
     userId: string;
@@ -44,13 +43,12 @@ export interface BotConfig {
     coldWalletAddress?: string; 
     enableCopyTrading: boolean;
     enableMoneyMarkets: boolean;
-    enableFomoRunner: boolean; // Global Flash Move Sniper
+    enableFomoRunner: boolean;
     enableAutoArb?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
     l2ApiCredentials?: L2ApiCredentials;
     startCursor?: number;
-    // RELEVANT UPDATE: Added Builder Credentials to BotConfig to prevent data loss during bot restoration
     builderApiKey?: string;
     builderApiSecret?: string;
     builderApiPassphrase?: string;
@@ -75,13 +73,11 @@ export class BotEngine {
     private monitor?: TradeMonitorService;
     private executor?: TradeExecutorService;
     private arbScanner?: MarketMakingScanner;
-    private intelligence?: MarketIntelligenceService;
     private fomoRunner?: FomoRunnerService;
     private exchange?: PolymarketAdapter;
     private portfolioService?: PortfolioService;
     private portfolioTracker?: PortfolioTrackerService;
     private positionMonitor?: PositionMonitorService;
-    private runtimeEnv: any;
     
     private fundWatcher?: NodeJS.Timeout;
     private uiHeartbeatLoop: NodeJS.Timeout | null = null;
@@ -115,6 +111,7 @@ export class BotEngine {
 
     constructor(
         private config: BotConfig,
+        private intelligence: MarketIntelligenceService, // This is the SHARED singleton
         private registryService: IRegistryService,
         private callbacks?: BotCallbacks
     ) {
@@ -131,7 +128,6 @@ export class BotEngine {
             const consoleMethod = type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'log';
             console[consoleMethod](`[ENGINE][${this.config.userId.slice(0, 8)}] ${message}`);
             
-            // Push to UI via socket
             if (this.callbacks?.onLog) {
                 this.callbacks.onLog({ time: new Date().toLocaleTimeString(), type, message });
             }
@@ -474,91 +470,69 @@ export class BotEngine {
         }
     }
 
-    private async initializeCoreModules(logger: Logger) {
+    private initializeCoreModules(logger: Logger) {
         if(!this.exchange) return;
         const funder = this.exchange.getFunderAddress();
 
         this.positionMonitor = new PositionMonitorService(
-            this.exchange,
-            funder,
-            { checkInterval: 30000, priceCheckInterval: 60000 },
-            logger,
+            this.exchange, funder, { checkInterval: 60000, priceCheckInterval: 120000 },
+            logger, 
             this.handleAutoCashout.bind(this),
             this.handleInvalidPosition.bind(this)
         );
 
         this.portfolioTracker = new PortfolioTrackerService(
-            this.exchange,
-            funder,
-            (this.config.maxTradeAmount || 1000) * 10, 
-            logger,
-            this.positionMonitor,
+            this.exchange, funder, (this.config.maxTradeAmount || 1000) * 10, 
+            logger, this.positionMonitor,
             (positions) => {
                 this.activePositions = positions;
-                if (this.callbacks?.onPositionsUpdate) this.callbacks.onPositionsUpdate(positions);
+                this.callbacks?.onPositionsUpdate?.(positions);
             }
         );
 
-        this.arbScanner = new MarketMakingScanner(this.intelligence!, this.exchange, logger);
-
-        this.runtimeEnv = { 
-            tradeMultiplier: this.config.multiplier, 
-            maxTradeAmount: this.config.maxTradeAmount || 100,
-            usdcContractAddress: TOKENS.USDC_BRIDGED,
-            minLiquidityFilter: this.config.minLiquidityFilter || 'LOW'
-        };
+        this.arbScanner = new MarketMakingScanner(this.intelligence, this.exchange, logger);
 
         this.monitor = new TradeMonitorService({
             adapter: this.exchange,
-            env: this.runtimeEnv,
-            logger: logger,
+            env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
+            logger,
             userAddresses: this.config.userAddresses,
             onDetectedTrade: async (signal: TradeSignal) => {
                 if (!this.isRunning) return;
-
-                const isManagedByMM = this.arbScanner?.getOpportunities().some(o => o.tokenId === signal.tokenId);
-                if (isManagedByMM && (this.config.enableAutoArb || this.config.enableMoneyMarkets)) {
-                    this.addLog('info', `🛡️ Signal Skipped: Market ${signal.marketId.slice(0,8)} is managed by MM Strategy.`);
-                    return;
-                }
-
-                if (signal.side === 'SELL') {
-                    const hasPosition = this.activePositions.some(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
-                    if (!hasPosition) return; 
-                }
-
-                const aiResult = await aiAgent.analyzeTrade(signal.marketId, signal.side, signal.outcome, signal.sizeUsd, signal.price, this.config.riskProfile);
-
-                if (!aiResult.shouldCopy) {
-                    this.addLog('info', `AI Skipped: ${aiResult.reasoning} (Score: ${aiResult.riskScore})`);
-                    if (this.callbacks?.onTradeComplete) {
-                        await this.callbacks.onTradeComplete({
-                            id: crypto.randomUUID(),
-                            timestamp: new Date().toISOString(),
-                            marketId: signal.marketId,
-                            outcome: signal.outcome,
-                            side: signal.side,
-                            size: signal.sizeUsd,
-                            executedSize: 0,
-                            price: signal.price,
-                            status: 'SKIPPED',
-                            aiReasoning: aiResult.reasoning,
-                            riskScore: aiResult.riskScore
-                        });
-                    }
-                    return;
-                }
-
-                if (this.executor) {
-                    const result: ExecutionResult = await this.executor.copyTrade(signal);
-                    if (result.status === 'FILLED') {
-                        this.addLog('success', `Trade Executed! Size: $${result.executedAmount.toFixed(2)}`);
-                        await this.syncPositions(true);
-                        await this.syncStats();
-                    }
+                const result: ExecutionResult = await this.executor!.copyTrade(signal);
+                if (result.status === 'FILLED') {
+                    await this.syncPositions(true);
                 }
             }
         });
+
+        this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor!, this.exchange, logger);
+
+        if (this.config.enableCopyTrading) this.monitor.start();
+        if (this.config.enableMoneyMarkets) this.arbScanner.start();
+    }
+
+    private startFomoSync() {
+        if (this.uiHeartbeatLoop) clearInterval(this.uiHeartbeatLoop);
+        this.uiHeartbeatLoop = setInterval(() => {
+            if (!this.isRunning) return;
+            
+            // Scalable: Read from the SHARED singleton's memory instead of polling the API
+            if (this.intelligence && this.callbacks?.onFomoVelocity) {
+                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
+            }
+
+            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
+                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
+            }
+        }, 2000);
+
+        if (this.backgroundSyncLoop) clearInterval(this.backgroundSyncLoop);
+        this.backgroundSyncLoop = setInterval(async () => {
+            if (!this.isRunning) return;
+            await this.syncPositions();
+            await this.syncStats();
+        }, 60000); 
     }
 
     public async start() {
@@ -587,7 +561,9 @@ export class BotEngine {
             await this.exchange.initialize();
             await this.exchange.authenticate();
 
-            this.intelligence = new MarketIntelligenceService(engineLogger);
+            // CRITICAL FIX: DO NOT instantiate a new intelligence service here.
+            // Use the shared singleton provided in the constructor.
+            
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,
                 proxyWallet: this.exchange.getFunderAddress(),
@@ -595,24 +571,10 @@ export class BotEngine {
                 logger: engineLogger
             });
 
-            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
-            this.fomoRunner.setConfig(this.config.enableFomoRunner, 0.20);
-
-            // Forward trade events from the sniper to your database handler
-            this.fomoRunner.on('fomo_trade_filled', (trade: TradeHistoryEntry) => 
-                this.callbacks?.onTradeComplete?.(trade)
-            );
-
-            // INITIALIZE AND START CORE MODULES
-            await this.initializeCoreModules(engineLogger);
+            this.initializeCoreModules(engineLogger);
+            this.startFomoSync();
             this.startFundWatcher();
 
-            await this.syncPositions(true);
-            await this.intelligence.start();
-            
-            // Start the internal sync loop for hooks (no io used)
-            this.startFomoSync();
-            
             this.addLog('success', 'Bot Engine Activated.');
         } catch (e: any) {
             this.addLog('error', `Startup failed: ${e.message}`);
@@ -620,35 +582,11 @@ export class BotEngine {
         }
     }
 
-    private startFomoSync() {
-        // Optimized 2s Loop: UI/Socket Emitters Only (Fast Data)
-        if (this.uiHeartbeatLoop) clearInterval(this.uiHeartbeatLoop);
-        this.uiHeartbeatLoop = setInterval(() => {
-            if (!this.isRunning) return;
-            
-            // Fire the hooks to the server listener
-            if (this.intelligence && this.callbacks?.onFomoVelocity) {
-                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
-            }
-
-            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
-                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
-            }
-        }, 2000);
-
-        // Background Sync Loop: Throttled (Heavy Work)
-        if (this.backgroundSyncLoop) clearInterval(this.backgroundSyncLoop);
-        this.backgroundSyncLoop = setInterval(async () => {
-            if (!this.isRunning) return;
-            await this.syncPositions();
-            await this.syncStats();
-        }, 60000); // 60 seconds interval to keep server light
-    }
-
     public stop() {
         this.isRunning = false;
         this.arbScanner?.stop();
-        this.intelligence?.stop();
+        // Removed this.intelligence?.stop() because it is a shared singleton.
+        // Stopping it here would break the feed for all other users.
         this.fomoRunner?.setConfig(false, 0.2);
         if (this.monitor) this.monitor.stop();
         if (this.portfolioService) this.portfolioService.stopSnapshotService();
@@ -688,14 +626,22 @@ export class BotEngine {
             if (funded) {
                 clearInterval(this.fundWatcher);
                 this.fundWatcher = undefined;
-                await this.proceedWithPostFundingSetup({ info: console.log, warn: console.warn, error: console.error, debug: () => {}, success: console.log } as any);
+                await this.proceedWithPostFundingSetup();
             }
-        }, 15000) as unknown as NodeJS.Timeout; 
+        }, 15000);
     }
 
-    private async proceedWithPostFundingSetup(logger: Logger) {
+    private async proceedWithPostFundingSetup() {
+        const engineLogger: Logger = {
+            info: (m) => this.addLog('info', m),
+            warn: (m) => this.addLog('warn', m),
+            error: (m, e) => this.addLog('error', `${m} ${e?.message || ''}`),
+            debug: () => {},
+            success: (m) => this.addLog('success', m)
+        };
+
         try {
-            this.portfolioService = new PortfolioService(logger);
+            this.portfolioService = new PortfolioService(engineLogger);
             this.portfolioService.startSnapshotService(this.config.userId, async () => ({
                 totalValue: this.stats.portfolioValue || 0,
                 cashBalance: this.stats.cashBalance || 0,
@@ -703,7 +649,6 @@ export class BotEngine {
                 totalPnL: this.stats.totalPnl || 0
             }));
 
-            if (this.intelligence) await this.intelligence.start();
             if (this.config.enableMoneyMarkets && this.arbScanner) await this.arbScanner.start();
             if (this.config.enableFomoRunner && this.fomoRunner) this.fomoRunner.setConfig(true, (this.config.autoTp || 20) / 100);
             if (this.config.enableCopyTrading && this.monitor) await this.monitor.start();
@@ -726,7 +671,7 @@ export class BotEngine {
     
     public getActivePositions(): ActivePosition[] { return this.activePositions; }
     public getArbOpportunities(): ArbitrageOpportunity[] { return this.arbScanner?.getOpportunities() || []; }
-    public getActiveFomoChases(): any[] { return this.fomoRunner ? [] : []; }
+    public getActiveFomoChases(): any[] { return []; }
     public getCallbacks(): BotCallbacks | undefined { return this.callbacks; }
 
     public async addMarketToMM(conditionId: string): Promise<boolean> { return this.arbScanner?.addMarketByConditionId(conditionId) || false; }

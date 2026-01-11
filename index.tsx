@@ -1802,10 +1802,10 @@ const ActivationView = ({
                     </div>
                     <div>
                         <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-                            {recoveryMode ? 'Restore Connection' : 'Initialize Trading Wallet'}
+                            {needsActivation && !recoveryMode ? 'Initialize Trading Wallet' : 'Restore Connection'}
                         </h2>
                         <p className="text-gray-500">
-                            {recoveryMode ? 'Reconnect to your existing bot.' : 'Create your dedicated Trading Wallet.'}
+                            {needsActivation && !recoveryMode ? 'Create your dedicated Trading Wallet.' : 'Reconnect to your existing bot.'}
                         </p>
                     </div>
                 </div>
@@ -1851,7 +1851,7 @@ const ActivationView = ({
                     className={`w-full py-3 px-2 sm:py-4 text-white font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-2 sm:gap-3 shadow-lg text-sm sm:text-base ${
                         recoveryMode 
                         ? 'bg-gradient-to-r from-green-600 to-green-500 shadow-green-500/20' 
-                        : 'bg- gradient-to-r from-blue-600 to-blue-500 shadow-blue-500/20'
+                        : 'bg-gradient-to-r from-blue-600 to-blue-500 shadow-blue-500/20'
                     } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                     {isActivating ? (
@@ -1888,13 +1888,15 @@ const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
-type TabId = 'dashboard' | 'money-market' | 'fomo' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help';
+type TabId = 'dashboard' | 'money-market' | 'fomo' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'revenue' | 'system' | 'help';
 const [activeTab, setActiveTab] = useState<TabId>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
 const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); 
 const [moneyMarketOpps, setMoneyMarketOpps] = useState<ArbitrageOpportunity[]>([]);
+const [fomoMoves, setFomoMoves] = useState<FlashMove[]>([]);
+const [activeSnipes, setActiveSnipes] = useState<ActiveSnipe[]>([]);
 const [stats, setStats] = useState<UserStats | null>(null);
 const [registry, setRegistry] = useState<TraderProfile[]>([]);
 const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
@@ -1949,64 +1951,50 @@ const [config, setConfig] = useState<AppConfig>({
     enableFomoRunner: true
 });
 
-// --- FOMO the Fomo Runner STATE ---
-const [fomoMoves, setFomoMoves] = useState<FlashMove[]>([]);
-const [fomoSnipes, setFomoSnipes] = useState<ActiveSnipe[]>([]);
-const [fomoChases, setFomoChases] = useState<FlashMove[]>([]);
-const [socket, setSocket] = useState<typeof Socket | null>(null);
+const socketRef = useRef<any>(null); // Fixed type error (Socket as value vs type)
 
-// --- SOCKET CONNECTION ---
+// --- REAL-TIME GATEWAY: Shared Socket Connection ---
 useEffect(() => {
     if (!isConnected || !userAddress) return;
 
-    // Create socket connection
-    const socketInstance = io({
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000,
+    // Initialize shared socket instance
+    const s = io();
+    socketRef.current = s;
+
+    // Join user room
+    s.emit('join', userAddress.toLowerCase());
+    
+    // Centralized Event Handlers with explicit types to stop "implicit any" errors
+    s.on('POSITIONS_UPDATE', (pos: any) => {
+        console.log('📊 UI Sync: Positions Updated');
+        setActivePositions(pos);
+    });
+    
+    s.on('STATS_UPDATE', (st: any) => {
+        setStats(st);
+    });
+    
+    s.on('BOT_LOG', (log: any) => {
+        setLogs((prev: any[]) => [log, ...prev].slice(0, 100));
+    });
+    
+    // Updates fomoMoves which is passed as 'flashMoves' to the FomoRunner component
+    s.on('FOMO_VELOCITY_UPDATE', (moves: any) => {
+        setFomoMoves(moves);
+    });
+    
+    s.on('FOMO_SNIPES_UPDATE', (snipes: any) => {
+        setActiveSnipes(snipes);
     });
 
-    // Set up event listeners
-    socketInstance.on('connect', () => {
-        console.log('🔌 Connected to FOMO socket server');
-        // Join user's room
-        socketInstance.emit('join', userAddress.toLowerCase());
-    });
-
-    socketInstance.on('disconnect', () => {
-        console.log('🔌 Disconnected from FOMO socket server');
-    });
-
-    socketInstance.on('connect_error', (error: Error) => {
-        console.error('❌ Socket connection error:', error);
-    });
-
-    // Handle FOMO velocity updates (flash moves)
-    socketInstance.on('FOMO_VELOCITY_UPDATE', (moves: FlashMove[]) => {
-        // Keep only the 50 most recent moves
-        setFomoMoves(prevMoves => {
-            const updatedMoves = [...moves, ...prevMoves].slice(0, 50);
-            return updatedMoves;
-        });
-    });
-
-    // Handle FOMO snipes updates
-    socketInstance.on('FOMO_SNIPES_UPDATE', (snipes: ActiveSnipe[]) => {
-        setFomoSnipes(snipes);
-        if (config.enableSounds) playSound('trade');
-    });
-
-    setSocket(socketInstance);
-
-    // Clean up on unmount
+    // Cleanup: Decouple instance from browser lifecycle
     return () => {
-        if (socketInstance) {
-            socketInstance.disconnect();
+        if (socketRef.current) {
+            socketRef.current.disconnect();
+            socketRef.current = null;
         }
     };
-}, [isConnected, userAddress, config.enableSounds]);
+}, [isConnected, userAddress]);
 
 // --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
 const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
@@ -2189,46 +2177,30 @@ const copyToClipboard = (text: string) => {
 
 // --- POLL BOT STATUS DATA ---
 const fetchBotStatus = useCallback(async (force: boolean = false) => {
-    console.log('🔍 fetchBotStatus called');
     if (!isConnected || !userAddress || needsActivation) {
-        console.log('⏭️ Skipping fetch - not connected, no user address, or needs activation');
         return;
     }
     
     try {
-        console.log('📡 Fetching bot status from server...');
         const res = await axios.get(`/api/bot/status/${userAddress}`);
-        console.log('✅ Server response received', { 
-            hasLogs: !!res.data.logs?.length,
-            hasHistory: !!res.data.history?.length,
-            hasStats: !!res.data.stats,
-            hasOpportunities: !!res.data.mmOpportunities?.length,
-            hasPositions: !!res.data.positions?.length,
-            hasFomoMoves: !!res.data.fomoMoves?.length,
-            hasFomoSnipes: !!res.data.fomoSnipes?.length
-        });
         
         setIsRunning(res.data.isRunning);
         setPollError(false);
         
         if (res.data.logs) {
-            console.log(`📝 Setting ${res.data.logs.length} logs`);
             setLogs(res.data.logs);
         }
         
         if (res.data.history) {
-            console.log(`🔄 Setting ${res.data.history.length} trade history items`);
             setTradeHistory(res.data.history);
         }
         
         if (res.data.stats) {
-            console.log('📊 Setting stats');
             setStats(res.data.stats);
         }
         
         // Handle FOMO data from API response
         if (res.data.fomoMoves) {
-            console.log(`⚡ Setting ${res.data.fomoMoves.length} FOMO moves`);
             setFomoMoves(prevMoves => {
                 // Merge with existing moves and keep only the 50 most recent
                 const updatedMoves = [...(res.data.fomoMoves || []), ...prevMoves]
@@ -2246,8 +2218,7 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         }
         
         if (res.data.fomoSnipes) {
-            console.log(`🎯 Setting ${res.data.fomoSnipes.length} active snipes`);
-            setFomoSnipes(prevSnipes => {
+            setActiveSnipes(prevSnipes => {
                 // Merge with existing snipes and remove duplicates
                 const updatedSnipes = [...(res.data.fomoSnipes || []), ...prevSnipes]
                     .filter((snipe, index, self) => 
@@ -2262,24 +2233,13 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         }
         
         if (res.data.mmOpportunities) {
-            console.log(`💰 Setting ${res.data.mmOpportunities.length} market opportunities`);
             setMoneyMarketOpps(res.data.mmOpportunities);
-            
-            // Log first few opportunities for debugging
-            res.data.mmOpportunities.slice(0, 3).forEach((opp: any, i: number) => {
-                console.log(`  ${i+1}. ${opp.question} (${opp.marketId}) - ${opp.spread}%`);
-            });
-        } else {
-            console.log('⚠️ No market opportunities found in response');
         }
         
         // Sync Active Positions
         if (res.data.positions) {
-            console.log(`📊 Found ${res.data.positions.length} active positions`);
             setActivePositions(res.data.positions);
         }
-
-        if (res.data.fomoChases) setFomoChases(res.data.fomoChases);
 
         // Track latest ID instead of length
         const latestHistory = res.data.history || [];
@@ -2339,17 +2299,7 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
             setSystemStats(sysRes.data);
         }
     } catch (e) {
-        console.error('❌ Error in fetchBotStatus:', e);
         setPollError(true);
-        
-        if (axios.isAxiosError(e)) {
-            console.error('Axios error details:', {
-                status: e.response?.status,
-                statusText: e.response?.statusText,
-                data: e.response?.data,
-                url: e.config?.url
-            });
-        }
     }
 }, [isConnected, userAddress, needsActivation, activeTab, tradeHistory.length, config.enableSounds]);
 
@@ -2361,7 +2311,6 @@ useEffect(() => {
     
     // Poll Balances (Every 10s)
     const balanceInterval = setInterval(fetchBalances, 10000);
-    /* Errors at line 1465/1466: Ensure fetchBalances and fetchBotStatus calls match signature (inferred 1 arg by TS in some environments) */
     fetchBalances(); // Initial
     fetchBotStatus(); // Initial
 
@@ -2376,7 +2325,6 @@ useEffect(() => {
 }, [isConnected, needsActivation]);
 
 // --- HELPER: Fetch Balances ---
-/* fetchBalances now accepts an optional force parameter to satisfy potential 1-arg calls in useEffect if compiler inferred differently */
 const fetchBalances = async (force?: boolean) => {
     if (!userAddress || !(window as any).ethereum) return;
     try {
@@ -2386,14 +2334,12 @@ const fetchBalances = async (force?: boolean) => {
         setChainId(currentChain);
 
         // 1. Main Wallet (Native)
-        // Always use injected provider for main wallet
         const balMain = await provider.getBalance(userAddress);
         let mainUsdcNative = '0.00';
         let mainUsdcBridged = '0.00';
         
         // 2. Main Wallet (USDC)
         if (currentChain === 137) {
-            // Polygon: Check both Native and Bridged
             try {
                 const usdcNativeContract = new Contract(USDC_POLYGON, USDC_ABI, provider);
                 mainUsdcNative = formatUnits(await usdcNativeContract.balanceOf(userAddress), 6);
@@ -2404,7 +2350,6 @@ const fetchBalances = async (force?: boolean) => {
                 mainUsdcBridged = formatUnits(await usdcBridgedContract.balanceOf(userAddress), 6);
             } catch(e) {}
         } else {
-            // ... (Other chains logic) ...
             const USDC_ADDRS: Record<number, string> = {
                 8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
                 42161: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
@@ -2427,16 +2372,11 @@ const fetchBalances = async (force?: boolean) => {
         });
         
         // 3. Proxy Wallet Balances
-        // CRITICAL Always use a dedicated Polygon RPC provider for the proxy wallet check.
-        // This isolates the proxy check from the user's browser wallet network state, preventing 
-        // "wrong balance" issues when the user is on Ethereum Mainnet or Base.
-        
         const polygonProvider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com');
         const safeBalance = async (call: () => Promise<any>): Promise<any> => {
             try { return await call(); } catch(e) { return 0n; }
         };
 
-        // A. Safe Balance (Primary)
         if (proxyAddress && proxyAddress !== userAddress) {
             const polyBal = await safeBalance(() => polygonProvider.getBalance(proxyAddress));
             const usdcBridgedBal = await safeBalance(() => new Contract(USDC_BRIDGED_POLYGON, USDC_ABI, polygonProvider).balanceOf(proxyAddress));
@@ -2450,7 +2390,6 @@ const fetchBalances = async (force?: boolean) => {
             });
         }
 
-        // B. Signer Balance (Rescue Check)
         if (signerAddress && signerAddress !== userAddress) {
             const polyBal = await safeBalance(() => polygonProvider.getBalance(signerAddress));
             const usdcBridgedBal = await safeBalance(() => new Contract(USDC_BRIDGED_POLYGON, USDC_ABI, polygonProvider).balanceOf(signerAddress));
@@ -2486,7 +2425,6 @@ const clearLogs = () => setLogs([]);
 // --- HANDLERS: Auth ---
 const handleConnect = async () => {
     try {
-        // Connects and auto-switches to Polygon if needed
         const addr = await web3Service.connect();
         
         setUserAddress(addr);
@@ -2494,17 +2432,14 @@ const handleConnect = async () => {
         
         lifiService.setUserId(addr);
 
-        // Check Status on Server
         const res = await axios.post('/api/wallet/status', { userId: addr });
         
         if (res.data.status === 'NEEDS_ACTIVATION') {
             setNeedsActivation(true);
             setIsConnected(true);
         } else {
-            // CRITICAL Prefer Safe Address (Funder) over EOA Signer address for display and balance checks
             setProxyAddress(res.data.safeAddress || res.data.address);
-            setSignerAddress(res.data.address); // Track the EOA separately
-            // Capture recovery status from backend
+            setSignerAddress(res.data.address); 
             setRecoveryOwnerAdded(res.data.recoveryOwnerAdded || false);
             setNeedsActivation(false);
             setIsConnected(true);
@@ -2518,15 +2453,13 @@ const handleConnect = async () => {
 const handleInitializeWallet = async () => {
     setIsActivating(true);
     try {
-        // Call server to create EOA wallet
         const res = await axios.post('/api/wallet/activate', { 
             userId: userAddress
         });
 
-        // Use safeAddress if returned, otherwise fallback to EOA address
         setProxyAddress(res.data.safeAddress || res.data.address);
         setSignerAddress(res.data.address);
-        setRecoveryOwnerAdded(false); // New wallets don't have recovery by default
+        setRecoveryOwnerAdded(false); 
         setNeedsActivation(false);
         
         toast.success("Trading Wallet Created! Deposit USDC.e (Trading) to start.");
@@ -2543,7 +2476,6 @@ const handleInitializeWallet = async () => {
 const handleAddRecoveryOwner = async () => {
     if (!confirm("Add Recovery Owner?\n\nThis will add your Main Wallet as new owner of the Gnosis Safe. You will be able to execute transactions directly on-chain if this website ever goes down.\n\nCost: ~0.05 POL (Paid by Signer/Bot)")) return;
 
-    // Pre-check Signer Gas
     if (parseFloat(signerWalletBal.native) < 0.05) {
         toast.warn("Insufficient Gas in Signer Wallet. Please deposit a small amount of POL.");
         return;
@@ -2568,11 +2500,10 @@ const handleAddRecoveryOwner = async () => {
 
 // --- HANDLERS: Money & Bridge ---
 const openDepositModal = () => {
-    // Ensure we are on Polygon to see accurate balances for deposit
     if (chainId !== 137) {
         web3Service.switchToChain(137).catch(console.error);
     }
-    fetchBalances(); // Refresh balances
+    fetchBalances(); 
     setIsDepositModalOpen(true);
 };
 
@@ -2587,7 +2518,6 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
         if (tokenType === 'POL') {
             txHash = await web3Service.depositNative(proxyAddress, amount);
         } else {
-            // Determine Token Address based on selection
             const tokenAddr = tokenType === 'USDC.e' ? USDC_BRIDGED_POLYGON : USDC_POLYGON;
             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
         }
@@ -2595,7 +2525,6 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
         toast.success("Deposit Sent! Funds will arrive in your Vault shortly.");
         setIsDepositModalOpen(false);
         
-        // Record for Stats
         try {
             await axios.post('/api/deposit/record', { userId: userAddress, amount: parseFloat(amount), txHash });
         } catch(ignore){}
@@ -2614,15 +2543,12 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
 
 // --- UPDATED: Bridge Handlers ---
 const getSourceBalance = () => {
-    // Solana Special Case
     if (selectedSourceChain === 1151111081099710) {
         return "Check Phantom"; 
     }
-    // If Chain Mismatch
     if (chainId !== selectedSourceChain) {
         return "Switch Chain";
     }
-    // Mapping
     if (bridgeToken === 'NATIVE') return mainWalletBal.native;
     if (bridgeToken === 'USDC') return mainWalletBal.usdcNative;
     if (bridgeToken === 'USDC.e') return mainWalletBal.usdcBridged;
@@ -2633,15 +2559,15 @@ const handleSwapDirection = () => {
     if (bridgeMode === 'IN') {
         setBridgeMode('OUT');
         const oldSource = selectedSourceChain;
-        setSelectedSourceChain(137); // Source is now Polygon
+        setSelectedSourceChain(137); 
         setSelectedDestChain(oldSource === 137 ? 8453 : oldSource); 
         setBridgeToken(destToken === 'NATIVE' ? 'NATIVE' : 'USDC.e');
         setRecipientAddress(userAddress); 
     } else {
         setBridgeMode('IN');
         const oldDest = selectedDestChain;
-        setSelectedSourceChain(oldDest === 137 ? 8453 : oldDest); // Source is old dest
-        setSelectedDestChain(137); // Dest is now Polygon
+        setSelectedSourceChain(oldDest === 137 ? 8453 : oldDest); 
+        setSelectedDestChain(137); 
         setDestToken(bridgeToken === 'NATIVE' ? 'NATIVE' : 'USDC');
         setRecipientAddress(proxyAddress || userAddress);
     }
@@ -2654,7 +2580,6 @@ const handleGetBridgeQuote = async () => {
         let senderAddress = userAddress;
         let targetRecipientAddress = recipientAddress;
         
-        // Handle Solana as source chain
         if (selectedSourceChain === 1151111081099710) {
             try {
                 const solAddress = await web3Service.getSolanaAddress();
@@ -2669,7 +2594,6 @@ const handleGetBridgeQuote = async () => {
             setSenderAddressDisplay(userAddress);
         }
         
-        // Handle Solana as destination chain
         if (selectedDestChain === 1151111081099710 && !targetRecipientAddress) {
             try {
                 const solAddress = await web3Service.getSolanaAddress();
@@ -2697,9 +2621,9 @@ const handleGetBridgeQuote = async () => {
         let toTokenAddress;
         if (selectedDestChain === 137) {
             if (destToken === 'NATIVE') {
-                toTokenAddress = '0x0000000000000000000000000000000000000000'; // POL
+                toTokenAddress = '0x0000000000000000000000000000000000000000'; 
             } else {
-                toTokenAddress = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // USDC.e on Polygon
+                toTokenAddress = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; 
             }
         } else {
             toTokenAddress = lifiService.getTokenAddress(selectedDestChain, 'USDC'); 
@@ -2749,7 +2673,6 @@ const handleExecuteBridge = async () => {
     }
 };
 
-// --- UPDATED: Withdrawal Modal Handler ---
 const openWithdrawModal = async () => {
     setWithdrawalTxHash(null); 
     setIsWithdrawModalOpen(true);
@@ -2764,9 +2687,9 @@ const handleWithdraw = async (tokenType: 'USDC' | 'USDC.e' | 'POL', isRescue: bo
         const res = await axios.post('/api/wallet/withdraw', {
             userId: userAddress,
             tokenType: tokenType,
-            toAddress: userAddress, // Send back to owner
-            forceEoa: isRescue, // Force EOA withdrawal if rescue mode
-            targetSafeAddress: targetSafe // Optional: Target specific Safe
+            toAddress: userAddress, 
+            forceEoa: isRescue, 
+            targetSafeAddress: targetSafe 
         });
         
         if (res.data.success) {
@@ -2783,17 +2706,15 @@ const handleWithdraw = async (tokenType: 'USDC' | 'USDC.e' | 'POL', isRescue: bo
     setIsWithdrawing(false);
 };
 
-const handleExecuteMM = async (opp: ArbitrageOpportunity) => {
-    // This is a MANUAL override command sent to the server engine (Market Making)
-    if (!confirm(`Manually Provide Liquidity?\n\nMarket: ${opp.question}\nSpread: ${(opp.spread * 100).toFixed(1)}¢`)) return;
+const handleExecuteMM = async (marketIdOrOpp: string | ArbitrageOpportunity) => {
+    const marketId = typeof marketIdOrOpp === 'string' ? marketIdOrOpp : marketIdOrOpp.marketId;
     try {
-        await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
+        await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId });
         playSound('trade');
         toast.success("MM Strategy Dispatched to Server Engine");
     } catch (e) { toast.error("MM Trigger Failed"); }
 };
 
-// --- MANUAL EXIT HANDLER ---
 const handleManualExit = async (position: ActivePosition) => {
     if(!confirm(`Are you sure you want to SELL/EXIT this position?\n\nMarket: ${position.marketId}\nOutcome: ${position.outcome}\n\nThis will trigger an immediate Market Sell order for your full position size.`)) return;
     
@@ -2807,7 +2728,6 @@ const handleManualExit = async (position: ActivePosition) => {
 
         if (res.data.success) {
             toast.success("Market Sell Order Submitted!");
-            // Optimistic UI update: Remove position immediately
             setActivePositions(prev => prev.filter(p => !(p.marketId === position.marketId && p.outcome === position.outcome)));
         } else {
             toast.error("Exit Protocol Failed: " + res.data.error);
@@ -2869,15 +2789,12 @@ const handleStop = async () => {
     } catch (e) { console.error(e); }
 };
 
-const handleSyncPositions = async () => {
+const handleSyncPositions = async (force = false) => {
     if (!userAddress) return;
     setIsSyncingPositions(true);
     try {
-        // Send force: true to tell the bot to fetch from Chain/API, not just update local DB prices
-        await axios.post('/api/trade/sync', { userId: userAddress, force: true });
+        await axios.post('/api/trade/sync', { userId: userAddress, force: force });
         
-        // Poll for update or re-fetch status
-        // Give it a split second for the backend to process
         await new Promise(r => setTimeout(r, 1000));
         
         const res = await axios.get(`/api/bot/status/${userAddress}`);
@@ -2896,7 +2813,6 @@ const handleOpenOrderModal = async (position: ActivePosition) => {
     setSelectedPosition(position);
     setIsOrderModalOpen(true);
     
-    // Fetch open orders for this position
     try {
         const res = await axios.get(`/api/orders/open?userId=${userAddress}`);
         const positionOrders = res.data.orders?.filter((order: any) => 
@@ -2924,7 +2840,6 @@ const handleCancelOrder = async (orderId: string) => {
             orderId 
         });
         if (res.data.success) {
-            // Refresh open orders
             if (selectedPosition) {
                 handleOpenOrderModal(selectedPosition);
             }
@@ -2949,7 +2864,6 @@ const handleRedeemWinnings = async (position: ActivePosition) => {
         
         if (res.data.success) {
             toast.success("Winnings Redeemed! Check your Vault balance.");
-            // Refresh positions
             handleSyncPositions();
         } else {
             toast.error('Failed to redeem: ' + res.data.error);
@@ -3005,6 +2919,19 @@ const addMarketplaceWallet = async () => {
     }
 };
 
+const fetchStatus = async () => {
+    if (!userAddress) return;
+    try {
+        const res = await axios.get(`/api/bot/status/${userAddress}`);
+        setIsRunning(res.data.isRunning);
+        setActivePositions(res.data.positions || []);
+        setStats(res.data.stats);
+        setMoneyMarketOpps(res.data.mmOpportunities || []);
+        setFomoMoves(res.data.fomoMoves || []);
+        setActiveSnipes(res.data.fomoSnipes || []);
+    } catch (e) {}
+};
+
 // --- VIEW: LANDING ---
 if (!isConnected) {
     return <Landing onConnect={handleConnect} theme={theme} toggleTheme={toggleTheme} />;
@@ -3029,10 +2956,8 @@ if (needsActivation) {
 return (
     <div className="min-h-screen bg-gray-50 dark:bg-terminal-bg text-gray-900 dark:text-gray-300 font-sans selection:bg-blue-500/30 selection:text-white flex flex-col transition-colors duration-200">
     
-    {/* ... (Header) ... */}
     <header className="h-16 border-b border-gray-200 dark:border-terminal-border bg-white/80 dark:bg-terminal-card/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
-            {/* Logo & Branding */}
             <div className="flex items-center gap-3">
                 <button 
                     onClick={() => setActiveTab('dashboard')}
@@ -3054,7 +2979,6 @@ return (
                 </div>
             </div>
 
-            {/* Desktop Navigation */}
             <nav className="hidden md:flex items-center gap-1 bg-gray-100 dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-lg p-1">
                 {[
                 { id: 'dashboard', icon: Activity, label: 'Dashboard' },
@@ -3082,11 +3006,8 @@ return (
                 ))}
             </nav>
 
-            {/* Right Actions */}
             <div className="flex items-center gap-2 sm:gap-4">
-                {/* Chain Indicator */}
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-white/5 rounded-lg border border-gray-200 dark:border-white/10 text-xs font-medium">
-                    {/* SMART BRIDGE INDICATOR */}
                     {(activeTab === 'bridge' && bridgeMode === 'IN' && selectedSourceChain === 1151111081099710) ? (
                         <>
                             <img src={CHAIN_ICONS[1151111081099710]} className="w-4 h-4 rounded-full" alt="Solana"/>
@@ -3111,12 +3032,10 @@ return (
                     )}
                 </div>
 
-                {/* Theme Toggle */}
                 <button onClick={toggleTheme} className="hidden sm:block p-2 rounded-full hover:bg-gray-200 dark:hover:bg-white/10 text-gray-600 dark:text-gray-400 transition-colors">
                     {theme === 'light' ? <Moon size={16}/> : <Sun size={16}/>}
                 </button>
 
-                {/* Status Indicator */}
                 <div className="hidden md:flex flex-col items-end mr-2">
                     <div className="flex items-center gap-1.5">
                         <div className={`w-1.5 h-1.5 rounded-full status-dot ${isRunning ? 'bg-green-500 text-green-500' : 'bg-gray-400 text-gray-400'}`}></div>
@@ -3124,7 +3043,6 @@ return (
                     </div>
                 </div>
 
-                {/* Start/Stop Button */}
                 {isRunning ? (
                     <button onClick={handleStop} className="h-9 px-4 bg-red-50 dark:bg-terminal-danger/10 hover:bg-red-100 dark:hover:bg-terminal-danger/20 text-red-600 dark:text-terminal-danger border border-red-200 dark:border-terminal-danger/50 rounded flex items-center gap-2 text-xs font-bold transition-all">
                         <Square size={14} fill="currentColor" /> <span className="hidden sm:inline">STOP</span>
@@ -3135,7 +3053,6 @@ return (
                     </button>
                 )}
 
-                {/* Mobile Menu Toggle */}
                 <div className="md:hidden">
                     <button 
                         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -3147,7 +3064,6 @@ return (
             </div>
         </div>
         
-        {/* Mobile Navigation Dropdown */}
         {isMobileMenuOpen && (
             <div className="absolute top-16 left-0 w-full bg-white dark:bg-terminal-card border-b border-gray-200 dark:border-terminal-border z-40 md:hidden animate-in slide-in-from-top-5 shadow-xl">
                 <div className="p-4 grid grid-cols-2 gap-2">
@@ -3186,7 +3102,6 @@ return (
         )}
     </header>
 
-    {/* --- MAIN CONTENT --- */}
     <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 overflow-hidden">
         {activeTab === 'dashboard' && (
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -3195,9 +3110,7 @@ return (
                         <AlertTriangle size={14}/> Network issues, data may not be accurate.
                     </div>
                 )}
-                {/* Left Panel */}
                 <div className="col-span-12 md:col-span-8 flex flex-col gap-6">
-                    {/* REDESIGNED: Asset Overview Panel */}
                     <div className="glass-panel p-5 rounded-xl relative overflow-hidden flex flex-col gap-6">
                         <div className="absolute top-0 right-0 p-4 opacity-5 text-blue-600 dark:text-white">
                             <Wallet size={100} />
@@ -3215,7 +3128,6 @@ return (
                             </button>
                         </div>
 
-                        {/* NEW: Signer Controller Banner (Horizontal Layout) */}
                         <div className="relative z-10 bg-purple-500/5 dark:bg-purple-500/10 border border-purple-500/20 dark:border-purple-500/30 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-4 group hover:border-purple-500/40 transition-all">
                              <div className="flex items-center gap-3 w-full sm:w-auto">
                                  <div className="w-10 h-10 rounded-full bg-purple-600/20 dark:bg-purple-600/40 flex items-center justify-center text-purple-600 dark:text-purple-400">
@@ -3227,24 +3139,13 @@ return (
                                          <span className="text-xs font-mono text-gray-600 dark:text-gray-300 truncate max-w-[150px] sm:max-w-none">{signerAddress}</span>
                                          <button onClick={() => copyToClipboard(signerAddress)} className="p-1 hover:bg-purple-500/20 rounded transition-colors text-purple-600"><Copy size={12}/></button>
                                          <Tooltip text="Encrypted EOA key held by the server to sign trades for your Safe vault. Needs ~1 POL gas for rescue/recovery tasks." />
+                                         <span className="text-[10px] font-mono font-bold text-gray-900 dark:text-white ml-2">{signerWalletBal.native} POL</span>
                                      </div>
-                                 </div>
-                             </div>
-                             
-                             <div className="flex items-center gap-6 w-full sm:w-auto px-4 py-2 bg-white/40 dark:bg-black/40 rounded-lg border border-purple-500/10">
-                                 <div className="flex flex-col">
-                                     <span className="text-[8px] text-gray-500 uppercase font-bold">Gas (POL)</span>
-                                     <span className="text-xs font-mono font-bold text-gray-900 dark:text-white">{signerWalletBal.native}</span>
-                                 </div>
-                                 <div className="flex flex-col">
-                                     <span className="text-[8px] text-gray-500 uppercase font-bold">No use for stables</span>
                                  </div>
                              </div>
                         </div>
                         
-                        {/* 2-Column Grid for Main Wallets */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 relative z-10">
-                            {/* Connected Wallet */}
                             <div className="space-y-3">
                                 <div className="flex items-center gap-2 mb-2">
                                     <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-[10px] text-white">W</div>
@@ -3268,7 +3169,6 @@ return (
                                 </div>
                             </div>
 
-                            {/* Proxy Wallet */}
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between mb-2">
                                     <div className="flex items-center gap-2">
@@ -3297,7 +3197,6 @@ return (
                             </div>
                         </div>
 
-                        {/* Action Bar */}
                         <div className="mt-2 pt-4 border-t border-gray-200 dark:border-gray-800 flex flex-col sm:flex-row gap-3 relative z-10">
                             <button onClick={openDepositModal} className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2">
                                 <ArrowDownCircle size={18}/> DEPOSIT FUNDS
@@ -3308,7 +3207,6 @@ return (
                         </div>
                     </div>
 
-                    {/* Console */}
                     <div className="flex-1 glass-panel rounded-xl overflow-hidden flex flex-col min-h-[300px]">
                         <div className="px-4 py-2 border-b border-gray-200 dark:border-terminal-border bg-white/50 dark:bg-terminal-card/80 flex justify-between items-center">
                             <div className="flex items-center gap-2">
@@ -3342,9 +3240,7 @@ return (
                     </div>
                 </div>
 
-                {/* Right Panel */}
                 <div className="col-span-12 md:col-span-4 flex flex-col gap-6">
-                    {/* Performance Widget */}
                     <div className="glass-panel p-5 rounded-xl">
                         <div className="flex justify-between items-start mb-4">
                             <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
@@ -3370,7 +3266,6 @@ return (
                             </div>
                         </div>
                         
-                        {/* Performance Chart */}
                         <div className="border-t border-gray-200 dark:border-white/5 pt-4">
                             <div className="flex justify-between items-center mb-2">
                                 <div className="text-[10px] text-gray-500">Performance Overview</div>
@@ -3396,7 +3291,6 @@ return (
                             />
                         </div>
                     </div>
-                    {/* Strategy Preview */}
                     <div className="glass-panel p-5 rounded-xl space-y-4">
                         <div className="flex items-center justify-between">
                             <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2"><Settings size={16} className="text-blue-600 dark:text-terminal-accent"/> Active Strategy</h3>
@@ -3417,9 +3311,7 @@ return (
                             </div>
                         </div>
                     </div>
-                    {/* Live Positions & History (Tabbed) */}
                         <div className="glass-panel p-5 rounded-xl space-y-4 flex-1 flex flex-col bg-white dark:bg-zinc-900/50 border border-gray-200 dark:border-zinc-800 shadow-sm min-h-[600px]">
-                            {/* Tab Headers */}
                             <div className="flex items-center justify-between border-b border-gray-200 dark:border-white/5 pb-2">
                                 <div className="flex items-center gap-4">
                                     <button 
@@ -3439,7 +3331,7 @@ return (
                                 
                                 {tradePanelTab === 'active' && (
                                     <button 
-                                        onClick={handleSyncPositions}
+                                        onClick={() => handleSyncPositions()}
                                         disabled={isSyncingPositions}
                                         className={`p-2 rounded-full hover:bg-gray-100 dark:hover:bg-white/5 text-gray-400 hover:text-blue-500 transition-all ${isSyncingPositions ? 'animate-spin text-blue-500' : ''}`}
                                         title="Sync Positions"
@@ -3451,24 +3343,19 @@ return (
                             
                             <div className="flex-1 overflow-y-auto custom-scrollbar">
                                 {tradePanelTab === 'active' ? (
-                                    /* ACTIVE POSITIONS TAB */
                                     <div className="space-y-3">
                                         {activePositions.length > 0 ? (
                                             activePositions.map((pos) => {
                                                 const currentPrice = pos.currentPrice || pos.entryPrice;
                                                 const value = pos.shares * currentPrice;
-                                                // Correct PnL Calculation: Value - Cost Basis
-                                                // Cost Basis = shares * entryPrice
                                                 const costBasis = pos.shares * pos.entryPrice;
                                                 const pnl = value - costBasis;
                                                 const pnlPercent = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
                                                 const isProfitable = pnl >= 0;
                                                 
-                                                // Defensive ID Check
                                                 const safeMarketId = pos.marketId || "UNKNOWN";
                                                 const shortId = safeMarketId.length > 8 ? safeMarketId.slice(0, 8) : safeMarketId;
                                                 
-                                                // Determine market state styling and if redeemable
                                                 const isResolved = pos.marketState === 'RESOLVED' || pos.marketState === 'CLOSED';
                                                 const isRedeemable = isResolved;
                                                 const marketStateColor = {
@@ -3480,7 +3367,6 @@ return (
 
                                                 return (
                                                     <div key={safeMarketId + pos.outcome} className={`text-xs p-3 bg-white dark:bg-white/5 rounded-xl border border-gray-200 dark:border-white/10 hover:border-blue-500/30 transition-all shadow-sm group ${isRedeemable ? 'ring-2 ring-yellow-400/50 ring-offset-2 ring-offset-white dark:ring-offset-black animate-pulse' : ''}`}>
-                                                        {/* Card Header: Image & Title */}
                                                         <div className="flex gap-3 mb-3">
                                                             <div className="shrink-0 mt-1">
                                                                 {pos.image ? (
@@ -3518,7 +3404,6 @@ return (
                                                             </div>
                                                         </div>
 
-                                                        {/* Stats Grid */}
                                                         <div className="grid grid-cols-2 gap-2 bg-gray-50 dark:bg-black/20 p-2 rounded-lg mb-3">
                                                             <div>
                                                                 <div className="text-[10px] text-gray-500 uppercase font-bold">Outcome</div>
@@ -3541,13 +3426,11 @@ return (
                                                             </div>
                                                         </div>
 
-                                                        {/* Footer: PnL & Action */}
                                                         <div className="flex items-center justify-between pt-1">
                                                             <div className={`text-xs font-mono font-bold ${isProfitable ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
                                                                 {isProfitable ? '+' : ''}{pnl.toFixed(2)} ({pnlPercent.toFixed(1)}%)
                                                             </div>
                                                             <div className="flex items-center gap-1">
-                                                                {/* Show Redeem button for resolved markets */}
                                                                 {isRedeemable ? (
                                                                     <button 
                                                                         onClick={() => handleOpenOrderModal(pos)}
@@ -3559,7 +3442,6 @@ return (
                                                                     </button>
                                                                 ) : (
                                                                     <>
-                                                                        {/* Order Status Indicator */}
                                                                         <button 
                                                                             onClick={() => handleOpenOrderModal(pos)}
                                                                             className="px-2 py-1.5 bg-blue-50 dark:bg-blue-900/10 hover:bg-blue-100 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-[10px] font-bold rounded border border-blue-200 dark:border-blue-900/30 transition-colors flex items-center gap-1"
@@ -3591,12 +3473,10 @@ return (
                                         )}
                                     </div>
                             ) : (
-                                    /* HISTORY TAB */
                                     <div className="space-y-2">
                                         {tradeHistory.length > 0 ? (
                                             tradeHistory.slice(0, 8).map(trade => {
                                                 const displayAmount = (trade.executedSize && trade.executedSize > 0) ? trade.executedSize : trade.size;
-                                                // Defensive ID Check
                                                 const tradeId = trade.marketId || "UNKNOWN";
                                                 
                                                 return (
@@ -3612,7 +3492,6 @@ return (
                                                                 </span>
                                                             </div>
                                                         </div>
-                                                        {/* ... Rest of row ... */}
                                                         <div className="flex items-center gap-3">
                                                             <div className="text-right">
                                                                 <div className="font-mono font-bold text-gray-900 dark:text-white">${displayAmount.toFixed(2)}</div>
@@ -3646,7 +3525,6 @@ return (
             </div>
         )}
 
-        {/* --- Money Market Tab --- */}
         {activeTab === 'money-market' && (
             <ProTerminal 
                 userId={userAddress}
@@ -3656,12 +3534,9 @@ return (
                 moneyMarketOpps={moneyMarketOpps}
                 openOrders={openOrders}
                 isRunning={isRunning}
-                onRefresh={fetchBotStatus}
-                handleExecuteMM={async (opp) => {
-                    await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
-                    toast.success("Strategy Dispatched");
-                }}
-                handleSyncPositions={fetchBotStatus}
+                onRefresh={fetchStatus}
+                handleExecuteMM={handleExecuteMM}
+                handleSyncPositions={handleSyncPositions}
                 openDepositModal={() => setIsDepositModalOpen(true)}
                 openWithdrawModal={() => setIsWithdrawModalOpen(true)}
                 setActiveTab={setActiveTab as any}
@@ -3670,15 +3545,13 @@ return (
 
         {activeTab === 'fomo' && (
             <FomoRunner 
-                flashMoves={fomoChases}
-                activeSnipes={fomoSnipes}
+                flashMoves={fomoMoves}
+                activeSnipes={activeSnipes}
             />
         )}
         
-        {/* BRIDGE */}
         {activeTab === 'bridge' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                {/* Bridge Guide Modal */}
                 {showBridgeGuide && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in">
                         <div className="bg-white dark:bg-terminal-card border border-gray-200 dark:border-terminal-border rounded-xl max-w-md w-full p-6 relative shadow-2xl">
@@ -3714,7 +3587,6 @@ return (
                     </div>
                 )}
 
-                {/* Bridge Form */}
                 <div className="md:col-span-2 glass-panel p-4 sm:p-8 rounded-xl border border-gray-200 dark:border-terminal-border">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
                         <div className="flex items-center gap-3">
@@ -3745,7 +3617,6 @@ return (
                     
                     <div className="relative flex flex-col gap-2">
                         
-                        {/* FROM CARD */}
                         <div className="p-4 bg-white dark:bg-black/40 rounded-xl border border-gray-200 dark:border-terminal-border shadow-sm dark:shadow-none transition-all hover:border-blue-300 dark:hover:border-blue-700">
                             <div className="flex justify-between items-center mb-2">
                                 <label className="text-xs text-gray-500 uppercase font-bold">From Network</label>
@@ -3756,12 +3627,11 @@ return (
                             </div>
                             
                             <div className="flex gap-4 items-center">
-                                {/* Chain Selector */}
                                 <div className="relative min-w-[140px]">
                                     <button 
                                         onClick={() => setIsSourceChainSelectOpen(!isSourceChainSelectOpen)}
                                         className="w-full flex items-center justify-between bg-gray-50 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-sm rounded-lg px-3 py-2.5 transition-colors"
-                                        disabled={bridgeMode === 'OUT'} // Locked to Polygon for Out
+                                        disabled={bridgeMode === 'OUT'} 
                                     >
                                         <div className="flex items-center gap-2">
                                             <img src={CHAIN_ICONS[selectedSourceChain]} alt="" className="w-5 h-5 rounded-full"/>
@@ -3786,7 +3656,6 @@ return (
                                     )}
                                 </div>
 
-                                {/* Amount Input */}
                                 <div className="flex-1 relative">
                                     <input 
                                         type="text" 
@@ -3798,7 +3667,6 @@ return (
                                         value={bridgeAmount}
                                         onChange={(e) => {
                                             const val = e.target.value;
-                                            // Regex: Allow positive integers or decimals only (no negatives, no extra dots)
                                             if (val === '' || /^\d*\.?\d*$/.test(val)) {
                                                 setBridgeAmount(val);
                                             }
@@ -3808,7 +3676,6 @@ return (
                                             <button 
                                             onClick={() => {
                                                 const bal = getSourceBalance();
-                                                // Only set if numeric and safe
                                                 if (bal && !isNaN(parseFloat(bal))) {
                                                     setBridgeAmount(bal);
                                                 }
@@ -3821,18 +3688,15 @@ return (
                                 </div>
                             </div>
                             
-                            {/* Token Selector Pill */}
                             <div className="flex justify-end mt-4">
                                 <div className="flex bg-gray-100 dark:bg-white/5 p-1 rounded-lg">
                                     {selectedSourceChain === 137 ? (
-                                        // Polygon Source Options
                                         <>
                                             <button onClick={() => setBridgeToken('USDC')} className={`px-3 py-1 text-[10px] font-bold rounded ${bridgeToken === 'USDC' ? 'bg-white dark:bg-gray-600 shadow-sm text-blue-600 dark:text-white' : 'text-gray-500'}`}>USDC (Native)</button>
                                             <button onClick={() => setBridgeToken('USDC.e')} className={`px-3 py-1 text-[10px] font-bold rounded ${bridgeToken === 'USDC.e' ? 'bg-white dark:bg-gray-600 shadow-sm text-green-600 dark:text-white' : 'text-gray-500'}`}>USDC.e</button>
                                             <button onClick={() => setBridgeToken('NATIVE')} className={`px-3 py-1 text-[10px] font-bold rounded ${bridgeToken === 'NATIVE' ? 'bg-white dark:bg-gray-600 shadow-sm text-purple-600 dark:text-white' : 'text-gray-500'}`}>POL</button>
                                         </>
                                     ) : (
-                                        // External Source Options
                                         <>
                                             <button onClick={() => setBridgeToken('USDC')} className={`px-3 py-1 text-[10px] font-bold rounded ${bridgeToken === 'USDC' ? 'bg-white dark:bg-gray-600 shadow-sm text-blue-600 dark:text-white' : 'text-gray-500'}`}>USDC</button>
                                             <button onClick={() => setBridgeToken('NATIVE')} className={`px-3 py-1 text-[10px] font-bold rounded ${bridgeToken === 'NATIVE' ? 'bg-white dark:bg-gray-600 shadow-sm' : 'text-gray-500'}`}>{selectedSourceChain === 1151111081099710 ? 'SOL' : 'ETH'}</button>
@@ -3842,7 +3706,6 @@ return (
                             </div>
                         </div>
 
-                        {/* Swap Direction Button */}
                         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
                             <button 
                                 onClick={handleSwapDirection}
@@ -3852,16 +3715,14 @@ return (
                             </button>
                         </div>
 
-                        {/* TO CARD */}
                         <div className="p-4 bg-gray-50 dark:bg-black/40 rounded-xl border border-gray-200 dark:border-terminal-border shadow-sm dark:shadow-none transition-all hover:border-blue-300 dark:hover:border-blue-700">
                             <label className="text-xs text-gray-500 uppercase font-bold mb-2 block">To Network</label>
                             <div className="flex gap-4 items-center">
-                                {/* Chain Selector */}
                                 <div className="relative min-w-[140px]">
                                     <button 
                                         onClick={() => setIsDestChainSelectOpen(!isDestChainSelectOpen)}
                                         className="w-full flex items-center justify-between bg-white dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-sm rounded-lg px-3 py-2.5 transition-colors"
-                                        disabled={bridgeMode === 'IN'} // Locked to Polygon for IN
+                                        disabled={bridgeMode === 'IN'} 
                                     >
                                         <div className="flex items-center gap-2">
                                             <img src={CHAIN_ICONS[selectedDestChain]} alt="" className="w-5 h-5 rounded-full"/>
@@ -3886,11 +3747,9 @@ return (
                                     )}
                                 </div>
 
-                                {/* Recipient Input / Selector */}
                                 <div className="flex-1">
                                     {bridgeMode === 'IN' ? (
                                         <div className="relative">
-                                            {/* Dropdown for Deposit Target: Smart Wallet vs Main Wallet */}
                                             <div className="relative">
                                                 <select
                                                     value={recipientAddress}
@@ -3907,7 +3766,6 @@ return (
                                             </div>
                                         </div>
                                     ) : (
-                                        /* Existing Input for Withdraw */
                                         <div className="relative">
                                             <div className="relative">
                                                 <input 
@@ -3933,7 +3791,6 @@ return (
                                 </div>
                             </div>
 
-                            {/* Destination Token Toggle (Only for IN mode when receiving on Polygon) */}
                             {bridgeMode === 'IN' && selectedDestChain === 137 && (
                                 <div className="flex justify-end mt-4">
                                     <div className="flex items-center gap-2">
@@ -3965,7 +3822,6 @@ return (
                             </button>
                         ) : (
                             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
-                                {/* Detailed Quote Card */}
                                 <div className="p-4 bg-white dark:bg-black/20 border border-blue-200 dark:border-blue-500/30 rounded-xl text-sm space-y-3 shadow-sm relative overflow-hidden">
                                     <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
                                     <div className="flex justify-between items-center border-b border-gray-100 dark:border-white/5 pb-2">
@@ -3993,7 +3849,6 @@ return (
                                     </div>
                                 </div>
 
-                                {/* Action Button or Stepper */}
                                 {isBridging ? (
                                     <BridgeStepper status={bridgeStatus} />
                                 ) : (
@@ -4006,7 +3861,6 @@ return (
                     </div>
                 </div>
 
-                {/* History Panel */}
                 <div className="glass-panel p-6 rounded-xl border border-gray-200 dark:border-terminal-border flex flex-col h-[600px]">
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2"><History size={14}/> Bridge History</h3>
@@ -4053,11 +3907,9 @@ return (
             </div>
         )}
         
-        {/* SYSTEM PAGE (Revamped) */}
         {activeTab === 'system' && systemStats && (
             <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
                 
-                {/* Header */}
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl"><Gauge size={32} className="text-blue-600 dark:text-blue-500"/></div>
@@ -4077,13 +3929,11 @@ return (
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     
-                    {/* Left: Internal Metrics (Grid) */}
                     <div className="glass-panel p-6 rounded-xl border border-gray-200 dark:border-terminal-border space-y-6">
                         <h3 className="text-sm font-bold text-gray-500 uppercase tracking-widest border-b border-gray-200 dark:border-gray-800 pb-2 flex items-center gap-2">
                             <Server size={14}/> Internal Platform Metrics
                         </h3>
                         <div className="grid grid-cols-2 gap-6">
-                                {/* Card 1: Signal Volume */}
                                 <div>
                                 <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
                                     Signal Volume <Tooltip text="Total volume of whale/signal trades detected by the monitoring engine. (Source Volume)" />
@@ -4094,7 +3944,6 @@ return (
                                 <div className="text-[10px] text-gray-400">{systemStats.internal.totalTrades} signals tracked</div>
                                 </div>
 
-                                {/* Card 2: Platform Execution Volume (NEW) */}
                                 <div>
                                 <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
                                     Bot Execution Vol <Tooltip text="Real USDC volume executed by user bots on the platform." />
@@ -4105,7 +3954,6 @@ return (
                                 <div className="text-[10px] text-gray-400">On-Chain Volume</div>
                                 </div>
 
-                                {/* Card 3: Revenue */}
                                 <div>
                                 <div className="text-xs text-gray-500 mb-1">Protocol Revenue</div>
                                 <div className="text-2xl font-black text-green-600 dark:text-green-500 font-mono">
@@ -4114,18 +3962,18 @@ return (
                                 <div className="text-[10px] text-gray-400">1% Fee Share</div>
                                 </div>
 
-                                {/* Card 4: Active Bots */}
-                                <div>
-                                <div className="text-xs text-gray-500 mb-1">Active Runners</div>
-                                <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
-                                    {systemStats.internal.activeBots} <span className="text-sm text-gray-400 font-normal">/ {systemStats.internal.totalUsers}</span>
-                                </div>
-                                <div className="text-[10px] text-gray-400">Online now</div>
-                                </div>
+                                {activeTab === 'system' && (
+                                    <div>
+                                    <div className="text-xs text-gray-500 mb-1">Active Runners</div>
+                                    <div className="text-2xl font-black text-gray-900 dark:text-white font-mono">
+                                        {systemStats.internal.activeBots} <span className="text-sm text-gray-400 font-normal">/ {systemStats.internal.totalUsers}</span>
+                                    </div>
+                                    <div className="text-[10px] text-gray-400">Online now</div>
+                                    </div>
+                                )}
                         </div>
                     </div>
 
-                    {/* Right: Verified On-Chain Data (Switchable) */}
                     <div className="glass-panel p-6 rounded-xl border border-blue-200 dark:border-blue-500/30 bg-blue-50/50 dark:bg-blue-900/10 space-y-6 flex flex-col justify-between flex-1">
                         
                         <div className="flex justify-between items-center border-b border-blue-200 dark:border-blue-800 pb-2">
@@ -4167,7 +4015,6 @@ return (
                                     </div>
                                 </div>
 
-                                {/* Leaderboard Chart Visualization */}
                                 <div className="flex-1 flex flex-col">
                                         <div className="text-[10px] text-gray-500 mb-2 font-bold uppercase">Global Builder Leaderboard (Top 50)</div>
                                         <div className="flex items-end gap-1 h-40 border-b border-gray-200 dark:border-gray-800 pb-1 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-700">
@@ -4183,7 +4030,6 @@ return (
                                                             style={{ height: `${Math.max(height, 2)}%` }}
                                                         ></div>
                                                         
-                                                        {/* Hover Tooltip */}
                                                         <div className="opacity-0 group-hover:opacity-100 absolute bottom-full mb-2 bg-black dark:bg-white text-white dark:text-black text-[10px] p-2 rounded shadow-xl z-50 pointer-events-none whitespace-nowrap flex flex-col gap-1 items-center border border-gray-700">
                                                             <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 w-full justify-center">
                                                                 <span className="font-bold">#{b.rank || i+1}</span>
@@ -4220,13 +4066,10 @@ return (
             </div>
         )}
 
-        {/* VAULT SECTION (PERFECTED) */}
         
-        {/* VAULT (REBRANDED & REDESIGNED) */}
         {activeTab === 'vault' && (
             <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20 space-y-10">
                 
-                {/* 1. HEADER & GLOBAL SAVE */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-6 border-b border-gray-200 dark:border-terminal-border">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-blue-600 rounded-2xl shadow-lg shadow-blue-900/20">
@@ -4248,13 +4091,11 @@ return (
                     </button>
                 </div>
 
-                {/* 2. AUTONOMOUS COMMAND CENTRE (The Big Three) */}
                 <section className="space-y-6">
                     <h3 className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.4em] flex items-center gap-2">
                         <Play size={12} fill="currentColor" /> Autonomous Engines
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {/* Alpha Mirror */}
                         <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableCopyTrading ? 'bg-purple-600/10 border-purple-500/40 shadow-[0_0_30px_rgba(147,51,234,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
                             <div className="flex justify-between items-start mb-6">
                                 <div className="p-3 bg-purple-600 rounded-xl text-white shadow-lg"><Users size={22} /></div>
@@ -4267,7 +4108,6 @@ return (
                             <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Real-time replication of whale movements from the global registry.</p>
                         </div>
 
-                        {/* Liquidity Engine (Money Markets Unified) */}
                         <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableMoneyMarkets ? 'bg-blue-600/10 border-blue-500/40 shadow-[0_0_30px_rgba(37,99,235,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
                             <div className="flex justify-between items-start mb-6">
                                 <div className="p-3 bg-blue-600 rounded-xl text-white shadow-lg"><Recycle size={22} /></div>
@@ -4283,17 +4123,14 @@ return (
                     </div>
                 </section>
 
-                {/* 3. ENGINE CALIBRATION (Grouped Tuning) */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     
-                    {/* Module Calibration */}
                     <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
                         <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
                             <Sliders size={14} className="text-purple-500"/> Engine Calibration
                         </h4>
 
                         <div className="space-y-6">
-                            {/* Mirror Multiplier */}
                             <div className="space-y-4">
                                 <div className="flex justify-between items-center">
                                     <label className="text-[10px] font-black text-white uppercase tracking-widest">Mirror Multiplier</label>
@@ -4310,7 +4147,6 @@ return (
 
                             <hr className="border-white/5" />
 
-                            {/* Target Registry */}
                             <div className="space-y-4">
                                 <label className="text-[10px] font-black text-white uppercase tracking-widest flex items-center justify-between">
                                     Whale Watchlist
@@ -4337,14 +4173,12 @@ return (
                         </div>
                     </div>
 
-                    {/* AI & Security Credentials */}
                     <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-8">
                         <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
                             <Brain size={14} className="text-blue-500"/> AI & Security Guard
                         </h4>
 
                         <div className="space-y-6">
-                            {/* Gemini API Key */}
                             <div className="space-y-3">
                                 <div className="flex justify-between items-center">
                                     <label className="text-[10px] font-black text-white uppercase tracking-widest">Gemini API Key</label>
@@ -4359,7 +4193,6 @@ return (
                                 />
                             </div>
 
-                            {/* Risk Profile Selection */}
                             <div className="space-y-4">
                                 <label className="text-[10px] font-black text-white uppercase tracking-widest">AI Intelligence Protocol</label>
                                 <div className="grid grid-cols-3 gap-2">
@@ -4379,10 +4212,8 @@ return (
                     </div>
                 </div>
 
-                {/* 4. SAFETY & COMMUNICATION (Global Controls) */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     
-                    {/* Liquidity Guard */}
                     <div className="glass-panel p-8 rounded-[2.5rem] border-white/5 space-y-6">
                         <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
                             <Zap size={14} className="text-amber-500"/> Liquidity Guard

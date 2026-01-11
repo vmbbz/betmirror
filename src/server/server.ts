@@ -19,6 +19,7 @@ import { SafeManagerService } from '../services/safe-manager.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
+import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -37,16 +38,6 @@ const io = new SocketIOServer(httpServer, {
     }
 });
 
-const PORT = process.env.PORT || 3000;
-const ENV = loadEnv();
-
-// Service Singletons
-const dbRegistryService = new DbRegistryService();
-const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
-
-// In-Memory Bot Instances (Runtime State)
-const ACTIVE_BOTS = new Map<string, BotEngine>();
-
 // Simple Logger for Server context
 const serverLogger: Logger = {
     info: (msg) => console.log(`[SERVER] ${msg}`),
@@ -55,6 +46,17 @@ const serverLogger: Logger = {
     debug: (msg) => console.debug(`[SERVER DEBUG] ${msg}`),
     success: (msg) => console.log(`[SERVER SUCCESS] ${msg}`)
 };
+
+const PORT = process.env.PORT || 3000;
+const ENV = loadEnv();
+
+// Service Singletons
+const dbRegistryService = new DbRegistryService();
+const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
+const intelligence = new MarketIntelligenceService(serverLogger);
+
+// In-Memory Bot Instances (Runtime State)
+const ACTIVE_BOTS = new Map<string, BotEngine>();
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }) as any); 
@@ -72,53 +74,41 @@ async function startUserBot(userId: string, config: BotConfig) {
         ACTIVE_BOTS.get(normId)?.stop();
     }
 
-    const startCursor = config.startCursor || Math.floor(Date.now() / 1000);
-    
-    // CRITICAL: Inject Builder Credentials from ENV to enable CLOB auth for Safes
     const engineConfig: BotConfig = { 
         ...config, 
         userId: normId, 
-        startCursor,
         builderApiKey: ENV.builderApiKey,
         builderApiSecret: ENV.builderApiSecret,
         builderApiPassphrase: ENV.builderApiPassphrase,
         mongoEncryptionKey: ENV.mongoEncryptionKey
     };
 
-    const engine = new BotEngine(engineConfig, dbRegistryService, {
-        // FOMO: This bridges the engine data to the frontend via Socket.io
+    // Passing the global 'intelligence' instance as the second parameter
+    const engine = new BotEngine(engineConfig, intelligence, dbRegistryService, {
         onFomoVelocity: (moves) => {
             if (moves.length > 0) {
-                serverLogger.info(`[FOMO] ${normId} detected ${moves.length} high-velocity moves.`);
                 io.to(normId).emit('FOMO_VELOCITY_UPDATE', moves);
             }
         },
         onFomoSnipes: (snipes) => {
             if (snipes.length > 0) {
-                serverLogger.info(`[FOMO] ${normId} monitoring ${snipes.length} active snipes.`);
                 io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes);
             }
         },
         onPositionsUpdate: async (positions) => {
-            // We still update DB for persistence/backup, but UI will prefer live feed
             await User.updateOne({ address: normId }, { activePositions: positions });
             io.to(normId).emit('POSITIONS_UPDATE', positions);
         },
-        onCashout: async (record) => {
-            await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
-        },
         onTradeComplete: async (trade) => {
             try {
-                // FOMO UPDATE: Handle the service origin for sniper tracking
                 const origin = (trade as any).serviceOrigin || 'COPY';
-                serverLogger.info(`Trade Complete [${origin}] for ${normId}: ${trade.side} ${trade.outcome} | Executed: $${trade.executedSize?.toFixed(2) || 0}`);
+                serverLogger.info(`Trade Complete [${origin}] for ${normId}: ${trade.side} ${trade.outcome}`);
                 
-                // ATOMIC STATS UPDATE
-                const update: any = {
-                    $inc: {
-                        'stats.totalVolume': trade.executedSize || 0,
-                        'stats.tradesCount': 1
-                    }
+                const update: any = { 
+                    $inc: { 
+                        'stats.totalVolume': trade.executedSize || 0, 
+                        'stats.tradesCount': 1 
+                    } 
                 };
 
                 if (trade.side === 'SELL' && trade.pnl !== undefined) {
@@ -132,35 +122,20 @@ async function startUserBot(userId: string, config: BotConfig) {
                 const exists = await Trade.findById(trade.id);
                 if (!exists) {
                     await Trade.create({
-                        _id: trade.id,
-                        userId: normId,
-                        marketId: trade.marketId,
-                        outcome: trade.outcome,
-                        side: trade.side,
-                        size: trade.size,
-                        executedSize: trade.executedSize || 0,
-                        price: trade.price,
-                        pnl: trade.pnl,
-                        status: trade.status,
-                        txHash: trade.txHash,
-                        clobOrderId: trade.clobOrderId, 
-                        assetId: trade.assetId,         
-                        aiReasoning: trade.aiReasoning,
-                        riskScore: trade.riskScore,
-                        timestamp: trade.timestamp,
-                        marketSlug: trade.marketSlug,
-                        eventSlug: trade.eventSlug,
-                        serviceOrigin: origin 
+                        _id: trade.id, userId: normId, marketId: trade.marketId, outcome: trade.outcome,
+                        side: trade.side, size: trade.size, executedSize: trade.executedSize || 0,
+                        price: trade.price, pnl: trade.pnl, status: trade.status, txHash: trade.txHash,
+                        clobOrderId: trade.clobOrderId, assetId: trade.assetId,
+                        aiReasoning: trade.aiReasoning, riskScore: trade.riskScore,
+                        timestamp: trade.timestamp, marketSlug: trade.marketSlug,
+                        eventSlug: trade.eventSlug, serviceOrigin: origin 
                     });
                 } else {
-                    // Update existing trade entry (e.g. closing an open position)
-                    await Trade.findByIdAndUpdate(trade.id, {
-                        status: trade.status,
-                        pnl: trade.pnl,
-                        executedSize: trade.executedSize || (exists as any).executedSize
+                    await Trade.findByIdAndUpdate(trade.id, { 
+                        status: trade.status, pnl: trade.pnl, 
+                        executedSize: trade.executedSize || (exists as any).executedSize 
                     });
                 }
-
                 io.to(normId).emit('TRADE_COMPLETE', trade);
             } catch (err: any) {
                 serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
@@ -168,16 +143,15 @@ async function startUserBot(userId: string, config: BotConfig) {
         },
         onStatsUpdate: async (stats) => {
             await User.updateOne({ address: normId }, { 
-                $set: {
-                    'stats.portfolioValue': stats.portfolioValue,
+                $set: { 
+                    'stats.portfolioValue': stats.portfolioValue, 
                     'stats.cashBalance': stats.cashBalance,
                     'stats.allowanceApproved': stats.allowanceApproved
                 }
             });
+            io.to(normId).emit('STATS_UPDATE', stats);
         },
-        onLog: (log) => {
-            io.to(normId).emit('BOT_LOG', log);
-        },
+        onLog: (log) => io.to(normId).emit('BOT_LOG', log),
         onFeePaid: async (event) => {
             const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
             if (lister) {
@@ -191,22 +165,22 @@ async function startUserBot(userId: string, config: BotConfig) {
     // Load bookmarks for this user
     try {
         const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
-        const bookmarks = user?.bookmarkedMarkets || [];
-        if (bookmarks.length > 0) {
+        if (user?.bookmarkedMarkets?.length) {
             const adapter = engine.getAdapter();
             const scanner = (adapter as any)?.arbScanner;
             if (scanner && typeof scanner.initializeBookmarks === 'function') {
-                scanner.initializeBookmarks(bookmarks);
-                console.log(`📌 Initialized ${bookmarks.length} bookmarks for user ${normId}`);
+                scanner.initializeBookmarks(user.bookmarkedMarkets);
+                serverLogger.info(`📌 Initialized ${user.bookmarkedMarkets.length} bookmarks for user ${normId}`);
             }
         }
     } catch (e) {
-        console.error(`Failed to load bookmarks for ${normId}:`, e);
+        serverLogger.error(`Failed to load bookmarks for ${normId}`);
     }
 
     ACTIVE_BOTS.set(normId, engine);
-    engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
+    await engine.start();
 }
+
 
 // Socket.io Room Management
 io.on('connection', (socket: Socket) => {

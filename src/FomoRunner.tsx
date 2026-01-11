@@ -1,10 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useMemo, useCallback } from 'react';
 import { 
-  Activity, Sword, Zap, ShieldCheck, 
-  ExternalLink, TrendingUp, Clock, 
-  ArrowRightLeft, Target, Loader2, Radar, Flame, Info,
-  TrendingDown, Timer, BarChart3, ChevronDown, ChevronUp
+  Sword, Zap, ShieldCheck, 
+  ExternalLink, TrendingUp, 
+  TrendingDown, RefreshCw, Flame,
+  Loader2, Target
 } from 'lucide-react';
+import { toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 interface FlashMove {
     id: string;
@@ -111,15 +113,60 @@ const FlashCard = ({ move }: { move: FlashMove }) => {
     );
 };
 
-const FomoRunner = ({ flashMoves = [] }: { flashMoves?: FlashMove[] }) => {
+interface FomoRunnerProps {
+    flashMoves?: FlashMove[];
+    onRefresh?: () => Promise<void>;
+    isLoading?: boolean;
+}
+
+const FomoRunner: React.FC<FomoRunnerProps> = ({ 
+    flashMoves = [],
+    onRefresh,
+    isLoading = false
+}) => {
+    // Ensure flashMoves is always an array and has the expected structure
+    const processedMoves = useMemo(() => {
+        if (!Array.isArray(flashMoves)) return [];
+        return flashMoves.map(move => ({
+            ...move,
+            // Ensure required fields have defaults if missing
+            tokenId: move.tokenId || '',
+            question: move.question || 'Unknown Market',
+            oldPrice: move.oldPrice || 0,
+            newPrice: move.newPrice || 0,
+            velocity: move.velocity || 0,
+            timestamp: move.timestamp || Date.now(),
+            marketSlug: move.marketSlug || '',
+            eventSlug: move.eventSlug || '',
+            image: move.image || undefined
+        }));
+    }, [flashMoves]);
+    if (isLoading) {
+        return (
+            <div className="max-w-[1600px] mx-auto py-20 px-4 md:px-8 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-rose-500 mx-auto mb-4"></div>
+                    <p className="text-gray-400 text-sm">Scanning for flash moves...</p>
+                </div>
+            </div>
+        );
+    }
+
+    const handleRefresh = useCallback(async () => {
+        if (onRefresh) {
+            await onRefresh();
+            toast.success('Flash moves refreshed');
+        }
+    }, [onRefresh]);
+
     return (
         <div className="max-w-[1600px] mx-auto pb-20 px-4 md:px-8 animate-in fade-in duration-1000">
-            {/* Navigation & Stats Restored with Enhanced Look */}
+            {/* Navigation & Stats */}
             <div className="flex flex-col md:flex-row justify-between items-end gap-6 mb-12 border-b border-white/5 pb-10">
                 <div className="space-y-4">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-rose-600 rounded-2xl shadow-lg shadow-rose-900/40">
-                             <Flame className="text-white" size={32}/>
+                            <Flame className="text-white" size={32}/>
                         </div>
                         <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic">
                             FOMO <span className="text-rose-500">RUNNER</span>
@@ -128,6 +175,23 @@ const FomoRunner = ({ flashMoves = [] }: { flashMoves?: FlashMove[] }) => {
                     <p className="text-xs text-slate-500 font-bold uppercase tracking-[0.5em] ml-20">
                         GLOBAL VELOCITY SNIPER PRO v2.0
                     </p>
+                </div>
+                
+                <div className="flex items-center gap-4">
+                    <div className="text-right">
+                        <p className="text-sm text-slate-400">Last updated</p>
+                        <p className="text-white font-mono">
+                            {new Date().toLocaleTimeString()}
+                        </p>
+                    </div>
+                    <button 
+                        onClick={handleRefresh}
+                        disabled={isLoading}
+                        className={`p-2 rounded-lg ${isLoading ? 'bg-slate-800' : 'bg-slate-800 hover:bg-slate-700'} transition-colors`}
+                        title="Refresh data"
+                    >
+                        <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin text-slate-500' : 'text-rose-400'}`} />
+                    </button>
                 </div>
                 
                 <div className="flex items-center gap-4 mb-2">

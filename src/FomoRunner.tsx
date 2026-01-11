@@ -1,12 +1,10 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  Sword, Zap, ShieldCheck, 
-  ExternalLink, TrendingUp, 
-  TrendingDown, RefreshCw, Flame,
-  Loader2, Target
+  Activity, Sword, Zap, ShieldCheck, 
+  ExternalLink, TrendingUp, Clock, 
+  ArrowRightLeft, Target, Loader2, Radar, Flame, Info,
+  TrendingDown, Timer, BarChart3, ChevronDown, ChevronUp
 } from 'lucide-react';
-import { toast } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
 
 interface FlashMove {
     id: string;
@@ -22,18 +20,8 @@ interface FlashMove {
 }
 
 const FlashCard = ({ move }: { move: FlashMove }) => {
-    // Add defensive checks for move
-    if (!move) {
-        console.error('FlashCard received null/undefined move');
-        return null;
-    }
-    
-    const isUp = (move.velocity || 0) > 0;
-    // Ensure we have valid slugs before constructing URL
-    const hasValidSlugs = move.eventSlug && move.marketSlug;
-    const polyUrl = hasValidSlugs 
-        ? `https://polymarket.com/event/${move.eventSlug}/${move.marketSlug}`
-        : '#';
+    const isUp = move.velocity > 0;
+    const polyUrl = `https://polymarket.com/event/${move.eventSlug}/${move.marketSlug}`;
 
     return (
         <div className="relative transition-all duration-500 w-full max-w-[420px] mx-auto scale-[1.03] z-10 group">
@@ -123,93 +111,15 @@ const FlashCard = ({ move }: { move: FlashMove }) => {
     );
 };
 
-interface FomoRunnerProps {
-    flashMoves?: FlashMove[];
-    onRefresh?: () => Promise<void>;
-    isLoading?: boolean;
-}
-
-const FomoRunner: React.FC<FomoRunnerProps> = ({ 
-    flashMoves: initialFlashMoves = [],
-    onRefresh,
-    isLoading = false
-}) => {
-    // Process flash moves data
-    const processedMoves = useMemo(() => {
-        try {
-            const moves = Array.isArray(initialFlashMoves) ? initialFlashMoves : [];
-            return moves.map(move => ({
-                ...move,
-                tokenId: move.tokenId || '',
-                question: move.question || 'Unknown Market',
-                oldPrice: move.oldPrice || 0,
-                newPrice: move.newPrice || 0,
-                velocity: move.velocity || 0,
-                timestamp: move.timestamp || Date.now(),
-                marketSlug: move.marketSlug || '',
-                eventSlug: move.eventSlug || '',
-                image: move.image || undefined
-            }));
-        } catch (error) {
-            console.error('Error processing flash moves:', error);
-            return [];
-        }
-    }, [initialFlashMoves]);
-
-    // Handle refresh
-    const handleRefresh = useCallback(async () => {
-        if (onRefresh) {
-            try {
-                await onRefresh();
-                toast.success('Flash moves refreshed');
-            } catch (error) {
-                console.error('Error refreshing data:', error);
-                toast.error('Failed to refresh data');
-            }
-        }
-    }, [onRefresh]);
-
-    // Handle loading state
-    if (isLoading) {
-        return (
-            <div className="max-w-[1600px] mx-auto py-20 px-4 md:px-8 flex items-center justify-center">
-                <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-rose-500 mx-auto mb-4"></div>
-                    <p className="text-gray-400 text-sm">Scanning for flash moves...</p>
-                </div>
-            </div>
-        );
-    }
-
-    // Handle error state - using initialFlashMoves instead of flashMoves
-    if (!Array.isArray(initialFlashMoves)) {
-        return (
-            <div className="max-w-[1600px] mx-auto py-20 px-4 md:px-8 flex items-center justify-center">
-                <div className="text-center">
-                    <div className="w-12 h-12 rounded-full bg-rose-500/20 flex items-center justify-center mx-auto mb-4">
-                        <Target className="text-rose-500" size={24} />
-                    </div>
-                    <h3 className="text-lg font-bold text-white mb-2">Error Loading Data</h3>
-                    <p className="text-gray-400 text-sm mb-4">Unable to load flash moves. Please try again.</p>
-                    <button
-                        onClick={handleRefresh}
-                        className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-sm font-medium transition-colors"
-                    >
-                        Retry
-                    </button>
-                </div>
-            </div>
-        );
-    }
-
+const FomoRunner = ({ flashMoves = [] }: { flashMoves?: FlashMove[] }) => {
     return (
         <div className="max-w-[1600px] mx-auto pb-20 px-4 md:px-8 animate-in fade-in duration-1000">
-            {/* Navigation & Stats */}
+            {/* Navigation & Stats Restored with Enhanced Look */}
             <div className="flex flex-col md:flex-row justify-between items-end gap-6 mb-12 border-b border-white/5 pb-10">
                 <div className="space-y-4">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-rose-600 rounded-2xl shadow-lg shadow-rose-900/40">
-                            <Flame className="text-white" size={32}/>
+                             <Flame className="text-white" size={32}/>
                         </div>
                         <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic">
                             FOMO <span className="text-rose-500">RUNNER</span>
@@ -218,23 +128,6 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                     <p className="text-xs text-slate-500 font-bold uppercase tracking-[0.5em] ml-20">
                         GLOBAL VELOCITY SNIPER PRO v2.0
                     </p>
-                </div>
-                
-                <div className="flex items-center gap-4">
-                    <div className="text-right">
-                        <p className="text-sm text-slate-400">Last updated</p>
-                        <p className="text-white font-mono">
-                            {new Date().toLocaleTimeString()}
-                        </p>
-                    </div>
-                    <button 
-                        onClick={handleRefresh}
-                        disabled={isLoading}
-                        className={`p-2 rounded-lg ${isLoading ? 'bg-slate-800' : 'bg-slate-800 hover:bg-slate-700'} transition-colors`}
-                        title="Refresh data"
-                    >
-                        <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin text-slate-500' : 'text-rose-400'}`} />
-                    </button>
                 </div>
                 
                 <div className="flex items-center gap-4 mb-2">
@@ -257,7 +150,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
 
             <div className="grid grid-cols-12 gap-10">
                 <div className="col-span-12 xl:col-span-9">
-                    {initialFlashMoves.length === 0 ? (
+                    {flashMoves.length === 0 ? (
                         <div className="glass-panel p-20 rounded-[3rem] border-white/5 text-center flex flex-col items-center justify-center bg-black/20 min-h-[550px] relative overflow-hidden">
                              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(244,63,94,0.03)_0%,transparent_70%)]"></div>
                             <Loader2 className="animate-spin text-rose-500/20 mb-10" size={72}/>
@@ -265,9 +158,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
-                            {initialFlashMoves.map((move: FlashMove) => (
-                                <FlashCard key={move.id} move={move} />
-                            ))}
+                            {flashMoves.map(m => <FlashCard key={m.id} move={m} />)}
                         </div>
                     )}
                 </div>

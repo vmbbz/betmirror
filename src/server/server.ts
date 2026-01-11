@@ -16,13 +16,11 @@ import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
-import { FlashMoveEvent } from '../services/market-intelligence.service.js';
 import { ActivePosition } from '../domain/trade.types.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
 import crypto from 'crypto';
-import WebSocket, { WebSocketServer } from 'ws';
 
 // ESM compatibility
 const __filename = fileURLToPath(import.meta.url);
@@ -38,28 +36,6 @@ const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey
 
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map<string, BotEngine>();
-
-// WebSocket Server
-const wss = new WebSocketServer({ noServer: true });
-const CLIENTS = new Map<string, WebSocket>(); // userId -> WebSocket
-
-// Broadcast to all connected clients
-function broadcastToAll(message: any) {
-    const msg = JSON.stringify(message);
-    for (const client of wss.clients) {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(msg);
-        }
-    }
-}
-
-// Send to specific user's client
-function sendToUser(userId: string, message: any) {
-    const client = CLIENTS.get(userId.toLowerCase());
-    if (client && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(message));
-    }
-}
 
 // Simple Logger for Server context
 const serverLogger: Logger = {
@@ -91,13 +67,8 @@ async function startUserBot(userId: string, config: BotConfig) {
 
     const engine = new BotEngine(engineConfig, dbRegistryService, {
         onPositionsUpdate: async (positions) => {
-            // Update DB for persistence/backup
+            // We still update DB for persistence/backup, but UI will prefer live feed
             await User.updateOne({ address: normId }, { activePositions: positions });
-            // Send real-time update to WebSocket clients
-            sendToUser(normId, {
-                type: 'POSITIONS_UPDATE',
-                positions: positions
-            });
         },
         onCashout: async (record) => {
             await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
@@ -208,47 +179,6 @@ app.get('/health', (req, res) => {
         status: 'ok', 
         db: (dbStatusMap as any)[dbState] || 'unknown',
         activeBots: ACTIVE_BOTS.size
-    });
-});
-
-// WebSocket Upgrade Handler
-const server = app.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`🌍 Bet Mirror Server running on port ${PORT}`);
-});
-
-// Handle WebSocket upgrade
-server.on('upgrade', (request, socket, head) => {
-    wss.handleUpgrade(request, socket as any, head, (ws) => {
-        const url = new URL(request.url || '', `http://${request.headers.host}`);
-        const userId = url.searchParams.get('userId');
-        
-        if (!userId) {
-            ws.close(1008, 'User ID required');
-            return;
-        }
-
-        // Store the connection
-        const normId = userId.toLowerCase();
-        CLIENTS.set(normId, ws);
-        
-        ws.on('close', () => {
-            CLIENTS.delete(normId);
-        });
-        
-        ws.on('error', (error) => {
-            console.error('WebSocket error:', error);
-            CLIENTS.delete(normId);
-        });
-        
-        // Send initial state
-        const engine = ACTIVE_BOTS.get(normId);
-        if (engine) {
-            sendToUser(normId, {
-                type: 'INITIAL_STATE',
-                positions: engine.getActivePositions(),
-                // Add other initial state data as needed
-            });
-        }
     });
 });
 
@@ -1195,7 +1125,9 @@ app.get('/api/portfolio/latest/:userId', async (req: any, res: any) => {
 });
 
 // --- BOOTSTRAP ---
-// Server is now started earlier to handle WebSocket upgrades
+const server = app.listen(Number(PORT), '0.0.0.0', () => {
+    console.log(`🌍 Bet Mirror Server running on port ${PORT}`);
+});
 
 connectDB()
     .then(async () => {

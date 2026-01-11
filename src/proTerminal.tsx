@@ -385,26 +385,14 @@ export interface ProTerminalProps {
 }
 
 const ProTerminal: React.FC<ProTerminalProps> = ({ 
-  userId, activePositions, moneyMarketOpps = [], openOrders, isRunning, handleExecuteMM, handleSyncPositions, onRefresh
-}: ProTerminalProps) => {
-  // Ensure moneyMarketOpps is always an array and has the expected structure
-  const processedOpps = useMemo(() => {
-    if (!Array.isArray(moneyMarketOpps)) return [];
-    return moneyMarketOpps.map(opp => ({
-      ...opp,
-      // Ensure required fields have defaults if missing
-      marketId: opp.marketId || '',
-      question: opp.question || 'Unknown Market',
-      spread: opp.spread || 0,
-      // Add any other required fields with defaults
-    }));
-  }, [moneyMarketOpps]);
+  userId, activePositions, moneyMarketOpps, openOrders, isRunning, handleExecuteMM, handleSyncPositions, onRefresh
+}) => {
+    const [activeCategory, setActiveCategory] = useState('all');
+    const [manualId, setManualId] = useState('');
+    const [scanning, setScanning] = useState(false);
+    const [isExplainerOpen, setIsExplainerOpen] = useState(false);
+    const [isBookmarking, setIsBookmarking] = useState<Record<string, boolean>>({});
 
-  const [activeCategory, setActiveCategory] = useState('all');
-  const [manualId, setManualId] = useState('');
-  const [scanning, setScanning] = useState(false);
-  const [isExplainerOpen, setIsExplainerOpen] = useState(false);
-  const [isBookmarking, setIsBookmarking] = useState<Record<string, boolean>>({});
     // Debug: Log available categories when data changes
     useEffect(() => {
         if (moneyMarketOpps?.length) {

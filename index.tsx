@@ -1888,14 +1888,11 @@ const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native:
 type TabId = 'dashboard' | 'money-market' | 'fomo' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'system' | 'help';
 const [activeTab, setActiveTab] = useState<TabId>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
-const [isLoading, setIsLoading] = useState(false);
-const [pollError, setPollError] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
-const [stats, setStats] = useState<any>(null);
+const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); 
 const [moneyMarketOpps, setMoneyMarketOpps] = useState<ArbitrageOpportunity[]>([]);
-const [fomoChases, setFomoChases] = useState<any[]>([]);
-const [activePositions, setActivePositions] = useState<ActivePosition[]>([]);
+const [stats, setStats] = useState<UserStats | null>(null);
 const [registry, setRegistry] = useState<TraderProfile[]>([]);
 const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
 const [bridgeHistory, setBridgeHistory] = useState<BridgeTransactionRecord[]>([]);
@@ -1906,6 +1903,7 @@ const [systemView, setSystemView] = useState<'attribution' | 'global'>('attribut
 // -- MOBILE MENU STATE --
 const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 const [tradePanelTab, setTradePanelTab] = useState<'active' | 'history'>('active'); 
+const [pollError, setPollError] = useState<boolean>(false); 
 // --- STATE: Forms & Actions ---
 const [isDepositing, setIsDepositing] = useState(false);
 const [isDepositModalOpen, setIsDepositModalOpen] = useState(false); 
@@ -1927,6 +1925,8 @@ const [openOrders, setOpenOrders] = useState<any[]>([]);
 const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
 const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
 // --- FOMO the Fomo Runner STATE ---
+const [fomoChases, setFomoChases] = useState<any[]>([]);
+
 // --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
 const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
 // --- STATE: Bridging (Updated for Bidirectional Flow) ---
@@ -2133,8 +2133,6 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         return;
     }
     
-    setIsLoading(true);
-    
     try {
         console.log('📡 Fetching bot status from server...');
         const res = await axios.get(`/api/bot/status/${userAddress}`);
@@ -2183,8 +2181,6 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         }
 
         if (res.data.fomoChases) setFomoChases(res.data.fomoChases);
-        
-        setIsLoading(false);
 
         // Track latest ID instead of length
         const latestHistory = res.data.history || [];
@@ -3575,9 +3571,7 @@ return (
 
         {activeTab === 'fomo' && (
             <FomoRunner 
-                flashMoves={fomoChases}
-                onRefresh={() => fetchBotStatus(true)}
-                isLoading={isLoading}
+                flashMoves={fomoChases} 
             />
         )}
         
@@ -4886,31 +4880,18 @@ return (
         onClose={() => setShowHelpGuide(false)}
     />
 
-                    {/* Order Management Modal */}
-            <OrderManagementModal
-                isOpen={isOrderModalOpen}
-                onClose={() => setIsOrderModalOpen(false)}
-                position={selectedPosition}
-                orders={openOrders}
-                onCancelOrder={handleCancelOrder}
-                onRedeemWinnings={handleRedeemWinnings}
-            />
+    {/* Order Management Modal */}
+    <OrderManagementModal
+        isOpen={isOrderModalOpen}
+        onClose={() => setIsOrderModalOpen(false)}
+        position={selectedPosition}
+        orders={openOrders}
+        onCancelOrder={handleCancelOrder}
+        onRedeemWinnings={handleRedeemWinnings}
+    />
 
-            {/* Toast Notifications */}
-            <ToastContainer 
-                position="top-right"
-                autoClose={3000}
-                hideProgressBar={false}
-                newestOnTop
-                closeOnClick
-                rtl={false}
-                pauseOnFocusLoss
-                draggable
-                pauseOnHover
-                theme={theme === 'dark' ? 'dark' : 'light'}
-            />
-        </div>
-    );
+    </div>
+);
 };
 
 // Initialize React app with HMR support

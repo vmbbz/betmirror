@@ -189,7 +189,7 @@ const PerformanceChart = ({ userId, selectedRange }: {
             <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
                     <defs>
-                        <linearGradient id="colorValue" x1="0" x2="0" y2="1">
+                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
                             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                         </linearGradient>
@@ -730,7 +730,7 @@ const DepositModal = ({
                             <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Native (Circle)</div>
                             <div className="text-sm font-mono font-bold text-gray-900 dark:text-white flex justify-between items-center">
                                 USDC 
-                                <span className="text-blue-600 dark:text-green-400 text-xs">${balances.usdcNative || '0.00'}</span>
+                                <span className="text-blue-600 dark:text-blue-400 text-xs">${balances.usdcNative || '0.00'}</span>
                             </div>
                         </div>
                     </div>
@@ -797,7 +797,7 @@ const DepositModal = ({
 const WithdrawalModal = ({ 
     isOpen, 
     onClose, 
-    balances, 
+    balances,
     signerBalances, 
     onWithdraw, 
     isWithdrawing,
@@ -2188,7 +2188,6 @@ const copyToClipboard = (text: string) => {
 };
 
 // --- POLL BOT STATUS DATA ---
-// Parameter 'force' should be optional to avoid "Expected 1 arguments, but got 0" when called as fetchBotStatus().
 const fetchBotStatus = useCallback(async (force: boolean = false) => {
     console.log('🔍 fetchBotStatus called');
     if (!isConnected || !userAddress || needsActivation) {
@@ -2352,7 +2351,7 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
             });
         }
     }
-}, [isConnected, userAddress, needsActivation, activeTab, config.enableSounds]);
+}, [isConnected, userAddress, needsActivation, activeTab, tradeHistory.length, config.enableSounds]);
 
 useEffect(() => {
     if (!isConnected || !userAddress || needsActivation) return;
@@ -2362,8 +2361,7 @@ useEffect(() => {
     
     // Poll Balances (Every 10s)
     const balanceInterval = setInterval(fetchBalances, 10000);
-    
-    // Fixed initial calls to fetchBalances and fetchBotStatus to ensure no argument is required.
+    /* Errors at line 1465/1466: Ensure fetchBalances and fetchBotStatus calls match signature (inferred 1 arg by TS in some environments) */
     fetchBalances(); // Initial
     fetchBotStatus(); // Initial
 
@@ -2378,7 +2376,7 @@ useEffect(() => {
 }, [isConnected, needsActivation]);
 
 // --- HELPER: Fetch Balances ---
-// Parameter 'force' should be optional to avoid "Expected 1 arguments, but got 0" when called as fetchBalances().
+/* fetchBalances now accepts an optional force parameter to satisfy potential 1-arg calls in useEffect if compiler inferred differently */
 const fetchBalances = async (force?: boolean) => {
     if (!userAddress || !(window as any).ethereum) return;
     try {
@@ -3659,10 +3657,8 @@ return (
                 openOrders={openOrders}
                 isRunning={isRunning}
                 onRefresh={fetchBotStatus}
-                
-                // Fixed handleExecuteMM to pass the correct marketId parameter type 'string'.
-                handleExecuteMM={async (marketId) => {
-                    await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId });
+                handleExecuteMM={async (opp) => {
+                    await axios.post('/api/bot/execute-arb', { userId: userAddress, marketId: opp.marketId });
                     toast.success("Strategy Dispatched");
                 }}
                 handleSyncPositions={fetchBotStatus}

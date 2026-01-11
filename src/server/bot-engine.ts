@@ -44,12 +44,13 @@ export interface BotConfig {
     coldWalletAddress?: string; 
     enableCopyTrading: boolean;
     enableMoneyMarkets: boolean;
-    enableFomoRunner: boolean;
+    enableFomoRunner: boolean; // Global Flash Move Sniper
     enableAutoArb?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
     l2ApiCredentials?: L2ApiCredentials;
     startCursor?: number;
+    // RELEVANT UPDATE: Added Builder Credentials to BotConfig to prevent data loss during bot restoration
     builderApiKey?: string;
     builderApiSecret?: string;
     builderApiPassphrase?: string;
@@ -83,8 +84,10 @@ export class BotEngine {
     private runtimeEnv: any;
     
     private fundWatcher?: NodeJS.Timeout;
+    private uiHeartbeatLoop: NodeJS.Timeout | null = null;
+    private backgroundSyncLoop: NodeJS.Timeout | null = null;
+    
     private activePositions: ActivePosition[] = [];
-    private updateLoop: NodeJS.Timeout | null = null;
     private stats: UserStats = {
         totalPnl: 0, 
         totalVolume: 0, 
@@ -127,6 +130,12 @@ export class BotEngine {
         try {
             const consoleMethod = type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'log';
             console[consoleMethod](`[ENGINE][${this.config.userId.slice(0, 8)}] ${message}`);
+            
+            // Push to UI via socket
+            if (this.callbacks?.onLog) {
+                this.callbacks.onLog({ time: new Date().toLocaleTimeString(), type, message });
+            }
+
             await BotLog.create({ userId: this.config.userId, type, message, timestamp: new Date() } as any);
         } catch (e) { console.error("Log failed", e); }
     }
@@ -465,23 +474,14 @@ export class BotEngine {
         }
     }
 
-    private async initializeServices() {
-        if (!this.exchange) throw new Error('Exchange not initialized');
-
-        const logger = {
-            info: (m: string) => this.addLog('info', m),
-            warn: (m: string) => this.addLog('warn', m),
-            error: (m: string, e?: any) => this.addLog('error', `${m} ${e ? e.message : ''}`),
-            debug: () => {},
-            success: (m: string) => this.addLog('success', m)
-        };
-
+    private async initializeCoreModules(logger: Logger) {
+        if(!this.exchange) return;
         const funder = this.exchange.getFunderAddress();
 
         this.positionMonitor = new PositionMonitorService(
             this.exchange,
             funder,
-            { checkInterval: 30000, priceCheckInterval: 60000, orderBookValidationInterval: 3600000 },
+            { checkInterval: 30000, priceCheckInterval: 60000 },
             logger,
             this.handleAutoCashout.bind(this),
             this.handleInvalidPosition.bind(this)
@@ -492,135 +492,14 @@ export class BotEngine {
             funder,
             (this.config.maxTradeAmount || 1000) * 10, 
             logger,
-            this.positionMonitor, 
+            this.positionMonitor,
             (positions) => {
                 this.activePositions = positions;
-                return this.callbacks?.onPositionsUpdate?.(positions) || Promise.resolve();
+                if (this.callbacks?.onPositionsUpdate) this.callbacks.onPositionsUpdate(positions);
             }
         );
 
-        await this.portfolioTracker.initialize();
-    }
-
-    public async start() {
-        if (this.isRunning) return;
-        this.isRunning = true;
-
-        const engineLogger: Logger = {
-            info: (m) => this.addLog('info', m),
-            warn: (m) => this.addLog('warn', m),
-            error: (m, e) => this.addLog('error', `${m} ${e?.message || ''}`),
-            debug: () => {},
-            success: (m) => this.addLog('success', m)
-        };
-
-        try {
-            this.exchange = new PolymarketAdapter({
-                rpcUrl: this.config.rpcUrl,
-                walletConfig: this.config.walletConfig!,
-                userId: this.config.userId,
-                mongoEncryptionKey: this.config.mongoEncryptionKey,
-                builderApiKey: this.config.builderApiKey,
-                builderApiSecret: this.config.builderApiSecret,
-                builderApiPassphrase: this.config.builderApiPassphrase
-            }, engineLogger);
-            
-            await this.exchange.initialize();
-            await this.exchange.authenticate();
-
-            this.intelligence = new MarketIntelligenceService(engineLogger);
-            this.executor = new TradeExecutorService({
-                adapter: this.exchange,
-                proxyWallet: this.exchange.getFunderAddress(),
-                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
-                logger: engineLogger
-            });
-
-            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
-            this.fomoRunner.setConfig(this.config.enableFomoRunner, 0.20);
-
-            // Forward trade events from the sniper to your database handler
-            this.fomoRunner.on('fomo_trade_filled', (trade: TradeHistoryEntry) => 
-                this.callbacks?.onTradeComplete?.(trade)
-            );
-
-            await this.syncPositions(true);
-            await this.intelligence.start();
-            
-            // Start the internal sync loop for hooks (no io used)
-            this.startFomoSync();
-            
-            this.addLog('success', 'Bot Engine Activated.');
-        } catch (e: any) {
-            this.addLog('error', `Startup failed: ${e.message}`);
-            this.isRunning = false;
-        }
-    }
-
-    private startFomoSync() {
-        // Clear any existing interval
-        if (this.updateLoop) {
-            clearInterval(this.updateLoop);
-            this.updateLoop = null;
-        }
-        
-        // Set up new interval
-        this.updateLoop = setInterval(() => {
-            if (!this.isRunning) return;
-            
-            // Fire the hooks to the server listener
-            if (this.intelligence && this.callbacks?.onFomoVelocity) {
-                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
-            }
-
-            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
-                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
-            }
-        }, 2000);
-    }
-
-    public stop() {
-        this.isRunning = false;
-        this.arbScanner?.stop();
-        this.intelligence?.stop();
-        this.fomoRunner?.setConfig(false, 0.2);
-        if (this.monitor) this.monitor.stop();
-        if (this.portfolioService) this.portfolioService.stopSnapshotService();
-        if (this.fundWatcher) {
-            clearInterval(this.fundWatcher);
-            this.fundWatcher = undefined;
-        }
-        this.addLog('warn', 'Engine Stopped.');
-    }
-
-    private async initializeCoreModules(logger: Logger) {
-        if(!this.exchange) return;
-        const funder = this.exchange.getFunderAddress();
-
-        if (!this.positionMonitor) {
-            this.positionMonitor = new PositionMonitorService(
-                this.exchange,
-                funder,
-                { checkInterval: 30000, priceCheckInterval: 60000 },
-                logger,
-                this.handleAutoCashout.bind(this),
-                this.handleInvalidPosition.bind(this)
-            );
-        }
-
-        if (!this.portfolioTracker) {
-            this.portfolioTracker = new PortfolioTrackerService(
-                this.exchange,
-                funder,
-                (this.config.maxTradeAmount || 1000) * 10, 
-                logger,
-                this.positionMonitor,
-                (positions) => {
-                    this.activePositions = positions;
-                    if (this.callbacks?.onPositionsUpdate) this.callbacks.onPositionsUpdate(positions);
-                }
-            );
-        }
+        this.arbScanner = new MarketMakingScanner(this.intelligence!, this.exchange, logger);
 
         this.runtimeEnv = { 
             tradeMultiplier: this.config.multiplier, 
@@ -682,6 +561,106 @@ export class BotEngine {
         });
     }
 
+    public async start() {
+        if (this.isRunning) return;
+        this.isRunning = true;
+
+        const engineLogger: Logger = {
+            info: (m) => this.addLog('info', m),
+            warn: (m) => this.addLog('warn', m),
+            error: (m, e) => this.addLog('error', `${m} ${e?.message || ''}`),
+            debug: () => {},
+            success: (m) => this.addLog('success', m)
+        };
+
+        try {
+            this.exchange = new PolymarketAdapter({
+                rpcUrl: this.config.rpcUrl,
+                walletConfig: this.config.walletConfig!,
+                userId: this.config.userId,
+                mongoEncryptionKey: this.config.mongoEncryptionKey,
+                builderApiKey: this.config.builderApiKey,
+                builderApiSecret: this.config.builderApiSecret,
+                builderApiPassphrase: this.config.builderApiPassphrase
+            }, engineLogger);
+            
+            await this.exchange.initialize();
+            await this.exchange.authenticate();
+
+            this.intelligence = new MarketIntelligenceService(engineLogger);
+            this.executor = new TradeExecutorService({
+                adapter: this.exchange,
+                proxyWallet: this.exchange.getFunderAddress(),
+                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
+                logger: engineLogger
+            });
+
+            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
+            this.fomoRunner.setConfig(this.config.enableFomoRunner, 0.20);
+
+            // Forward trade events from the sniper to your database handler
+            this.fomoRunner.on('fomo_trade_filled', (trade: TradeHistoryEntry) => 
+                this.callbacks?.onTradeComplete?.(trade)
+            );
+
+            // INITIALIZE AND START CORE MODULES
+            await this.initializeCoreModules(engineLogger);
+            this.startFundWatcher();
+
+            await this.syncPositions(true);
+            await this.intelligence.start();
+            
+            // Start the internal sync loop for hooks (no io used)
+            this.startFomoSync();
+            
+            this.addLog('success', 'Bot Engine Activated.');
+        } catch (e: any) {
+            this.addLog('error', `Startup failed: ${e.message}`);
+            this.isRunning = false;
+        }
+    }
+
+    private startFomoSync() {
+        // Optimized 2s Loop: UI/Socket Emitters Only (Fast Data)
+        if (this.uiHeartbeatLoop) clearInterval(this.uiHeartbeatLoop);
+        this.uiHeartbeatLoop = setInterval(() => {
+            if (!this.isRunning) return;
+            
+            // Fire the hooks to the server listener
+            if (this.intelligence && this.callbacks?.onFomoVelocity) {
+                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
+            }
+
+            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
+                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
+            }
+        }, 2000);
+
+        // Background Sync Loop: Throttled (Heavy Work)
+        if (this.backgroundSyncLoop) clearInterval(this.backgroundSyncLoop);
+        this.backgroundSyncLoop = setInterval(async () => {
+            if (!this.isRunning) return;
+            await this.syncPositions();
+            await this.syncStats();
+        }, 60000); // 60 seconds interval to keep server light
+    }
+
+    public stop() {
+        this.isRunning = false;
+        this.arbScanner?.stop();
+        this.intelligence?.stop();
+        this.fomoRunner?.setConfig(false, 0.2);
+        if (this.monitor) this.monitor.stop();
+        if (this.portfolioService) this.portfolioService.stopSnapshotService();
+        if (this.fundWatcher) {
+            clearInterval(this.fundWatcher);
+            this.fundWatcher = undefined;
+        }
+        if (this.uiHeartbeatLoop) clearInterval(this.uiHeartbeatLoop);
+        if (this.backgroundSyncLoop) clearInterval(this.backgroundSyncLoop);
+        this.addLog('warn', 'Engine Stopped.');
+    }
+
     public async dispatchManualMM(marketId: string): Promise<boolean> {
         if (!this.executor) return false;
         const target = this.arbScanner?.getTrackedMarket(marketId);
@@ -727,9 +706,6 @@ export class BotEngine {
             if (this.intelligence) await this.intelligence.start();
             if (this.config.enableMoneyMarkets && this.arbScanner) await this.arbScanner.start();
             if (this.config.enableFomoRunner && this.fomoRunner) this.fomoRunner.setConfig(true, (this.config.autoTp || 20) / 100);
-            
-            // Fomo Runner service start
-
             if (this.config.enableCopyTrading && this.monitor) await this.monitor.start();
 
             await this.syncPositions(true); 

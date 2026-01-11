@@ -1,4 +1,3 @@
-
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -45,7 +44,7 @@ export interface BotConfig {
     coldWalletAddress?: string; 
     enableCopyTrading: boolean;
     enableMoneyMarkets: boolean;
-    enableFomoRunner: boolean; // Global Flash Move Sniper
+    enableFomoRunner: boolean;
     enableAutoArb?: boolean;
     activePositions?: ActivePosition[];
     stats?: UserStats;
@@ -161,8 +160,6 @@ export class BotEngine {
                 this.addLog('warn', '⏸️ FOMO Runner Standby.');
             }
         }
-
-        // Fomo Runner config update
 
         this.config = { ...this.config, ...newConfig };
     }
@@ -521,7 +518,10 @@ export class BotEngine {
                 rpcUrl: this.config.rpcUrl,
                 walletConfig: this.config.walletConfig!,
                 userId: this.config.userId,
-                mongoEncryptionKey: this.config.mongoEncryptionKey
+                mongoEncryptionKey: this.config.mongoEncryptionKey,
+                builderApiKey: this.config.builderApiKey,
+                builderApiSecret: this.config.builderApiSecret,
+                builderApiPassphrase: this.config.builderApiPassphrase
             }, engineLogger);
             
             await this.exchange.initialize();

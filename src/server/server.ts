@@ -4,7 +4,9 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { ethers, JsonRpcProvider } from 'ethers';
+import { Server as SocketIOServer } from 'socket.io';
+import { createServer } from 'http';
+import { ethers, JsonRpcProvider, Contract } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity } from '../database/index.js';
@@ -27,6 +29,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+const httpServer = createServer(app);
+const io = new SocketIOServer(httpServer, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 const ENV = loadEnv();
 
@@ -63,23 +73,36 @@ async function startUserBot(userId: string, config: BotConfig) {
     }
 
     const startCursor = config.startCursor || Math.floor(Date.now() / 1000);
-    const engineConfig = { ...config, userId: normId, startCursor };
+    
+    // CRITICAL: Inject Builder Credentials from ENV to enable CLOB auth for Safes
+    const engineConfig: BotConfig = { 
+        ...config, 
+        userId: normId, 
+        startCursor,
+        builderApiKey: ENV.builderApiKey,
+        builderApiSecret: ENV.builderApiSecret,
+        builderApiPassphrase: ENV.builderApiPassphrase,
+        mongoEncryptionKey: ENV.mongoEncryptionKey
+    };
 
     const engine = new BotEngine(engineConfig, dbRegistryService, {
-        // FOMO: This bridges the engine data to the frontend
+        // FOMO: This bridges the engine data to the frontend via Socket.io
         onFomoVelocity: (moves) => {
             if (moves.length > 0) {
                 serverLogger.info(`[FOMO] ${normId} detected ${moves.length} high-velocity moves.`);
+                io.to(normId).emit('FOMO_VELOCITY_UPDATE', moves);
             }
         },
         onFomoSnipes: (snipes) => {
             if (snipes.length > 0) {
                 serverLogger.info(`[FOMO] ${normId} monitoring ${snipes.length} active snipes.`);
+                io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes);
             }
         },
         onPositionsUpdate: async (positions) => {
             // We still update DB for persistence/backup, but UI will prefer live feed
             await User.updateOne({ address: normId }, { activePositions: positions });
+            io.to(normId).emit('POSITIONS_UPDATE', positions);
         },
         onCashout: async (record) => {
             await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
@@ -137,6 +160,8 @@ async function startUserBot(userId: string, config: BotConfig) {
                         executedSize: trade.executedSize || (exists as any).executedSize
                     });
                 }
+
+                io.to(normId).emit('TRADE_COMPLETE', trade);
             } catch (err: any) {
                 serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
             }
@@ -150,8 +175,8 @@ async function startUserBot(userId: string, config: BotConfig) {
                 }
             });
         },
-        onArbUpdate: async (opportunities) => {
-            // Memory update handled by poll
+        onLog: (log) => {
+            io.to(normId).emit('BOT_LOG', log);
         },
         onFeePaid: async (event) => {
             const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
@@ -168,7 +193,8 @@ async function startUserBot(userId: string, config: BotConfig) {
         const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
         const bookmarks = user?.bookmarkedMarkets || [];
         if (bookmarks.length > 0) {
-            const scanner = (engine as any).arbScanner;
+            const adapter = engine.getAdapter();
+            const scanner = (adapter as any)?.arbScanner;
             if (scanner && typeof scanner.initializeBookmarks === 'function') {
                 scanner.initializeBookmarks(bookmarks);
                 console.log(`📌 Initialized ${bookmarks.length} bookmarks for user ${normId}`);
@@ -181,6 +207,15 @@ async function startUserBot(userId: string, config: BotConfig) {
     ACTIVE_BOTS.set(normId, engine);
     engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
 }
+
+// Socket.io Room Management
+io.on('connection', (socket) => {
+    socket.on('join', (userId: string) => {
+        const normId = userId.toLowerCase();
+        socket.join(normId);
+        serverLogger.info(`Socket ${socket.id} joined room: ${normId}`);
+    });
+});
 
 // 0. Health Check
 app.get('/health', (req, res) => {
@@ -1137,7 +1172,7 @@ app.get('/api/portfolio/latest/:userId', async (req: any, res: any) => {
 });
 
 // --- BOOTSTRAP ---
-const server = app.listen(Number(PORT), '0.0.0.0', () => {
+httpServer.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`🌍 Bet Mirror Server running on port ${PORT}`);
 });
 

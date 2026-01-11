@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { toast, ToastContainer } from 'react-toastify';
+import io from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import axios from 'axios';
 import { getMarketWebSocketService } from './src/services/market-ws.service';
 import './src/index.css';
@@ -23,6 +25,7 @@ import { UserStats } from './src/domain/user.types';
 import { ArbitrageOpportunity } from './src/adapters/interfaces';
 import ProTerminal from './src/proTerminal';
 import FomoRunner from './src/FomoRunner';
+import { FlashMove, ActiveSnipe } from './src/types/fomo.types';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -57,7 +60,7 @@ const RevenueTracker = ({ userId }: { userId: string }) => {
 
   useEffect(() => {
     const fetchRevenue = async () => {
-      try {
+        try {
         const res = await axios.get(`/api/registry/${userId}/earnings`);
         setEarnings(res.data);
       } catch (e) {
@@ -1924,8 +1927,86 @@ const [selectedPosition, setSelectedPosition] = useState<ActivePosition | null>(
 const [openOrders, setOpenOrders] = useState<any[]>([]);
 const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
 const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
+// --- CONFIGURATION ---
+const [config, setConfig] = useState<AppConfig>({
+    targets: [],
+    rpcUrl: 'https://polygon-rpc.com',
+    geminiApiKey: '',
+    multiplier: 1,
+    riskProfile: 'balanced',
+    minLiquidityFilter: 'MEDIUM',
+    autoTp: 0,
+    enableNotifications: true,
+    userPhoneNumber: '',
+    enableAutoCashout: false,
+    maxRetentionAmount: 1000,
+    maxTradeAmount: 100,
+    coldWalletAddress: '',
+    enableSounds: true,
+    enableAutoArb: false,
+    enableCopyTrading: true,
+    enableMoneyMarkets: false,
+    enableFomoRunner: true
+});
+
 // --- FOMO the Fomo Runner STATE ---
-const [fomoChases, setFomoChases] = useState<any[]>([]);
+const [fomoMoves, setFomoMoves] = useState<FlashMove[]>([]);
+const [fomoSnipes, setFomoSnipes] = useState<ActiveSnipe[]>([]);
+const [fomoChases, setFomoChases] = useState<FlashMove[]>([]);
+const [socket, setSocket] = useState<typeof Socket | null>(null);
+
+// --- SOCKET CONNECTION ---
+useEffect(() => {
+    if (!isConnected || !userAddress) return;
+
+    // Create socket connection
+    const socketInstance = io({
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000,
+    });
+
+    // Set up event listeners
+    socketInstance.on('connect', () => {
+        console.log('🔌 Connected to FOMO socket server');
+        // Join user's room
+        socketInstance.emit('join', userAddress.toLowerCase());
+    });
+
+    socketInstance.on('disconnect', () => {
+        console.log('🔌 Disconnected from FOMO socket server');
+    });
+
+    socketInstance.on('connect_error', (error: Error) => {
+        console.error('❌ Socket connection error:', error);
+    });
+
+    // Handle FOMO velocity updates (flash moves)
+    socketInstance.on('FOMO_VELOCITY_UPDATE', (moves: FlashMove[]) => {
+        // Keep only the 50 most recent moves
+        setFomoMoves(prevMoves => {
+            const updatedMoves = [...moves, ...prevMoves].slice(0, 50);
+            return updatedMoves;
+        });
+    });
+
+    // Handle FOMO snipes updates
+    socketInstance.on('FOMO_SNIPES_UPDATE', (snipes: ActiveSnipe[]) => {
+        setFomoSnipes(snipes);
+        if (config.enableSounds) playSound('trade');
+    });
+
+    setSocket(socketInstance);
+
+    // Clean up on unmount
+    return () => {
+        if (socketInstance) {
+            socketInstance.disconnect();
+        }
+    };
+}, [isConnected, userAddress, config.enableSounds]);
 
 // --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
 const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
@@ -1954,26 +2035,7 @@ const [isAddingRecovery, setIsAddingRecovery] = useState(false);
 const lastTradeIdRef = useRef<string | null>(null); 
 const lastLogTimestampRef = useRef<number>(0); // Track last log timestamp for failed trades
 
-const [config, setConfig] = useState<AppConfig>({
-    targets: [],
-    rpcUrl: 'https://polygon-rpc.com',
-    geminiApiKey: '',
-    enableFomoRunner: true,
-    enableCopyTrading: true,
-    enableMoneyMarkets: true,
-    multiplier: 1.0,
-    riskProfile: 'balanced',
-    minLiquidityFilter: 'LOW',
-    autoTp: 20,
-    enableAutoArb: false,
-    enableNotifications: false,
-    userPhoneNumber: '',
-    enableAutoCashout: false,
-    maxRetentionAmount: 0,
-    maxTradeAmount: 100, 
-    coldWalletAddress: '',
-    enableSounds: true 
-});
+// Config state is already declared above
 
 // --- REFS for Debouncing ---
 const quoteDebounceTimer = useRef<any>(null);
@@ -2141,7 +2203,9 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
             hasHistory: !!res.data.history?.length,
             hasStats: !!res.data.stats,
             hasOpportunities: !!res.data.mmOpportunities?.length,
-            hasPositions: !!res.data.positions?.length
+            hasPositions: !!res.data.positions?.length,
+            hasFomoMoves: !!res.data.fomoMoves?.length,
+            hasFomoSnipes: !!res.data.fomoSnipes?.length
         });
         
         setIsRunning(res.data.isRunning);
@@ -2160,6 +2224,41 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         if (res.data.stats) {
             console.log('📊 Setting stats');
             setStats(res.data.stats);
+        }
+        
+        // Handle FOMO data from API response
+        if (res.data.fomoMoves) {
+            console.log(`⚡ Setting ${res.data.fomoMoves.length} FOMO moves`);
+            setFomoMoves(prevMoves => {
+                // Merge with existing moves and keep only the 50 most recent
+                const updatedMoves = [...(res.data.fomoMoves || []), ...prevMoves]
+                    .filter((move, index, self) => 
+                        index === self.findIndex(m => 
+                            m.tokenId === move.tokenId && 
+                            m.conditionId === move.conditionId &&
+                            m.timestamp === move.timestamp
+                        )
+                    )
+                    .sort((a, b) => b.timestamp - a.timestamp)
+                    .slice(0, 50);
+                return updatedMoves;
+            });
+        }
+        
+        if (res.data.fomoSnipes) {
+            console.log(`🎯 Setting ${res.data.fomoSnipes.length} active snipes`);
+            setFomoSnipes(prevSnipes => {
+                // Merge with existing snipes and remove duplicates
+                const updatedSnipes = [...(res.data.fomoSnipes || []), ...prevSnipes]
+                    .filter((snipe, index, self) => 
+                        index === self.findIndex(s => 
+                            s.tokenId === snipe.tokenId &&
+                            s.timestamp === snipe.timestamp
+                        )
+                    )
+                    .sort((a, b) => b.timestamp - a.timestamp);
+                return updatedSnipes;
+            });
         }
         
         if (res.data.mmOpportunities) {
@@ -3571,7 +3670,8 @@ return (
 
         {activeTab === 'fomo' && (
             <FomoRunner 
-                flashMoves={fomoChases} 
+                flashMoves={fomoChases}
+                activeSnipes={fomoSnipes}
             />
         )}
         

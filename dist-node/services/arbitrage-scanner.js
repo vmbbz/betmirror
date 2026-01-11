@@ -24,6 +24,7 @@ class RateLimiter {
 // MAIN SCANNER CLASS (ENHANCED)
 // ============================================================
 export class MarketMakingScanner extends EventEmitter {
+    intelligence;
     adapter;
     logger;
     // Core state
@@ -73,12 +74,12 @@ export class MarketMakingScanner extends EventEmitter {
         autoMergeThreshold: 100,
         enableKillSwitch: true
     };
-    constructor(adapter, logger, config) {
+    constructor(intelligence, adapter, logger) {
         super();
+        this.intelligence = intelligence;
         this.adapter = adapter;
         this.logger = logger;
-        if (config)
-            this.config = { ...this.config, ...config };
+        this.intelligence.on('price_update', (data) => this.handlePriceUpdate(data));
     }
     async start() {
         if (this.isScanning) {
@@ -656,7 +657,7 @@ export class MarketMakingScanner extends EventEmitter {
             return;
         const wsUrl = `${WS_URLS.CLOB}/ws/market`;
         this.logger.info(`🔌 Connecting to ${wsUrl}`);
-        // FIX: Use named import for WebSocket to resolve constructor error in Node.js ESM
+        // Fixed: Use standard WebSocket constructor for constructability in Node ESM
         this.ws = new WebSocket(wsUrl);
         const wsAny = this.ws;
         wsAny.on('open', () => {
@@ -704,7 +705,7 @@ export class MarketMakingScanner extends EventEmitter {
         this.logger.info(`🔌 Connecting to private User Channel: ${userWsUrl}`);
         // This requires standard WebSocket logic with Auth Headers or Token
         // Assuming the adapter has the current valid Auth token
-        // FIX: Use named import for WebSocket to resolve constructor error in Node.js ESM
+        // Fixed: Use standard WebSocket constructor for constructability in Node ESM
         this.userWs = new WebSocket(userWsUrl);
         const wsAny = this.userWs;
         wsAny.on('open', () => {
@@ -798,6 +799,17 @@ export class MarketMakingScanner extends EventEmitter {
                 break;
             default:
                 this.logger.debug(`Unhandled message type: ${msg.event_type || 'unknown'} - ${JSON.stringify(msg)}`);
+        }
+    }
+    handlePriceUpdate(data) {
+        if (!this.isScanning)
+            return;
+        // Update local opportunity cache
+        const opp = this.opportunities.find(o => o.tokenId === data.tokenId);
+        if (opp) {
+            // Simplified update; real implementation would refresh full metrics
+            opp.midpoint = data.price;
+            opp.timestamp = Date.now();
         }
     }
     handleBestBidAsk(msg) {
@@ -919,6 +931,11 @@ export class MarketMakingScanner extends EventEmitter {
                 });
                 // We only trigger kill switch if move is extreme (e.g. > 25%) 
                 // and user has enabled the safety feature
+                // WE ARE EMBRACING FLASH MOVES NOW TO CHASE THE WAVE
+                // - Build out engine to power sports runner now called flash runner. send data thru whatver mechanism is bets: events, function calling, etc
+                // - caching this comploete market card, globally, then accessing it from sports runner may be the smoothest approach
+                // - remebering to clean up closed or ended events
+                // - same with money market disoovery we should clean up whats tracked
                 if (this.config.enableKillSwitch && movePct > 25) {
                     this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
                 }
@@ -1135,7 +1152,7 @@ export class MarketMakingScanner extends EventEmitter {
         return this.getOpportunities();
     }
     getMonitoredMarkets() {
-        return this.getOpportunities();
+        return Array.from(this.monitoredMarkets.values());
     }
     getInventorySkew(conditionId) {
         const balance = this.inventoryBalances.get(conditionId);
@@ -1164,7 +1181,7 @@ export class MarketMakingScanner extends EventEmitter {
     isKillSwitchActive() {
         return this.killSwitchActive;
     }
-    getTrackedMarket(tokenId) {
-        return this.trackedMarkets.get(tokenId);
+    getTrackedMarket(marketId) {
+        return this.monitoredMarkets.get(marketId) || this.opportunities.find(o => o.marketId === marketId);
     }
 }

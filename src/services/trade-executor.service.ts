@@ -86,6 +86,9 @@ export class TradeExecutorService {
   // WebSocket fill state
   private userWs?: WebSocket;
   private isWsRunning = false;
+  
+  private pingInterval?: NodeJS.Timeout;
+  private inventory = new Map<string, number>();
 
   /**
    * Update the pending spend amount for buy orders
@@ -117,7 +120,6 @@ export class TradeExecutorService {
 
   // Market Making state
   private activeQuotes = new Map<string, { bidOrderId?: string; askOrderId?: string }>();
-  private inventory = new Map<string, number>(); // tokenId -> share balance
   
   // Position tracking
   private positionTracking = new Map<string, {
@@ -182,24 +184,31 @@ export class TradeExecutorService {
   private connectUserChannel() {
     this.isWsRunning = true;
     const wsUrl = `${WS_URLS.CLOB}/ws/user`;
-    this.deps.logger.info(`🔌 Connecting Executor Fill Monitor: ${wsUrl}`);
-    
     this.userWs = new WebSocket(wsUrl);
 
     this.userWs.on('open', () => {
         this.deps.logger.success('✅ Executor Fill Monitor Connected.');
+        // WEBSOCKET STABILITY FIX: Add heartbeat to user channel
+        if (this.pingInterval) clearInterval(this.pingInterval);
+        this.pingInterval = setInterval(() => {
+            if (this.userWs?.readyState === 1) this.userWs.send('PING');
+        }, 20000);
     });
 
     this.userWs.on('message', (data: any) => {
         try {
             const msg = JSON.parse(data.toString());
             if (msg.event_type === 'order_filled') {
-                this.handleLiveFill(msg);
+                const isBuy = msg.side.toUpperCase() === 'BUY';
+                const currentInv = this.inventory.get(msg.asset_id) || 0;
+                this.inventory.set(msg.asset_id, isBuy ? currentInv + msg.size : currentInv - msg.size);
+                if (isBuy) this.pendingSpend = Math.max(0, this.pendingSpend - (msg.size * msg.price));
             }
         } catch (e) {}
     });
 
     this.userWs.on('close', () => {
+        if (this.pingInterval) clearInterval(this.pingInterval);
         if (this.isWsRunning) setTimeout(() => this.connectUserChannel(), 5000);
     });
   }

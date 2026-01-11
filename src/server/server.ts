@@ -66,6 +66,17 @@ async function startUserBot(userId: string, config: BotConfig) {
     const engineConfig = { ...config, userId: normId, startCursor };
 
     const engine = new BotEngine(engineConfig, dbRegistryService, {
+        // FOMO: This bridges the engine data to the frontend
+        onFomoVelocity: (moves) => {
+            if (moves.length > 0) {
+                serverLogger.info(`[FOMO] ${normId} detected ${moves.length} high-velocity moves.`);
+            }
+        },
+        onFomoSnipes: (snipes) => {
+            if (snipes.length > 0) {
+                serverLogger.info(`[FOMO] ${normId} monitoring ${snipes.length} active snipes.`);
+            }
+        },
         onPositionsUpdate: async (positions) => {
             // We still update DB for persistence/backup, but UI will prefer live feed
             await User.updateOne({ address: normId }, { activePositions: positions });

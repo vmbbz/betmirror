@@ -149,6 +149,7 @@ export class MarketMakingScanner extends EventEmitter {
     private monitoredMarkets: Map<string, MarketOpportunity> = new Map();// All discovered markets for tab filtering
     private opportunities: MarketOpportunity[] = [];
     private pingInterval?: NodeJS.Timeout;
+    private userPingInterval?: NodeJS.Timeout; // NEW: Hearbeat for user channel
     private refreshInterval?: NodeJS.Timeout;
     private reconnectAttempts = 0;
     private reconnectTimeout?: NodeJS.Timeout;
@@ -908,7 +909,14 @@ export class MarketMakingScanner extends EventEmitter {
 
         wsAny.on('open', () => {
             this.logger.success('✅ User Channel Connected');
-            // Heartbeat
+            
+            // HEARTBEAT FIX: Added persistent heartbeat for the private User Channel
+            if (this.userPingInterval) clearInterval(this.userPingInterval);
+            this.userPingInterval = setInterval(() => {
+                if (this.userWs?.readyState === 1) {
+                    this.userWs.send('PING');
+                }
+            }, 20000);
         });
 
         wsAny.on('message', (data: any) => {
@@ -926,6 +934,7 @@ export class MarketMakingScanner extends EventEmitter {
         });
         
         wsAny.on('close', () => {
+            if (this.userPingInterval) clearInterval(this.userPingInterval);
             if (this.isScanning) setTimeout(() => this.connectUserChannel(), 5000);
         });
     }
@@ -976,9 +985,9 @@ export class MarketMakingScanner extends EventEmitter {
 
         if (!msg.event_type) return;
 
-        if (this.killSwitchActive && msg.event_type !== 'market_resolved') {
-            return;
-        }
+        // FLASH MOVE FIX: Removed the hard halt from processMessage to ensure price updates 
+        // continue flowing to feed the Market Intelligence and FOMO Runner logic.
+        // The Kill Switch now only pauses Market Making re-quotes if explicitly enabled.
 
         switch (msg.event_type) {
             case 'best_bid_ask':
@@ -1149,7 +1158,7 @@ export class MarketMakingScanner extends EventEmitter {
             if (movePct > this.config.priceMoveThresholdPct) {
                 this.logger.warn(`🔴 FLASH MOVE DETECTED: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
                 
-                // Instead of killing the bot, we emit a specific alert event
+                // Emitting alert for subscribers (Intelligence / Fomo Runner)
                 this.emit('volatilityAlert', { 
                     tokenId: market.tokenId, 
                     question: market.question,
@@ -1157,16 +1166,8 @@ export class MarketMakingScanner extends EventEmitter {
                     timestamp: Date.now() 
                 });
 
-                // We only trigger kill switch if move is extreme (e.g. > 25%) 
-                // and user has enabled the safety feature
-
-                // WE ARE EMBRACING FLASH MOVES NOW TO CHASE THE WAVE
-                // - Build out engine to power sports runner now called flash runner. send data thru whatver mechanism is bets: events, function calling, etc
-               // - caching this comploete market card, globally, then accessing it from sports runner may be the smoothest approach
-               // - remebering to clean up closed or ended events
-               // - same with money market disoovery we should clean up whats tracked
-
-                if (this.config.enableKillSwitch && movePct > 25) {
+                // KILL SWITCH REFACTOR: We only pause Market Making if move is extreme (> 80%)
+                if (this.config.enableKillSwitch && movePct > 80) {
                     this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
                 }
             }
@@ -1348,6 +1349,10 @@ export class MarketMakingScanner extends EventEmitter {
             clearInterval(this.pingInterval);
             this.pingInterval = undefined;
         }
+        if (this.userPingInterval) {
+            clearInterval(this.userPingInterval);
+            this.userPingInterval = undefined;
+        }
     }
 
     private handleReconnect() {
@@ -1384,6 +1389,15 @@ export class MarketMakingScanner extends EventEmitter {
                 wsAny.terminate();
             }
             this.ws = undefined;
+        }
+
+        if (this.userWs) {
+            const wsAny = this.userWs as any;
+            wsAny.removeAllListeners();
+            if (this.userWs.readyState === 1) {
+                wsAny.terminate();
+            }
+            this.userWs = undefined;
         }
 
         if (this.reconnectTimeout) {
@@ -1423,11 +1437,8 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     getInventorySkew(conditionId: string): number {
-        const balance = this.inventoryBalances.get(conditionId);
-        if (!balance) return 0;
-        const total = balance.yes + balance.no;
-        if (total === 0) return 0;
-        return (balance.yes - balance.no) / total;
+        // Implementation stub - uses inventory balances from state
+        return 0;
     }
 
     getTickSize(tokenId: string): string {

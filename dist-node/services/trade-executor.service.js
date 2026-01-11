@@ -95,7 +95,6 @@ export class TradeExecutorService {
         this.userWs = new WebSocket(wsUrl);
         this.userWs.on('open', () => {
             this.deps.logger.success('✅ Executor Fill Monitor Connected.');
-            // Authenticate if required by exchange spec
         });
         this.userWs.on('message', (data) => {
             try {
@@ -582,22 +581,13 @@ export class TradeExecutorService {
      */
     async cancelExistingQuotes(tokenId) {
         const { adapter, logger } = this.deps;
-        const client = adapter.getRawClient?.();
-        const existing = this.activeQuotes.get(tokenId);
-        if (!existing)
-            return;
-        try {
-            const orderIds = [existing.bidOrderId, existing.askOrderId].filter(Boolean);
-            if (orderIds.length > 0 && client) {
-                // Per docs: cancelOrders for multiple orders
-                await client.cancelOrders(orderIds);
-                logger.debug(`[MM] Cancelled ${orderIds.length} existing quotes for ${tokenId}`);
+        logger.info(`[Executor] Purging existing quotes for token: ${tokenId}`);
+        const orders = await adapter.getOpenOrders();
+        for (const order of orders) {
+            if (order.tokenId === tokenId || order.asset_id === tokenId) {
+                await adapter.cancelOrder(order.orderID || order.id);
+                logger.debug(`[MM] Cancelled order ${order.orderID || order.id} for token ${tokenId}`);
             }
-            this.activeQuotes.delete(tokenId);
-        }
-        catch (error) {
-            // Non-fatal - orders may have already been filled/cancelled
-            logger.debug(`[MM] Cancel existing quotes warning: ${error}`);
         }
     }
     /**

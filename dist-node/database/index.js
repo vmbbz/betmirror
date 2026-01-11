@@ -156,7 +156,9 @@ const TradeSchema = new Schema({
             },
             message: 'eventSlug must be lowercase with hyphens only'
         }
-    }
+    },
+    // Added serviceOrigin to the schema for DB persistence
+    serviceOrigin: { type: String, index: true }
 });
 const RegistrySchema = new Schema({
     address: { type: String, required: true, unique: true },

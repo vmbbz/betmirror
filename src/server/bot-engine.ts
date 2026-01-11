@@ -21,8 +21,8 @@ import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
 import { AutoCashoutConfig } from '../domain/trade.types.js';
-import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
-import { FomoRunnerService } from '../services/fomo-runner.services.js';
+import { MarketIntelligenceService, FlashMoveEvent } from '../services/market-intelligence.service.js';
+import { FomoRunnerService, ActiveSnipe } from '../services/fomo-runner.services.js';
 import crypto from 'crypto';
 import axios from 'axios';
 
@@ -65,6 +65,8 @@ export interface BotCallbacks {
     onStatsUpdate?: (stats: UserStats) => Promise<void>;
     onPositionsUpdate?: (positions: ActivePosition[]) => Promise<void>;
     onArbUpdate?: (opportunities: ArbitrageOpportunity[]) => Promise<void>;
+    onFomoVelocity?: (moves: FlashMoveEvent[]) => void;
+    onFomoSnipes?: (snipes: ActiveSnipe[]) => void;
 }
 
 export class BotEngine {
@@ -82,6 +84,7 @@ export class BotEngine {
     
     private fundWatcher?: NodeJS.Timeout;
     private activePositions: ActivePosition[] = [];
+    private updateLoop: NodeJS.Timeout | null = null;
     private stats: UserStats = {
         totalPnl: 0, 
         totalVolume: 0, 
@@ -506,11 +509,11 @@ export class BotEngine {
         this.isRunning = true;
 
         const engineLogger: Logger = {
-            info: (m: string) => this.addLog('info', m),
-            warn: (m: string) => this.addLog('warn', m),
-            error: (m: string, e?: any) => this.addLog('error', `${m} ${e ? e.message : ''}`),
+            info: (m) => this.addLog('info', m),
+            warn: (m) => this.addLog('warn', m),
+            error: (m, e) => this.addLog('error', `${m} ${e?.message || ''}`),
             debug: () => {},
-            success: (m: string) => this.addLog('success', m)
+            success: (m) => this.addLog('success', m)
         };
 
         try {
@@ -518,50 +521,61 @@ export class BotEngine {
                 rpcUrl: this.config.rpcUrl,
                 walletConfig: this.config.walletConfig!,
                 userId: this.config.userId,
-                l2ApiCredentials: this.config.l2ApiCredentials,
-                mongoEncryptionKey: this.config.mongoEncryptionKey,
-                builderApiKey: this.config.builderApiKey,
-                builderApiSecret: this.config.builderApiSecret,
-                builderApiPassphrase: this.config.builderApiPassphrase
+                mongoEncryptionKey: this.config.mongoEncryptionKey
             }, engineLogger);
             
             await this.exchange.initialize();
             await this.exchange.authenticate();
 
-            const rawClient = this.exchange.getRawClient();
-            if (!rawClient) throw new Error("Adapter failed to initialize authorized ClobClient.");
-
             this.intelligence = new MarketIntelligenceService(engineLogger);
-            this.arbScanner = new MarketMakingScanner(this.intelligence, this.exchange, engineLogger);
-
-            const funder = this.exchange.getFunderAddress();
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,
-                proxyWallet: funder,
-                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100, usdcContractAddress: TOKENS.USDC_BRIDGED } as any,
+                proxyWallet: this.exchange.getFunderAddress(),
+                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
                 logger: engineLogger
             });
 
             this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
+            this.fomoRunner.setConfig(this.config.enableFomoRunner, 0.20);
+
+            // Forward trade events from the sniper to your database handler
             this.fomoRunner.on('fomo_trade_filled', (trade: TradeHistoryEntry) => 
                 this.callbacks?.onTradeComplete?.(trade)
             );
-            await this.initializeServices();
-            await this.initializeCoreModules(engineLogger);
 
-            const isFunded = await this.checkFunding();
-            if (!isFunded) {
-                this.addLog('warn', 'Safe empty. Engine on standby. Waiting for deposit...');
-                this.startFundWatcher();
-                return; 
-            }
-
-            await this.proceedWithPostFundingSetup(engineLogger);
-
+            await this.syncPositions(true);
+            await this.intelligence.start();
+            
+            // Start the internal sync loop for hooks (no io used)
+            this.startFomoSync();
+            
+            this.addLog('success', 'Bot Engine Activated.');
         } catch (e: any) {
-            this.addLog('error', `Startup Failed: ${e.message}`);
+            this.addLog('error', `Startup failed: ${e.message}`);
             this.isRunning = false;
         }
+    }
+
+    private startFomoSync() {
+        // Clear any existing interval
+        if (this.updateLoop) {
+            clearInterval(this.updateLoop);
+            this.updateLoop = null;
+        }
+        
+        // Set up new interval
+        this.updateLoop = setInterval(() => {
+            if (!this.isRunning) return;
+            
+            // Fire the hooks to the server listener
+            if (this.intelligence && this.callbacks?.onFomoVelocity) {
+                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
+            }
+
+            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
+                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
+            }
+        }, 2000);
     }
 
     public stop() {

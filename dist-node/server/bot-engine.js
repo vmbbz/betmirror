@@ -5,11 +5,10 @@ import { PortfolioService } from '../services/portfolio.service.js';
 import { BotLog, Trade } from '../database/index.js';
 import { PolymarketAdapter } from '../adapters/polymarket/polymarket.adapter.js';
 import { TOKENS } from '../config/env.js';
-import { MarketMakingScanner } from '../services/arbitrage-scanner.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
-import { SportsIntelService } from '../services/sports-intel.service.js';
-import { SportsRunnerService } from '../services/sports-runner.service.js';
+import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
+import { FomoRunnerService } from '../services/fomo-runner.services.js';
 import crypto from 'crypto';
 export class BotEngine {
     config;
@@ -19,8 +18,8 @@ export class BotEngine {
     monitor;
     executor;
     arbScanner;
-    sportsRunner;
-    sportsIntel;
+    intelligence;
+    fomoRunner;
     exchange;
     portfolioService;
     portfolioTracker;
@@ -28,6 +27,7 @@ export class BotEngine {
     runtimeEnv;
     fundWatcher;
     activePositions = [];
+    updateLoop = null;
     stats = {
         totalPnl: 0,
         totalVolume: 0,
@@ -87,17 +87,16 @@ export class BotEngine {
             this.addLog('success', '▶️ Money Markets Module Online.');
             this.arbScanner.start();
         }
-        const sportsEnabled = newConfig.enableSportsRunner ?? newConfig.enableSportsFrontrunning;
-        if (sportsEnabled === false && this.sportsIntel?.isActive()) {
-            this.addLog('warn', '⏸️ SportsRunner Module Standby.');
-            this.sportsIntel?.stop();
-            this.sportsRunner?.stop();
+        if (newConfig.enableFomoRunner !== undefined) {
+            this.fomoRunner?.setConfig(newConfig.enableFomoRunner, (newConfig.autoTp || 20) / 100);
+            if (newConfig.enableFomoRunner) {
+                this.addLog('success', '▶️ FOMO Runner Online.');
+            }
+            else {
+                this.addLog('warn', '⏸️ FOMO Runner Standby.');
+            }
         }
-        else if (sportsEnabled === true && this.sportsIntel && !this.sportsIntel.isActive()) {
-            this.addLog('success', '▶️ SportsRunner Module Online.');
-            this.sportsIntel.start();
-            this.sportsRunner?.start();
-        }
+        // Fomo Runner config update
         this.config = { ...this.config, ...newConfig };
     }
     async fetchMarketMetadata(marketId) {
@@ -245,31 +244,7 @@ export class BotEngine {
             const positions = await this.exchange.getPositions(funder);
             const enriched = [];
             for (const p of positions) {
-                const marketSlug = p.marketSlug || "";
-                const eventSlug = p.eventSlug || "";
-                if (marketSlug || eventSlug) {
-                    const updateData = {};
-                    if (marketSlug)
-                        updateData.marketSlug = marketSlug;
-                    if (eventSlug)
-                        updateData.eventSlug = eventSlug;
-                    await Trade.updateMany({ userId: this.config.userId, marketId: p.marketId }, { $set: updateData });
-                }
-                const pos = await this.enrichPosition({
-                    marketId: p.marketId,
-                    tokenId: p.tokenId,
-                    conditionId: p.conditionId,
-                    outcome: p.outcome,
-                    entryPrice: p.entryPrice,
-                    balance: p.balance,
-                    valueUsd: p.valueUsd,
-                    currentPrice: p.currentPrice,
-                    question: p.question,
-                    image: p.image,
-                    marketSlug: p.marketSlug,
-                    eventSlug: p.eventSlug,
-                    investedValue: p.investedValue
-                });
+                const pos = await this.enrichPosition(p);
                 await this.updateMarketState(pos);
                 enriched.push(pos);
             }
@@ -432,7 +407,7 @@ export class BotEngine {
         const engineLogger = {
             info: (m) => this.addLog('info', m),
             warn: (m) => this.addLog('warn', m),
-            error: (m, e) => this.addLog('error', `${m} ${e ? e.message : ''}`),
+            error: (m, e) => this.addLog('error', `${m} ${e?.message || ''}`),
             debug: () => { },
             success: (m) => this.addLog('success', m)
         };
@@ -441,47 +416,56 @@ export class BotEngine {
                 rpcUrl: this.config.rpcUrl,
                 walletConfig: this.config.walletConfig,
                 userId: this.config.userId,
-                l2ApiCredentials: this.config.l2ApiCredentials,
-                mongoEncryptionKey: this.config.mongoEncryptionKey,
-                builderApiKey: this.config.builderApiKey,
-                builderApiSecret: this.config.builderApiSecret,
-                builderApiPassphrase: this.config.builderApiPassphrase
+                mongoEncryptionKey: this.config.mongoEncryptionKey
             }, engineLogger);
             await this.exchange.initialize();
             await this.exchange.authenticate();
-            const rawClient = this.exchange.getRawClient();
-            if (!rawClient)
-                throw new Error("Adapter failed to initialize authorized ClobClient.");
-            this.sportsIntel = new SportsIntelService(engineLogger);
-            this.sportsRunner = new SportsRunnerService(this.sportsIntel, engineLogger, rawClient);
-            this.arbScanner = new MarketMakingScanner(this.exchange, engineLogger);
-            const funder = this.exchange.getFunderAddress();
+            this.intelligence = new MarketIntelligenceService(engineLogger);
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,
-                proxyWallet: funder,
-                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100, usdcContractAddress: TOKENS.USDC_BRIDGED },
+                proxyWallet: this.exchange.getFunderAddress(),
+                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 },
                 logger: engineLogger
             });
-            await this.initializeServices();
-            await this.initializeCoreModules(engineLogger);
-            const isFunded = await this.checkFunding();
-            if (!isFunded) {
-                this.addLog('warn', 'Safe empty. Engine on standby. Waiting for deposit...');
-                this.startFundWatcher();
-                return;
-            }
-            await this.proceedWithPostFundingSetup(engineLogger);
+            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
+            this.fomoRunner.setConfig(this.config.enableFomoRunner, 0.20);
+            // Forward trade events from the sniper to your database handler
+            this.fomoRunner.on('fomo_trade_filled', (trade) => this.callbacks?.onTradeComplete?.(trade));
+            await this.syncPositions(true);
+            await this.intelligence.start();
+            // Start the internal sync loop for hooks (no io used)
+            this.startFomoSync();
+            this.addLog('success', 'Bot Engine Activated.');
         }
         catch (e) {
-            this.addLog('error', `Startup Failed: ${e.message}`);
+            this.addLog('error', `Startup failed: ${e.message}`);
             this.isRunning = false;
         }
+    }
+    startFomoSync() {
+        // Clear any existing interval
+        if (this.updateLoop) {
+            clearInterval(this.updateLoop);
+            this.updateLoop = null;
+        }
+        // Set up new interval
+        this.updateLoop = setInterval(() => {
+            if (!this.isRunning)
+                return;
+            // Fire the hooks to the server listener
+            if (this.intelligence && this.callbacks?.onFomoVelocity) {
+                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
+            }
+            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
+                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
+            }
+        }, 2000);
     }
     stop() {
         this.isRunning = false;
         this.arbScanner?.stop();
-        this.sportsRunner?.stop();
-        this.sportsIntel?.stop();
+        this.intelligence?.stop();
+        this.fomoRunner?.setConfig(false, 0.2);
         if (this.monitor)
             this.monitor.stop();
         if (this.portfolioService)
@@ -566,8 +550,6 @@ export class BotEngine {
             return false;
         const target = this.arbScanner?.getTrackedMarket(marketId);
         if (target) {
-            // Pass the tracked market directly to the MM executor, casting to any 
-            // to bypass the restrictive TrackedMarket type and fix the 12 build errors.
             await this.executor.executeMarketMakingQuotes(target);
             return true;
         }
@@ -608,13 +590,13 @@ export class BotEngine {
                 positions: this.activePositions,
                 totalPnL: this.stats.totalPnl || 0
             }));
+            if (this.intelligence)
+                await this.intelligence.start();
             if (this.config.enableMoneyMarkets && this.arbScanner)
                 await this.arbScanner.start();
-            const sportsActive = this.config.enableSportsRunner || this.config.enableSportsFrontrunning;
-            if (sportsActive && this.sportsIntel) {
-                await this.sportsIntel.start();
-                this.sportsRunner?.start();
-            }
+            if (this.config.enableFomoRunner && this.fomoRunner)
+                this.fomoRunner.setConfig(true, (this.config.autoTp || 20) / 100);
+            // Fomo Runner service start
             if (this.config.enableCopyTrading && this.monitor)
                 await this.monitor.start();
             await this.syncPositions(true);
@@ -625,27 +607,19 @@ export class BotEngine {
             this.addLog('error', `Setup Failed: ${e.message}`);
         }
     }
+    getActiveFomoMoves() {
+        return this.intelligence?.getLatestMoves() || [];
+    }
+    getActiveSnipes() {
+        return this.fomoRunner?.getActiveSnipes() || [];
+    }
     getActivePositions() { return this.activePositions; }
     getArbOpportunities() { return this.arbScanner?.getOpportunities() || []; }
-    getLiveSportsMatches() { return this.sportsIntel?.getLiveMatches() || []; }
-    getActiveSportsChases() { return this.sportsRunner?.getActiveChases() || []; }
+    getActiveFomoChases() { return this.fomoRunner ? [] : []; }
     getCallbacks() { return this.callbacks; }
     async addMarketToMM(conditionId) { return this.arbScanner?.addMarketByConditionId(conditionId) || false; }
     async addMarketBySlug(slug) { return this.arbScanner?.addMarketBySlug(slug) || false; }
     bookmarkMarket(conditionId) { this.arbScanner?.bookmarkMarket(conditionId); }
     unbookmarkMarket(conditionId) { this.arbScanner?.unbookmarkMarket(conditionId); }
     getBookmarkedOpportunities() { return this.arbScanner?.getBookmarkedOpportunities() || []; }
-    async syncSportsAlpha() {
-        if (!this.exchange || !this.sportsIntel)
-            return;
-        const matches = this.sportsIntel.getLiveMatches();
-        for (const match of matches) {
-            if (match.tokenIds?.[0]) {
-                try {
-                    match.marketPrice = await this.exchange.getMarketPrice(match.conditionId, match.tokenIds[0], 'BUY');
-                }
-                catch (e) { }
-            }
-        }
-    }
 }

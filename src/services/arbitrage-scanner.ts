@@ -1,3 +1,4 @@
+
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { Logger } from '../utils/logger.util.js';
 import { WS_URLS } from '../config/env.js';
@@ -32,9 +33,9 @@ class RateLimiter {
     }
 }
 
-// ============================================================
+// ============================================
 // INTERFACES (ENHANCED)
-// ============================================================
+// ============================================
 
 export interface MarketOpportunity {
     marketId: string;
@@ -135,9 +136,9 @@ interface TickSizeInfo {
     updatedAt: number;
 }
 
-// ============================================================
+// ============================================
 // MAIN SCANNER CLASS (ENHANCED)
-// ============================================================
+// ============================================
 
 export class MarketMakingScanner extends EventEmitter {
     // Core state
@@ -393,10 +394,7 @@ export class MarketMakingScanner extends EventEmitter {
     
     /**
      * PRODUCTION: Process a single market from API response
-     * FIXED: Removed volume/liquidity pre-filtering - only filter on structural requirements
-     * Volume/liquidity filtering happens in evaluateOpportunity() based on config
      */
-    
     private processMarketData(
         market: any, 
         event: any, 
@@ -429,13 +427,8 @@ export class MarketMakingScanner extends EventEmitter {
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];
 
-            // BRIDGE METADATA TO INTELLIGENCE SINGLETON
-            this.intelligence.updateMetadata(tokenId, {
-                conditionId,
-                question: market.question || event.title || 'Unknown Market',
-                image: market.image || event.image || '',
-                marketSlug: market.slug || ''
-            });
+            // NOTE: updateMetadata was removed from MarketIntelligenceService.
+            // Metadata is now auto-fetched by Intelligence when spikes occur.
             
             if (this.trackedMarkets.has(tokenId)) {
                 const existing = this.trackedMarkets.get(tokenId)!;

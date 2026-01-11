@@ -1896,6 +1896,7 @@ const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
 const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); 
 const [moneyMarketOpps, setMoneyMarketOpps] = useState<ArbitrageOpportunity[]>([]);
 const [fomoMoves, setFomoMoves] = useState<FlashMove[]>([]);
+const [isLoadingFomo, setIsLoadingFomo] = useState(true);
 const [activeSnipes, setActiveSnipes] = useState<ActiveSnipe[]>([]);
 const [stats, setStats] = useState<UserStats | null>(null);
 const [registry, setRegistry] = useState<TraderProfile[]>([]);
@@ -1969,6 +1970,37 @@ useEffect(() => {
         console.log('📊 UI Sync: Positions Updated');
         setActivePositions(pos);
     });
+
+    // Load FOMO history when connected
+    const hydrateFomo = async () => {
+        try {
+            setIsLoadingFomo(true);
+            // Load persistent alpha from server DB to avoid empty list on refresh
+            const res = await axios.get('/api/fomo/history');
+            setFomoMoves(prevMoves => {
+                const newMoves = res.data || [];
+                return [...newMoves, ...prevMoves]
+                    .filter((move, index, self) => 
+                        index === self.findIndex(m => 
+                            m.tokenId === move.tokenId && 
+                            m.conditionId === move.conditionId &&
+                            m.timestamp === move.timestamp
+                        )
+                    )
+                    .sort((a, b) => b.timestamp - a.timestamp)
+                    .slice(0, 50);
+            });
+        } catch (e) {
+            console.error("Failed to hydrate FOMO moves", e);
+            toast.error('Failed to load FOMO history');
+        } finally {
+            setIsLoadingFomo(false);
+        }
+    };
+    
+    if (isConnected) {
+        hydrateFomo();
+    }
     
     s.on('STATS_UPDATE', (st: any) => {
         setStats(st);
@@ -3544,10 +3576,18 @@ return (
         )}
 
         {activeTab === 'fomo' && (
-            <FomoRunner 
-                flashMoves={fomoMoves}
-                activeSnipes={activeSnipes}
-            />
+            <div className="relative min-h-[300px]">
+                {isLoadingFomo && (
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-10 flex items-center justify-center rounded-xl">
+                        <Loader2 className="animate-spin text-blue-500" size={32} />
+                        <span className="ml-2 text-white">Loading FOMO data...</span>
+                    </div>
+                )}
+                <FomoRunner 
+                    flashMoves={fomoMoves}
+                    activeSnipes={activeSnipes}
+                />
+            </div>
         )}
         
         {activeTab === 'bridge' && (

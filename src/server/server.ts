@@ -20,7 +20,7 @@ import { SafeManagerService } from '../services/safe-manager.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
-import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
+import { MarketIntelligenceService, FlashMoveEvent } from '../services/market-intelligence.service.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -54,7 +54,7 @@ const ENV = loadEnv();
 // Service Singletons
 const dbRegistryService = new DbRegistryService();
 const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
-const intelligence = new MarketIntelligenceService(serverLogger);
+const globalIntelligence = new MarketIntelligenceService(serverLogger);
 
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map<string, BotEngine>();
@@ -66,6 +66,12 @@ app.use(express.json({ limit: '10mb' }) as any);
 const distPath = path.join(__dirname, '../../dist');
 app.use(express.static(distPath) as any);
 
+// --- GLOBAL ALPHA BROADCAST ---
+// Listen to the intelligence hub and emit to ALL connected users
+globalIntelligence.on('flash_move', async (event: FlashMoveEvent) => {
+    const moves = await globalIntelligence.getLatestMovesFromDB();
+    io.emit('FOMO_VELOCITY_UPDATE', moves);
+});
 
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId: string, config: BotConfig) {
@@ -85,17 +91,10 @@ async function startUserBot(userId: string, config: BotConfig) {
     };
 
     // Passing the global 'intelligence' instance as the second parameter
-    const engine = new BotEngine(engineConfig, intelligence, dbRegistryService, {
-        onFomoVelocity: (moves) => {
-            if (moves.length > 0) {
-                io.to(normId).emit('FOMO_VELOCITY_UPDATE', moves);
-            }
-        },
-        onFomoSnipes: (snipes) => {
-            if (snipes.length > 0) {
-                io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes);
-            }
-        },
+    const engine = new BotEngine(engineConfig, globalIntelligence, dbRegistryService, {
+
+        onFomoVelocity: (moves) => io.to(normId).emit('FOMO_VELOCITY_UPDATE', moves),
+        onFomoSnipes: (snipes) => io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes),
         onPositionsUpdate: async (positions) => {
             await User.updateOne({ address: normId }, { activePositions: positions });
             io.to(normId).emit('POSITIONS_UPDATE', positions);
@@ -201,6 +200,14 @@ app.get('/health', (req, res) => {
         db: (dbStatusMap as any)[dbState] || 'unknown',
         activeBots: ACTIVE_BOTS.size
     });
+});
+
+// 0. Fomo Data Feed
+app.get('/api/fomo/history', async (req, res) => {
+    try {
+        const moves = await globalIntelligence.getLatestMovesFromDB();
+        res.json(moves);
+    } catch (e) { res.status(500).json({ error: 'DB Error' }); }
 });
 
 // 1. Check Status / Init
@@ -1156,7 +1163,7 @@ connectDB()
         console.log("✅ DB Connected. Syncing system...");
         await seedRegistry(); 
         // Explicitly start intelligence service on the global singleton
-        await intelligence.start();
+        await globalIntelligence.start();
         restoreBots();
     })
     .catch((err) => {

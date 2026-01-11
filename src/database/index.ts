@@ -10,6 +10,31 @@ import { DatabaseEncryptionService } from '../services/database-encryption.servi
 // Initialize the encryption service immediately with the environment key
 DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
 
+// --- NEW: Flash Move Schema for Global Intelligence ---
+export interface IFlashMove extends Document {
+    tokenId: string;
+    conditionId: string;
+    oldPrice: number;
+    newPrice: number;
+    velocity: number;
+    timestamp: Date;
+    question?: string;
+    image?: string;
+    marketSlug?: string;
+}
+
+const FlashMoveSchema = new Schema<IFlashMove>({
+    tokenId: { type: String, required: true, index: true },
+    conditionId: String,
+    oldPrice: Number,
+    newPrice: Number,
+    velocity: Number,
+    timestamp: { type: Date, default: Date.now, index: true },
+    question: String,
+    image: String,
+    marketSlug: String
+});
+
 export interface IUser extends Document {
   address: string;
   tradingWallet?: TradingWalletConfig; 
@@ -352,6 +377,7 @@ export { CopiedTrade, HunterEarning, WalletAnalytics } from './trade-tracking.sc
 export const BridgeTransaction = mongoose.model<IBridgeTransaction>('BridgeTransaction', BridgeTransactionSchema);
 export const DepositLog = mongoose.model<IDepositLog>('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model<IBotLog>('BotLog', BotLogSchema);
+export const FlashMove = mongoose.model<IFlashMove>('FlashMove', FlashMoveSchema);
 export const MoneyMarketOpportunity = mongoose.model<IMoneyMarketOpportunity>('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
 export const SportsMatch = mongoose.model<ISportsMatch>('SportsMatch', SportsMatchSchema);
 

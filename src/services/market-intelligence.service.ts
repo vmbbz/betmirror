@@ -54,6 +54,14 @@ export class MarketIntelligenceService extends EventEmitter {
     private ws?: WebSocket;
     private isRunning = false;
     
+    // Connection Management
+    private connectionAttempts = 0;
+    private maxConnectionAttempts = 5;
+    private baseReconnectDelay = 1000; // 1 second
+    private maxReconnectDelay = 30000; // 30 seconds
+    private circuitOpen = false;
+    private circuitResetTimeout: NodeJS.Timeout | null = null;
+    
     // Core Data Structures
     private priceHistory: Map<string, PriceSnapshot[]> = new Map();
     private lastUpdateTrack: Map<string, number> = new Map();
@@ -144,59 +152,155 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     /**
-     * Establish the Master WebSocket connection.
+     * Establish the Master WebSocket connection with circuit breaker pattern.
      */
     private connect() {
+        if (this.circuitOpen) {
+            this.logger.warn('Circuit breaker is open, not attempting to connect');
+            return;
+        }
+
         this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
-        this.ws = new WebSocket(`${WS_URLS.CLOB}/ws/market`);
+        
+        try {
+            this.ws = new WebSocket(`${WS_URLS.CLOB}/ws/market`);
 
-        this.ws.on('open', () => {
-            this.logger.success('🔌 [GLOBAL HUB] High-performance discovery engine: ONLINE.');
-            
-            // Subscribe to the global 'firehose' topics
-            this.ws?.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price" }));
-            this.ws?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
-            
-            // Re-sync any specific token interests
-            for (const tokenId of this.tokenSubscriptionRefs.keys()) {
-                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
-            }
-        });
-
-        this.ws.on('message', async (data) => {
-            try {
-                const msg = JSON.parse(data.toString());
+            this.ws.on('open', () => {
+                this.connectionAttempts = 0; // Reset on successful connection
+                this.logger.success('🔌 [GLOBAL HUB] High-performance discovery engine: ONLINE.');
                 
-                // Handle Price Updates (FOMO Detection)
-                if (msg.event_type === 'last_trade_price') {
-                    const tokenId = msg.asset_id || msg.token_id;
-                    const price = parseFloat(msg.price);
-                    if (tokenId && !isNaN(price)) await this.processPriceUpdate(tokenId, price);
+                // Subscribe to the global 'firehose' topics
+                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price" }));
+                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
+                
+                // Re-sync any specific token interests
+                for (const tokenId of this.tokenSubscriptionRefs.keys()) {
+                    this.ws?.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
+                }
+            });
+
+            this.ws.on('message', this.handleWebSocketMessage.bind(this));
+
+            this.ws.on('close', () => {
+                if (this.connectionAttempts >= this.maxConnectionAttempts) {
+                    this.tripCircuit();
+                    return;
                 }
 
-                // Handle Global Trades (Whale Detection)
-                if (msg.event_type === 'trades') {
-                    this.processTradeMessage(msg);
-                }
+                const delay = Math.min(
+                    this.baseReconnectDelay * Math.pow(2, this.connectionAttempts),
+                    this.maxReconnectDelay
+                );
 
-                // Handle Order Book Updates (Money Market / Liquidity Rewards)
-                if (msg.event_type === 'book') {
-                    this.emit('book_update', msg);
+                this.connectionAttempts++;
+                this.logger.warn(`📡 Hub Connection Lost. Reconnecting in ${delay/1000}s... (Attempt ${this.connectionAttempts}/${this.maxConnectionAttempts})`);
+                
+                if (this.isRunning) {
+                    setTimeout(() => this.connect(), delay);
                 }
+            });
 
-            } catch (e) {
-                this.logger.error("Failed to parse hub message", e as Error);
+            this.ws.on('error', (err: Error) => {
+                this.logger.error("Hub Socket Error: " + err.message);
+            });
+
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error : new Error(String(error));
+            this.logger.error("WebSocket connection error: " + errorMessage.message);
+            this.handleConnectionFailure();
+        }
+    }
+
+    /**
+     * Handles incoming WebSocket messages with proper error handling
+     */
+    private handleWebSocketMessage(data: WebSocket.Data) {
+        try {
+            // First, check if the message is a string
+            const message = data.toString();
+            
+            // Handle ping/pong messages
+            if (message === 'pong' || message === 'PONG' || message === 'PING') {
+                return;
             }
-        });
+            
+            // Try to parse as JSON, but handle non-JSON messages
+            let msg;
+            try {
+                msg = JSON.parse(message);
+            } catch (parseError) {
+                const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
+                this.logger.debug(`Received non-JSON message: ${message} - ${errorMessage}`);
+                return;
+            }
 
-        this.ws.on('close', () => {
-            this.logger.warn("📡 Hub Connection Lost. Reconnecting in 5s...");
-            if (this.isRunning) setTimeout(() => this.connect(), 5000);
-        });
+            // Reset error count on successful message processing
+            this.connectionAttempts = 0;
 
-        this.ws.on('error', (err) => {
-            this.logger.error("Hub Socket Error", err);
-        });
+            // Handle Price Updates (FOMO Detection)
+            if (msg.event_type === 'last_trade_price') {
+                const tokenId = msg.asset_id || msg.token_id;
+                const price = parseFloat(msg.price);
+                if (tokenId && !isNaN(price)) {
+                    this.processPriceUpdate(tokenId, price).catch(err => 
+                        this.logger.error('Error processing price update:', err)
+                    );
+                }
+            }
+
+            // Handle Global Trades (Whale Detection)
+            if (msg.event_type === 'trades') {
+                this.processTradeMessage(msg);
+            }
+
+            // Handle Order Book Updates (Money Market / Liquidity Rewards)
+            if (msg.event_type === 'book') {
+                this.emit('book_update', msg);
+            }
+
+        } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : String(e);
+            this.logger.error("Failed to process hub message: " + errorMessage);
+            this.handleConnectionFailure();
+        }
+    }
+
+    /**
+     * Handles connection failures with exponential backoff
+     */
+    private handleConnectionFailure() {
+        this.connectionAttempts++;
+        if (this.connectionAttempts >= this.maxConnectionAttempts) {
+            this.tripCircuit();
+        } else {
+            const delay = Math.min(
+                this.baseReconnectDelay * Math.pow(2, this.connectionAttempts),
+                this.maxReconnectDelay
+            );
+            setTimeout(() => this.connect(), delay);
+        }
+    }
+
+    /**
+     * Trips the circuit breaker to prevent cascading failures
+     */
+    private tripCircuit() {
+        this.circuitOpen = true;
+        this.logger.error('🚨 Circuit breaker tripped! Too many connection failures.');
+        
+        // Try to reset the circuit after a delay
+        if (this.circuitResetTimeout) {
+            clearTimeout(this.circuitResetTimeout);
+        }
+        
+        this.circuitResetTimeout = setTimeout(() => {
+            this.circuitOpen = false;
+            this.connectionAttempts = 0;
+            this.logger.info('Circuit breaker reset, attempting to reconnect...');
+            if (this.isRunning) {
+                this.connect();
+            }
+        }, 60000); // Reset after 60 seconds
     }
 
     /**

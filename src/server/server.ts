@@ -76,29 +76,18 @@ globalIntelligence.on('flash_move', async (event: FlashMoveEvent) => {
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId: string, config: BotConfig) {
     const normId = userId.toLowerCase();
-    
-    if (ACTIVE_BOTS.has(normId)) {
-        ACTIVE_BOTS.get(normId)?.stop();
-    }
+    if (ACTIVE_BOTS.has(normId)) ACTIVE_BOTS.get(normId)?.stop();
 
-    const engineConfig: BotConfig = { 
-        ...config, 
-        userId: normId, 
-        builderApiKey: ENV.builderApiKey,
-        builderApiSecret: ENV.builderApiSecret,
-        builderApiPassphrase: ENV.builderApiPassphrase,
-        mongoEncryptionKey: ENV.mongoEncryptionKey
-    };
+    const engine = new BotEngine(config, globalIntelligence, dbRegistryService, {
+        // Redundant onFomoVelocity REMOVED - handled by global listener above
 
-    // Passing the global 'intelligence' instance as the second parameter
-    const engine = new BotEngine(engineConfig, globalIntelligence, dbRegistryService, {
-
-        onFomoVelocity: (moves) => io.to(normId).emit('FOMO_VELOCITY_UPDATE', moves),
         onFomoSnipes: (snipes) => io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes),
+        
         onPositionsUpdate: async (positions) => {
             await User.updateOne({ address: normId }, { activePositions: positions });
             io.to(normId).emit('POSITIONS_UPDATE', positions);
         },
+
         onTradeComplete: async (trade) => {
             try {
                 const origin = (trade as any).serviceOrigin || 'COPY';
@@ -141,6 +130,7 @@ async function startUserBot(userId: string, config: BotConfig) {
                 serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
             }
         },
+
         onStatsUpdate: async (stats) => {
             await User.updateOne({ address: normId }, { 
                 $set: { 
@@ -151,7 +141,9 @@ async function startUserBot(userId: string, config: BotConfig) {
             });
             io.to(normId).emit('STATS_UPDATE', stats);
         },
+
         onLog: (log) => io.to(normId).emit('BOT_LOG', log),
+
         onFeePaid: async (event) => {
             const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
             if (lister) {
@@ -162,25 +154,20 @@ async function startUserBot(userId: string, config: BotConfig) {
         }
     });
 
-    // Load bookmarks for this user
+    // Load bookmarks
     try {
         const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
         if (user?.bookmarkedMarkets?.length) {
-            const adapter = engine.getAdapter();
-            const scanner = (adapter as any)?.arbScanner;
+            const scanner = (engine as any).arbScanner;
             if (scanner && typeof scanner.initializeBookmarks === 'function') {
                 scanner.initializeBookmarks(user.bookmarkedMarkets);
-                serverLogger.info(`📌 Initialized ${user.bookmarkedMarkets.length} bookmarks for user ${normId}`);
             }
         }
-    } catch (e) {
-        serverLogger.error(`Failed to load bookmarks for ${normId}`);
-    }
+    } catch (e) {}
 
     ACTIVE_BOTS.set(normId, engine);
     await engine.start();
 }
-
 
 // Socket.io Room Management
 io.on('connection', (socket: Socket) => {

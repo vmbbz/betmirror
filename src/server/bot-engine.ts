@@ -84,6 +84,7 @@ export class BotEngine {
     private uiHeartbeatLoop: NodeJS.Timeout | null = null;
     private backgroundSyncLoop: NodeJS.Timeout | null = null;
     private heartbeatLoop: NodeJS.Timeout | null = null;
+    private heartbeatInterval?: NodeJS.Timeout;
     private activePositions: ActivePosition[] = [];
     private stats: UserStats = {
         totalPnl: 0, 
@@ -392,14 +393,21 @@ export class BotEngine {
             positionValue += (p.shares * (p.currentPrice || p.entryPrice));
         });
 
-        this.stats.cashBalance = cashBalance;
-        this.stats.portfolioValue = cashBalance + positionValue;
-        
         if (this.callbacks?.onStatsUpdate) {
-            await this.callbacks.onStatsUpdate(this.stats);
+            await this.callbacks.onStatsUpdate({
+                totalPnl: 0, // Calculated by server.ts from DB
+                totalVolume: 0, 
+                totalFeesPaid: 0,
+                winRate: 0,
+                tradesCount: 0,
+                winCount: 0,
+                lossCount: 0,
+                allowanceApproved: true,
+                portfolioValue: cashBalance + positionValue,
+                cashBalance: cashBalance
+            });
         }
     }
-
 
     public async emergencySell(tradeIdOrMarketId: string, outcome?: string): Promise<string> {
         if (!this.executor) throw new Error("Executor not initialized.");
@@ -498,13 +506,40 @@ export class BotEngine {
                 logger: engineLogger
             });
 
-            // Initialize All Sub-Services
-            this.initializeCoreModules(engineLogger);
-            
-            // Start the broadcasting heartbeat
-            this.startHeartbeat();
+            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
+            this.fomoRunner.setConfig(this.config.enableFomoRunner, (this.config.autoTp || 20) / 100);
 
-            this.addLog('success', 'Full Engine Suite Activated.');
+            // WIRE UP THE MONITOR (Now event-driven)
+            this.monitor = new TradeMonitorService({
+                adapter: this.exchange,
+                intelligence: this.intelligence,
+                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
+                logger: engineLogger,
+                userAddresses: this.config.userAddresses,
+                onDetectedTrade: async (signal: TradeSignal) => {
+                    if (!this.isRunning || !this.config.enableCopyTrading) return;
+                    const result: ExecutionResult = await this.executor!.copyTrade(signal);
+                    if (result.status === 'FILLED' && this.callbacks?.onTradeComplete) {
+                        this.callbacks.onTradeComplete({
+                            id: result.txHash || Math.random().toString(),
+                            timestamp: new Date().toISOString(),
+                            marketId: signal.marketId,
+                            outcome: "YES",
+                            side: signal.side,
+                            size: signal.sizeUsd,
+                            executedSize: result.executedAmount,
+                            price: result.priceFilled,
+                            status: 'FILLED'
+                        });
+                        this.syncPositions();
+                    }
+                }
+            });
+
+            if (this.config.enableCopyTrading) this.monitor.start();
+            this.startHeartbeat();
+            
+            this.addLog('success', 'Full Strategy Engine Online.');
         } catch (e: any) {
             this.addLog('error', `Startup failed: ${e.message}`);
             this.isRunning = false;
@@ -538,6 +573,7 @@ export class BotEngine {
 
         this.monitor = new TradeMonitorService({
             adapter: this.exchange,
+            intelligence: this.intelligence,
             env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
             logger,
             userAddresses: this.config.userAddresses,
@@ -555,24 +591,20 @@ export class BotEngine {
     }
 
     private startHeartbeat() {
-        if (this.heartbeatLoop) clearInterval(this.heartbeatLoop);
-        this.heartbeatLoop = setInterval(async () => {
+        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = setInterval(async () => {
             if (!this.isRunning) return;
 
-            try {
-                // Heartbeat only sends user-specific data now
-                // Global FOMO is handled by the Server singleton
-                if (this.arbScanner) {
-                    this.callbacks?.onArbUpdate?.(this.arbScanner.getOpportunities());
-                }
+            // 1. User-specific Snipes update
+            if (this.fomoRunner) {
+                const snipes = this.fomoRunner.getActiveSnipes();
+                this.callbacks?.onFomoSnipes?.(snipes);
+            }
 
-                if (this.fomoRunner) {
-                    this.callbacks?.onFomoSnipes?.(this.fomoRunner.getActiveSnipes());
-                }
-
-                await this.syncStats();
-            } catch (e) {}
-        }, 2000);
+            // 2. User-specific Position & Stats sync
+            await this.syncPositions();
+            await this.syncStats();
+        }, 5000); // 5s is plenty for background sync
     }
 
     public stop() {

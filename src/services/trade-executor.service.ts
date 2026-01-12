@@ -190,13 +190,22 @@ export class TradeExecutorService {
 
     // Fix: cast to any to access Node-style 'on' method
     (this.userWs as any).on('open', () => {
-        this.deps.logger.success('✅ Executor Fill Monitor Connected.');
-        // WEBSOCKET STABILITY FIX: Add heartbeat to user channel
+        this.deps.logger.success('✅ Executor Fill Monitor Connected');
+        
+        // Standardized ping interval (20 seconds)
         if (this.pingInterval) clearInterval(this.pingInterval);
         this.pingInterval = setInterval(() => {
-            // Fix: cast to any
-            if ((this.userWs as any)?.readyState === 1) (this.userWs as any).send('PING');
-        }, 10000);
+            try {
+                const ws = this.userWs as WebSocket;
+                if (ws?.readyState === 1) {
+                    ws.ping(); // Use native ping if available
+                }
+            } catch (error) {
+                this.deps.logger.warn('Ping failed, reconnecting...');
+                this.isWsRunning = false;
+                setTimeout(() => this.connectUserChannel(), 5000);
+            }
+        }, 20000); // Standardized 20s interval
     });
 
     // Fix: cast to any

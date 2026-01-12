@@ -669,12 +669,20 @@ export class MarketMakingScanner extends EventEmitter {
         wsAny.on('open', () => {
             this.logger.success('✅ User Channel Connected');
             
+            // Standardized ping interval (20 seconds)
             if (this.userPingInterval) clearInterval(this.userPingInterval);
             this.userPingInterval = setInterval(() => {
-                if (this.userWs?.readyState === 1) {
-                    this.userWs.send('PING');
+                try {
+                    if (this.userWs?.readyState === 1) {
+                        // Use WebSocket 'send' for compatibility
+                        this.userWs.send(JSON.stringify({ type: 'ping' }));
+                    }
+                } catch (error) {
+                    this.logger.warn('Ping failed, reconnecting...');
+                    if (this.userPingInterval) clearInterval(this.userPingInterval);
+                    setTimeout(() => this.connectUserChannel(), 5000);
                 }
-            }, 20000);
+            }, 20000); // Standardized 20s interval
         });
 
         // FIX: Replaced RawData with imported type from ws

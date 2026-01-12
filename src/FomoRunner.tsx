@@ -6,6 +6,7 @@ import {
   Target, Loader2, Radar, Flame, Info,
   TrendingDown, Timer, BarChart3, ChevronRight
 } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 
 import { FlashMove, ActiveSnipe } from './types/fomo.types.js';
 
@@ -114,7 +115,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
 }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [isConnected, setIsConnected] = useState(false);
-    const [socket, setSocket] = useState<WebSocket | null>(null);
+    const [socket, setSocket] = useState<Socket | null>(null);
     const [activeTab, setActiveTab] = useState<'scanner' | 'snipes'>('scanner');
     const [wsFlashMoves, setWsFlashMoves] = useState<FlashMove[]>([]);
     const prevFlashMovesCount = useRef(0);
@@ -155,28 +156,31 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
     useEffect(() => {
         const connectWebSocket = () => {
             try {
-                const ws = new WebSocket('wss://betmirror.bet/socket.io/');
+                // Use Socket.io client instead of raw WebSocket for better reliability
+                const socket = io('wss://betmirror.bet', {
+                    transports: ['websocket', 'polling'],
+                    upgrade: false
+                });
                 
-                ws.onopen = () => {
-                    console.log('WebSocket connected');
+                socket.on('connect', () => {
+                    console.log('Socket.io connected');
                     setIsConnected(true);
                     setIsLoading(false);
-                };
+                });
 
-                ws.onmessage = (event) => {
+                socket.on('fomo_update', (data) => {
                     try {
-                        const message: WebSocketMessage = JSON.parse(event.data);
-                        
-                        // Safely handle different message formats
-                        let fomoMoves: any[] = [];
+                        console.log('Received fomo update:', data);
                         
                         // Handle different possible message structures
-                        if (Array.isArray(message?.data?.fomoMoves)) {
-                            fomoMoves = message.data.fomoMoves;
-                        } else if (Array.isArray(message?.fomoMoves)) {
-                            fomoMoves = message.fomoMoves;
-                        } else if (message?.data && typeof message.data === 'object' && 'fomoMoves' in message.data) {
-                            fomoMoves = Array.isArray((message.data as any).fomoMoves) ? (message.data as any).fomoMoves : [];
+                        let fomoMoves: any[] = [];
+                        
+                        if (Array.isArray(data?.fomoMoves)) {
+                            fomoMoves = data.fomoMoves;
+                        } else if (Array.isArray(data)) {
+                            fomoMoves = data;
+                        } else if (data && typeof data === 'object' && 'fomoMoves' in data) {
+                            fomoMoves = Array.isArray((data as any).fomoMoves) ? (data as any).fomoMoves : [];
                         }
                         
                         // Validate and update state
@@ -190,25 +194,27 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                             setWsFlashMoves(validMoves);
                         }
                     } catch (error) {
-                        console.error('Error processing WebSocket message:', error);
+                        console.error('Error processing fomo update:', error);
                     }
-                };
+                });
 
-                ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    setIsConnected(false);
-                    setIsLoading(false);
-                };
-
-                ws.onclose = () => {
-                    console.log('WebSocket disconnected');
+                socket.on('disconnect', () => {
+                    console.log('Socket.io disconnected');
                     setIsConnected(false);
                     setIsLoading(false);
                     // Attempt to reconnect after a delay
                     setTimeout(connectWebSocket, 3000);
-                };
+                });
 
-                setSocket(ws);
+                socket.on('connect_error', (error) => {
+                    console.error('Socket.io connection error:', error);
+                    setIsConnected(false);
+                    setIsLoading(false);
+                    // Attempt to reconnect after a delay
+                    setTimeout(connectWebSocket, 5000);
+                });
+
+                setSocket(socket as any);
             } catch (error) {
                 console.error('WebSocket connection error:', error);
                 setIsLoading(false);
@@ -222,7 +228,8 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
         // Cleanup function
         return () => {
             if (socket) {
-                socket.close();
+                socket.disconnect();
+                setSocket(null);
             }
         };
     }, []);
@@ -240,11 +247,11 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                             <Flame className="text-white" size={24}/>
                         </div>
                         <h2 className="text-2xl md:text-5xl font-black text-white uppercase tracking-tighter italic leading-none">
-                            FOMO <span className="text-rose-600">RUNNER</span>
+                                FOMO <span className="text-rose-600">RUNNER</span>
                         </h2>
                     </div>
-                    <p className="text-[8px] md:text-xs text-slate-500 font-bold uppercase tracking-[0.4em] ml-1">Velocity Liquidity Sniper v2.1</p>
-                </div>
+                    <p className="text-[8px] md:text-xs text-slate-500 font-bold uppercase tracking-[0.4em] ml-1">Price Flash Sniper</p>
+                            </div>
 
                 <div className="w-full md:w-auto bg-slate-900/60 p-4 rounded-2xl border border-white/10 flex items-center justify-between md:justify-start gap-6 md:gap-8 backdrop-blur-md">
                     <div className="text-center md:text-left">
@@ -255,8 +262,8 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                     <div className="text-center md:text-left">
                         <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1">Active Snipes</p>
                         <p className="text-sm md:text-xl font-black text-white font-mono">{activeSnipes.length}</p>
+                        </div>
                     </div>
-                </div>
             </div>
 
             {/* View Selection Tabs */}
@@ -286,8 +293,8 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                                     <Loader2 className="animate-spin text-rose-500 mx-auto relative z-10" size={48}/>
                                 </div>
                                 <div className="space-y-2">
-                                    <p className="text-white font-black uppercase tracking-[0.4em] text-xs">Awaiting Alpha</p>
-                                    <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">Analyzing markets for opportunities...</p>
+                                    <p className="text-white font-black uppercase tracking-[0.4em] text-xs">Awaiting Price Flashes</p>
+                                    <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">Analyzing markets for FOMO opportunities...</p>
                                 </div>
                             </div>
                         ) : (

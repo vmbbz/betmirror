@@ -1978,7 +1978,7 @@ useEffect(() => {
             // Load persistent alpha from server DB to avoid empty list on refresh
             const res = await axios.get('/api/fomo/history');
             setFomoMoves(prevMoves => {
-                const newMoves = res.data || [];
+                const newMoves = Array.isArray(res.data) ? res.data : [];
                 return [...newMoves, ...prevMoves]
                     .filter((move, index, self) => 
                         index === self.findIndex(m => 
@@ -2261,8 +2261,10 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         // Handle FOMO data from API response
         if (res.data.fomoMoves) {
             setFomoMoves(prevMoves => {
+                // Ensure fomoMoves is an array before spreading
+                const fomoMovesArray = Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : [];
                 // Merge with existing moves and keep only the 50 most recent
-                const updatedMoves = [...(res.data.fomoMoves || []), ...prevMoves]
+                const updatedMoves = [...fomoMovesArray, ...prevMoves]
                     .filter((move, index, self) => 
                         index === self.findIndex(m => 
                             m.tokenId === move.tokenId && 
@@ -2986,7 +2988,7 @@ const fetchStatus = async () => {
         setActivePositions(res.data.positions || []);
         setStats(res.data.stats);
         setMoneyMarketOpps(res.data.mmOpportunities || []);
-        setFomoMoves(res.data.fomoMoves || []);
+        setFomoMoves(Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : []);
         setActiveSnipes(res.data.fomoSnipes || []);
     } catch (e) {}
 };

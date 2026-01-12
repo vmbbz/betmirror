@@ -53,6 +53,7 @@ export interface WhaleTradeEvent {
 export class MarketIntelligenceService extends EventEmitter {
     private ws?: WebSocket;
     private isRunning = false;
+    private pingInterval?: NodeJS.Timeout;
     
     // Connection Management
     private connectionAttempts = 0;
@@ -61,6 +62,7 @@ export class MarketIntelligenceService extends EventEmitter {
     private maxReconnectDelay = 30000; // 30 seconds
     private circuitOpen = false;
     private circuitResetTimeout: NodeJS.Timeout | null = null;
+    private readonly WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
     
     // Core Data Structures
     private priceHistory: Map<string, PriceSnapshot[]> = new Map();
@@ -99,12 +101,14 @@ export class MarketIntelligenceService extends EventEmitter {
      * Uses ref-counting to ensure we only send one 'subscribe' message to the server.
      */
     public subscribeToToken(tokenId: string) {
-        const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
-        this.tokenSubscriptionRefs.set(tokenId, count + 1);
+        const currentCount = this.tokenSubscriptionRefs.get(tokenId) || 0;
+        this.tokenSubscriptionRefs.set(tokenId, currentCount + 1);
 
-        if (count === 0 && this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
-            this.ws.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
+        if (currentCount === 0 && this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+                assets_ids: [tokenId],
+                operation: "subscribe"
+            }));
             this.logger.debug(`📡 [NEW SUB] Firehose opened for token: ${tokenId.slice(0, 12)}...`);
         }
     }
@@ -154,6 +158,22 @@ export class MarketIntelligenceService extends EventEmitter {
     /**
      * Establish the Master WebSocket connection with circuit breaker pattern.
      */
+    private startPingInterval() {
+        this.clearPingInterval();
+        this.pingInterval = setInterval(() => {
+            if (this.ws?.readyState === WebSocket.OPEN) {
+                this.ws.send('PING');
+            }
+        }, 5000); // Send PING every 5 seconds
+    }
+
+    private clearPingInterval() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = undefined;
+        }
+    }
+
     private connect() {
         if (this.circuitOpen) {
             this.logger.warn('Circuit breaker is open, not attempting to connect');
@@ -163,19 +183,22 @@ export class MarketIntelligenceService extends EventEmitter {
         this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
         
         try {
-            this.ws = new WebSocket(`${WS_URLS.CLOB}/ws/market`);
+            this.ws = new WebSocket(this.WS_URL);
 
             this.ws.on('open', () => {
                 this.connectionAttempts = 0; // Reset on successful connection
                 this.logger.success('🔌 [GLOBAL HUB] High-performance discovery engine: ONLINE.');
                 
-                // Subscribe to the global 'firehose' topics
-                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price" }));
-                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
+                // Start ping/pong keepalive
+                this.startPingInterval();
                 
-                // Re-sync any specific token interests
-                for (const tokenId of this.tokenSubscriptionRefs.keys()) {
-                    this.ws?.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
+                // Subscribe to all currently tracked tokens
+                const tokenIds = Array.from(this.tokenSubscriptionRefs.keys());
+                if (tokenIds.length > 0) {
+                    this.ws?.send(JSON.stringify({
+                        type: "market",
+                        assets_ids: tokenIds
+                    }));
                 }
             });
 
@@ -214,6 +237,11 @@ export class MarketIntelligenceService extends EventEmitter {
     /**
      * Handles incoming WebSocket messages with proper error handling
      */
+    // Track invalid operation messages to prevent log spam
+    private invalidOperationCount = 0;
+    private lastInvalidOperationLog = 0;
+    private readonly INVALID_OPERATION_LOG_INTERVAL = 30000; // 30 seconds
+
     private handleWebSocketMessage(data: WebSocket.Data) {
         try {
             // First, check if the message is a string
@@ -224,13 +252,27 @@ export class MarketIntelligenceService extends EventEmitter {
                 return;
             }
             
+            // Handle "INVALID OPERATION" messages specifically
+            if (message === 'INVALID OPERATION') {
+                this.invalidOperationCount++;
+                const now = Date.now();
+                
+                // Only log every 30 seconds to prevent log spam
+                if (now - this.lastInvalidOperationLog > this.INVALID_OPERATION_LOG_INTERVAL) {
+                    this.logger.warn(`Received ${this.invalidOperationCount} 'INVALID OPERATION' messages in the last 30 seconds. This may indicate an issue with the WebSocket subscription.`);
+                    this.invalidOperationCount = 0;
+                    this.lastInvalidOperationLog = now;
+                }
+                return;
+            }
+            
             // Try to parse as JSON, but handle non-JSON messages
             let msg;
             try {
                 msg = JSON.parse(message);
             } catch (parseError) {
                 const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
-                this.logger.debug(`Received non-JSON message: ${message} - ${errorMessage}`);
+                this.logger.debug(`[WebSocket] Received non-JSON message: ${message.substring(0, 100)} - ${errorMessage}`);
                 return;
             }
 
@@ -409,12 +451,25 @@ export class MarketIntelligenceService extends EventEmitter {
      */
     public stop() {
         this.isRunning = false;
+        this.clearPingInterval();
+        
         if (this.ws) {
+            // Send unsubscribe for all tokens before closing
+            const tokenIds = Array.from(this.tokenSubscriptionRefs.keys());
+            if (tokenIds.length > 0 && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({
+                    assets_ids: tokenIds,
+                    operation: "unsubscribe"
+                }));
+            }
+            
             this.ws.removeAllListeners();
             this.ws.terminate();
+            this.ws = undefined;
         }
+        
         this.priceHistory.clear();
         this.tokenSubscriptionRefs.clear();
-        this.logger.info("🔌 Global Hub Hub Shutdown: OFFLINE.");
+        this.logger.info("🔌 Global Hub Shutdown: OFFLINE.");
     }
 }

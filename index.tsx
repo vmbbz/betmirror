@@ -2010,13 +2010,40 @@ useEffect(() => {
         setLogs((prev: any[]) => [log, ...prev].slice(0, 100));
     });
     
+    // Import the types from the shared types file at the top of the file
+    // (This should be moved to the top with other imports)
+    // import { FlashMove, ActiveSnipe } from './src/types/fomo.types';
+
     // Updates fomoMoves which is passed as 'flashMoves' to the FomoRunner component
-    s.on('FOMO_VELOCITY_UPDATE', (moves: FlashMove[] | undefined) => {
-        setFomoMoves(Array.isArray(moves) ? moves : []);
+    s.on('FOMO_VELOCITY_UPDATE', (moves: any[]) => {
+        // Ensure we have the correct type by mapping to the expected shape
+        const typedMoves = Array.isArray(moves) ? moves.map(move => ({
+            tokenId: move.tokenId,
+            conditionId: move.conditionId || '',
+            oldPrice: move.oldPrice || 0,
+            newPrice: move.newPrice || 0,
+            velocity: move.velocity || 0,
+            timestamp: move.timestamp || Date.now(),
+            question: move.question,
+            image: move.image,
+            marketSlug: move.marketSlug
+        })) : [];
+        setFomoMoves(typedMoves);
     });
-    
-    s.on('FOMO_SNIPES_UPDATE', (snipes: ActiveSnipe[] | undefined) => {
-        setActiveSnipes(Array.isArray(snipes) ? snipes : []);
+
+    s.on('FOMO_SNIPES_UPDATE', (snipes: any[]) => {
+        // Ensure we have the correct type by mapping to the expected shape
+        const typedSnipes = Array.isArray(snipes) ? snipes.map(snipe => ({
+            tokenId: snipe.tokenId,
+            conditionId: snipe.conditionId || '',
+            entryPrice: snipe.entryPrice || 0,
+            currentPrice: snipe.currentPrice || 0,
+            targetPrice: snipe.targetPrice,
+            shares: snipe.shares || 0,
+            timestamp: snipe.timestamp || Date.now(),
+            question: snipe.question
+        })) : [];
+        setActiveSnipes(typedSnipes);
     });
 
     // Cleanup: Decouple instance from browser lifecycle
@@ -3583,9 +3610,9 @@ return (
                         <span className="ml-2 text-white">Loading FOMO data...</span>
                     </div>
                 ) : (
-                    <FomoRunner 
-                        flashMoves={Array.isArray(fomoMoves) ? fomoMoves : []}
-                        activeSnipes={Array.isArray(activeSnipes) ? activeSnipes : []}
+                    <FomoRunner
+                    flashMoves={Array.isArray(fomoMoves) ? fomoMoves : []}
+                    activeSnipes={Array.isArray(activeSnipes) ? activeSnipes : []}
                     />
                 )}
             </div>

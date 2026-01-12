@@ -1,4 +1,3 @@
-
 // DO add comment above each fix.
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -95,13 +94,13 @@ const SnipeCard = ({ snipe }: { snipe: ActiveSnipe }) => {
 };
 
 interface FomoRunnerProps {
-    flashMoves?: FlashMove[] | null;
-    activeSnipes?: ActiveSnipe[] | null;
+  flashMoves?: FlashMove[];
+  activeSnipes?: ActiveSnipe[];
 }
 
-const FomoRunner: React.FC<FomoRunnerProps> = ({ 
-    flashMoves: propFlashMoves, 
-    activeSnipes: propActiveSnipes 
+const FomoRunner: React.FC<FomoRunnerProps> = ({
+  flashMoves: propFlashMoves,
+  activeSnipes: propActiveSnipes
 }) => {
     const [activeTab, setActiveTab] = useState<'scanner' | 'snipes'>('scanner');
     

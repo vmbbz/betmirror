@@ -1,5 +1,5 @@
 // DO add comment above each fix.
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { 
   Activity, Sword, Zap, ShieldCheck, 
   ExternalLink, TrendingUp, Clock, 
@@ -8,6 +8,16 @@ import {
 } from 'lucide-react';
 
 import { FlashMove, ActiveSnipe } from './types/fomo.types.js';
+
+// Define WebSocket message types
+interface WebSocketMessage {
+    type?: string;
+    data?: {
+        fomoMoves?: any[];
+        [key: string]: any;
+    };
+    [key: string]: any;
+}
 
 const FlashCard = ({ move }: { move: FlashMove }) => {
     const isUp = move.velocity > 0;
@@ -94,19 +104,128 @@ const SnipeCard = ({ snipe }: { snipe: ActiveSnipe }) => {
 };
 
 interface FomoRunnerProps {
-  flashMoves?: FlashMove[];
-  activeSnipes?: ActiveSnipe[];
+  flashMoves?: FlashMove[] | null;
+  activeSnipes?: ActiveSnipe[] | null;
 }
 
 const FomoRunner: React.FC<FomoRunnerProps> = ({
-  flashMoves: propFlashMoves,
-  activeSnipes: propActiveSnipes
+  flashMoves: propFlashMoves = [],
+  activeSnipes: propActiveSnipes = []
 }) => {
+    const [isLoading, setIsLoading] = useState(true);
+    const [isConnected, setIsConnected] = useState(false);
+    const [socket, setSocket] = useState<WebSocket | null>(null);
     const [activeTab, setActiveTab] = useState<'scanner' | 'snipes'>('scanner');
+    const [wsFlashMoves, setWsFlashMoves] = useState<FlashMove[]>([]);
+    const prevFlashMovesCount = useRef(0);
+    const notificationSound = useRef<HTMLAudioElement | null>(null);
     
     // Ensure we always have arrays, even if props are undefined/null
-    const flashMoves = Array.isArray(propFlashMoves) ? propFlashMoves : [];
+    const propFlashMovesArray = Array.isArray(propFlashMoves) ? propFlashMoves : [];
     const activeSnipes = Array.isArray(propActiveSnipes) ? propActiveSnipes : [];
+    
+    // Combine prop-based and WebSocket-based flash moves
+    const flashMoves = [...propFlashMovesArray, ...wsFlashMoves];
+    
+    // Initialize audio
+    useEffect(() => {
+        notificationSound.current = new Audio('/sounds/new-notification-011-364050.mp3');
+        notificationSound.current.volume = 0.5; // Set volume to 50%
+        
+        return () => {
+            if (notificationSound.current) {
+                notificationSound.current.pause();
+                notificationSound.current = null;
+            }
+        };
+    }, []);
+    
+    // Play sound when new flash moves are detected
+    useEffect(() => {
+        const currentCount = flashMoves.length;
+        if (currentCount > 0 && currentCount > prevFlashMovesCount.current) {
+            if (notificationSound.current) {
+                notificationSound.current.currentTime = 0;
+                notificationSound.current.play().catch(e => console.error('Error playing notification sound:', e));
+            }
+        }
+        prevFlashMovesCount.current = currentCount;
+    }, [flashMoves.length]);
+
+    useEffect(() => {
+        const connectWebSocket = () => {
+            try {
+                const ws = new WebSocket('wss://betmirror.bet/socket.io/');
+                
+                ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    setIsConnected(true);
+                    setIsLoading(false);
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const message: WebSocketMessage = JSON.parse(event.data);
+                        
+                        // Safely handle different message formats
+                        let fomoMoves: any[] = [];
+                        
+                        // Handle different possible message structures
+                        if (Array.isArray(message?.data?.fomoMoves)) {
+                            fomoMoves = message.data.fomoMoves;
+                        } else if (Array.isArray(message?.fomoMoves)) {
+                            fomoMoves = message.fomoMoves;
+                        } else if (message?.data && typeof message.data === 'object' && 'fomoMoves' in message.data) {
+                            fomoMoves = Array.isArray((message.data as any).fomoMoves) ? (message.data as any).fomoMoves : [];
+                        }
+                        
+                        // Validate and update state
+                        if (Array.isArray(fomoMoves)) {
+                            const validMoves = fomoMoves.filter(move => 
+                                move && 
+                                typeof move === 'object' && 
+                                'tokenId' in move && 
+                                'velocity' in move
+                            );
+                            setWsFlashMoves(validMoves);
+                        }
+                    } catch (error) {
+                        console.error('Error processing WebSocket message:', error);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    setIsConnected(false);
+                    setIsLoading(false);
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    setIsConnected(false);
+                    setIsLoading(false);
+                    // Attempt to reconnect after a delay
+                    setTimeout(connectWebSocket, 3000);
+                };
+
+                setSocket(ws);
+            } catch (error) {
+                console.error('WebSocket connection error:', error);
+                setIsLoading(false);
+                // Retry connection after a delay
+                setTimeout(connectWebSocket, 5000);
+            }
+        };
+
+        connectWebSocket();
+
+        // Cleanup function
+        return () => {
+            if (socket) {
+                socket.close();
+            }
+        };
+    }, []);
     
     const heat = flashMoves.length > 5 ? 'EXTREME' : flashMoves.length > 0 ? 'HIGH' : 'STABLE';
 

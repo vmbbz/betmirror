@@ -104,7 +104,14 @@ export class MarketIntelligenceService extends EventEmitter {
                 assets_ids: [tokenId], 
                 operation: "subscribe" 
             }));
-            this.logger.debug(`📡 [NEW SUB] Firehose opened for token: ${tokenId.slice(0, 12)}...`);
+            
+            // Only log first 3 subscriptions, then summarize
+            if (this.tokenSubscriptionRefs.size <= 3) {
+                this.logger.debug(`📡 [NEW SUB] Firehose opened for token: ${tokenId.slice(0, 12)}...`);
+            } else if (this.tokenSubscriptionRefs.size % 10 === 0) {
+                // Log every 10th subscription after the first 3
+                this.logger.debug(`📡 [SUBS] Now tracking ${this.tokenSubscriptionRefs.size} tokens...`);
+            }
         }
     }
 

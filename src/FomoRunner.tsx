@@ -94,8 +94,21 @@ const SnipeCard = ({ snipe }: { snipe: ActiveSnipe }) => {
     );
 };
 
-const FomoRunner = ({ flashMoves = [], activeSnipes = [] }: { flashMoves: FlashMove[], activeSnipes: ActiveSnipe[] }) => {
+interface FomoRunnerProps {
+    flashMoves?: FlashMove[] | null;
+    activeSnipes?: ActiveSnipe[] | null;
+}
+
+const FomoRunner: React.FC<FomoRunnerProps> = ({ 
+    flashMoves: propFlashMoves, 
+    activeSnipes: propActiveSnipes 
+}) => {
     const [activeTab, setActiveTab] = useState<'scanner' | 'snipes'>('scanner');
+    
+    // Ensure we always have arrays, even if props are undefined/null
+    const flashMoves = Array.isArray(propFlashMoves) ? propFlashMoves : [];
+    const activeSnipes = Array.isArray(propActiveSnipes) ? propActiveSnipes : [];
+    
     const heat = flashMoves.length > 5 ? 'EXTREME' : flashMoves.length > 0 ? 'HIGH' : 'STABLE';
 
     return (

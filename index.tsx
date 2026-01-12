@@ -2011,12 +2011,12 @@ useEffect(() => {
     });
     
     // Updates fomoMoves which is passed as 'flashMoves' to the FomoRunner component
-    s.on('FOMO_VELOCITY_UPDATE', (moves: any) => {
-        setFomoMoves(moves);
+    s.on('FOMO_VELOCITY_UPDATE', (moves: FlashMove[] | undefined) => {
+        setFomoMoves(Array.isArray(moves) ? moves : []);
     });
     
-    s.on('FOMO_SNIPES_UPDATE', (snipes: any) => {
-        setActiveSnipes(snipes);
+    s.on('FOMO_SNIPES_UPDATE', (snipes: ActiveSnipe[] | undefined) => {
+        setActiveSnipes(Array.isArray(snipes) ? snipes : []);
     });
 
     // Cleanup: Decouple instance from browser lifecycle
@@ -3577,16 +3577,17 @@ return (
 
         {activeTab === 'fomo' && (
             <div className="relative min-h-[300px]">
-                {isLoadingFomo && (
+                {isLoadingFomo ? (
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-10 flex items-center justify-center rounded-xl">
                         <Loader2 className="animate-spin text-blue-500" size={32} />
                         <span className="ml-2 text-white">Loading FOMO data...</span>
                     </div>
+                ) : (
+                    <FomoRunner 
+                        flashMoves={Array.isArray(fomoMoves) ? fomoMoves : []}
+                        activeSnipes={Array.isArray(activeSnipes) ? activeSnipes : []}
+                    />
                 )}
-                <FomoRunner 
-                    flashMoves={fomoMoves}
-                    activeSnipes={activeSnipes}
-                />
             </div>
         )}
         

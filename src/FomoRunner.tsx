@@ -287,7 +287,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                                 </div>
                                 <div className="space-y-2">
                                     <p className="text-white font-black uppercase tracking-[0.4em] text-xs">Awaiting Alpha</p>
-                                    <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">Scanning 1,472 Markets for Pitch Velocity...</p>
+                                    <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">Analyzing markets for opportunities...</p>
                                 </div>
                             </div>
                         ) : (

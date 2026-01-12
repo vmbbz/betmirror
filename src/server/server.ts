@@ -69,7 +69,7 @@ app.use(express.static(distPath) as any);
 // --- GLOBAL ALPHA BROADCAST ---
 // Listen to the intelligence hub and emit to ALL connected users
 globalIntelligence.on('flash_move', async (event: FlashMoveEvent) => {
-    const moves = await globalIntelligence.getLatestMovesFromDB();
+    const moves = await globalIntelligence.getLatestMoves();
     io.emit('FOMO_VELOCITY_UPDATE', { data: { fomoMoves: moves } });
 });
 
@@ -192,7 +192,7 @@ app.get('/health', (req, res) => {
 // 0. Fomo Data Feed
 app.get('/api/fomo/history', async (req, res) => {
     try {
-        const moves = await globalIntelligence.getLatestMovesFromDB();
+        const moves = await globalIntelligence.getLatestMoves();
         res.json(moves);
     } catch (e) { res.status(500).json({ error: 'DB Error' }); }
 });

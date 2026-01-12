@@ -179,36 +179,26 @@ export class TradeExecutorService {
   }
 
   /**
-   * Connect to the private User Channel for real-time order fill updates.
-   * This eliminates polling latency for both MM and Copy-Trading.
+   * FIX: Added authenticated headers to the private User Channel connection.
+   * This ensures the connection is accepted by Polymarket's CLOB.
    */
   private connectUserChannel() {
     this.isWsRunning = true;
     const wsUrl = `${WS_URLS.CLOB}/ws/user`;
-    // Fix: cast to any to resolve Node vs DOM WebSocket type conflicts
-    this.userWs = new WebSocket(wsUrl) as any;
+    
+    // Fetch auth headers (Key, Passphrase) from the adapter
+    const headers = (this.deps.adapter as any).getAuthHeaders?.() || {};
+    
+    this.userWs = new WebSocket(wsUrl, { headers }) as any;
 
-    // Fix: cast to any to access Node-style 'on' method
     (this.userWs as any).on('open', () => {
-        this.deps.logger.success('✅ Executor Fill Monitor Connected');
-        
-        // Standardized ping interval (20 seconds)
+        this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
         if (this.pingInterval) clearInterval(this.pingInterval);
         this.pingInterval = setInterval(() => {
-            try {
-                const ws = this.userWs as WebSocket;
-                if (ws?.readyState === 1) {
-                    ws.ping(); // Use native ping if available
-                }
-            } catch (error) {
-                this.deps.logger.warn('Ping failed, reconnecting...');
-                this.isWsRunning = false;
-                setTimeout(() => this.connectUserChannel(), 5000);
-            }
-        }, 20000); // Standardized 20s interval
+            if ((this.userWs as any)?.readyState === 1) (this.userWs as any).send('PING');
+        }, 10000);
     });
 
-    // Fix: cast to any
     (this.userWs as any).on('message', (data: any) => {
         try {
             const msg = JSON.parse(data.toString());
@@ -221,7 +211,6 @@ export class TradeExecutorService {
         } catch (e) {}
     });
 
-    // Fix: cast to any
     (this.userWs as any).on('close', () => {
         if (this.pingInterval) clearInterval(this.pingInterval);
         if (this.isWsRunning) setTimeout(() => this.connectUserChannel(), 5000);

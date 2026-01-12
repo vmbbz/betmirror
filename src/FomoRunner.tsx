@@ -121,12 +121,10 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
     const prevFlashMovesCount = useRef(0);
     const notificationSound = useRef<HTMLAudioElement | null>(null);
     
-    // Ensure we always have arrays, even if props are undefined/null
     const propFlashMovesArray = Array.isArray(propFlashMoves) ? propFlashMoves : [];
     const activeSnipes = Array.isArray(propActiveSnipes) ? propActiveSnipes : [];
-    
-    // Combine prop-based and WebSocket-based flash moves
     const flashMoves = [...propFlashMovesArray, ...wsFlashMoves];
+    const heat = flashMoves.length > 5 ? 'EXTREME' : flashMoves.length > 0 ? 'HIGH' : 'STABLE';
     
     // Initialize audio
     useEffect(() => {
@@ -168,33 +166,13 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                     setIsLoading(false);
                 });
 
-                socket.on('fomo_update', (data) => {
-                    try {
-                        console.log('Received fomo update:', data);
-                        
-                        // Handle different possible message structures
-                        let fomoMoves: any[] = [];
-                        
-                        if (Array.isArray(data?.fomoMoves)) {
-                            fomoMoves = data.fomoMoves;
-                        } else if (Array.isArray(data)) {
-                            fomoMoves = data;
-                        } else if (data && typeof data === 'object' && 'fomoMoves' in data) {
-                            fomoMoves = Array.isArray((data as any).fomoMoves) ? (data as any).fomoMoves : [];
+                socket.on('FOMO_VELOCITY_UPDATE', (response) => {
+                    if (response?.data?.fomoMoves) {
+                        setWsFlashMoves(response.data.fomoMoves);
+                        if (notificationSound.current) {
+                            notificationSound.current.currentTime = 0;
+                            notificationSound.current.play().catch(() => {});
                         }
-                        
-                        // Validate and update state
-                        if (Array.isArray(fomoMoves)) {
-                            const validMoves = fomoMoves.filter(move => 
-                                move && 
-                                typeof move === 'object' && 
-                                'tokenId' in move && 
-                                'velocity' in move
-                            );
-                            setWsFlashMoves(validMoves);
-                        }
-                    } catch (error) {
-                        console.error('Error processing fomo update:', error);
                     }
                 });
 
@@ -232,10 +210,8 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                 setSocket(null);
             }
         };
-    }, []);
+    }, []);    
     
-    const heat = flashMoves.length > 5 ? 'EXTREME' : flashMoves.length > 0 ? 'HIGH' : 'STABLE';
-
     return (
         <div className="space-y-6 md:space-y-10 animate-in fade-in duration-700 px-0 md:px-4">
             {/* Real-time Hero Section */}

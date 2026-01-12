@@ -1,4 +1,3 @@
-
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -486,6 +485,11 @@ export class BotEngine {
         };
 
         try {
+            // FIX: Using the shared intelligence singleton from constructor to avoid redundant firehose.
+            if (!this.intelligence.isRunning) {
+                await this.intelligence.start();
+            }
+
             // Initialize exchange
             this.exchange = new PolymarketAdapter({
                 rpcUrl: this.config.rpcUrl,
@@ -516,7 +520,7 @@ export class BotEngine {
         } catch (e: any) {
             this.addLog('error', `Startup failed: ${e.message}`);
             this.isRunning = false;
-            throw e; // Re-throw to allow callers to handle the error
+            throw e;
         }
     }
 
@@ -600,16 +604,22 @@ export class BotEngine {
         this.heartbeatInterval = setInterval(async () => {
             if (!this.isRunning) return;
 
-            // 1. User-specific Snipes update
+            // 1. User-specific Snipes update for the UI
             if (this.fomoRunner) {
                 const snipes = this.fomoRunner.getActiveSnipes();
                 this.callbacks?.onFomoSnipes?.(snipes);
             }
 
-            // 2. User-specific Position & Stats sync
+            // 2. Poll intelligence hub for latest moves to push to the UI via callback
+            const moves = await this.intelligence.getLatestMoves();
+            if (moves.length > 0) {
+                this.callbacks?.onFomoVelocity?.(moves);
+            }
+
+            // 3. User-specific Position & Stats sync
             await this.syncPositions();
             await this.syncStats();
-        }, 5000); // 5s is plenty for background sync
+        }, 5000); 
     }
 
     public stop() {
@@ -690,7 +700,7 @@ export class BotEngine {
     }
 
     public getActiveFomoMoves() {
-        return this.intelligence?.getLatestMovesFromDB() || [];
+        return this.intelligence?.getLatestMoves() || [];
     }
 
     public getActiveSnipes() {

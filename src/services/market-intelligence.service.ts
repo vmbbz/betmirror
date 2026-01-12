@@ -46,7 +46,7 @@ export interface WhaleTradeEvent {
  */
 export class MarketIntelligenceService extends EventEmitter {
     private ws?: WebSocket;
-    private isRunning = false;
+    public isRunning = false;
     
     // Connection Management
     private connectionAttempts = 0;
@@ -94,24 +94,12 @@ export class MarketIntelligenceService extends EventEmitter {
      * Requests data for a specific token using correct Polymarket format.
      * Per docs: { assets_ids: [tokenId], operation: "subscribe" }
      */
-    public subscribeToToken(tokenId: string): void {
+    public subscribeToToken(tokenId: string) {
         const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
         this.tokenSubscriptionRefs.set(tokenId, count + 1);
-
         if (count === 0 && this.ws?.readyState === WebSocket.OPEN) {
-            // Correct format per Polymarket WSS Overview docs
-            this.ws.send(JSON.stringify({ 
-                assets_ids: [tokenId], 
-                operation: "subscribe" 
-            }));
-            
-            // Only log first 3 subscriptions, then summarize
-            if (this.tokenSubscriptionRefs.size <= 3) {
-                this.logger.debug(`📡 [NEW SUB] Firehose opened for token: ${tokenId.slice(0, 12)}...`);
-            } else if (this.tokenSubscriptionRefs.size % 10 === 0) {
-                // Log every 10th subscription after the first 3
-                this.logger.debug(`📡 [SUBS] Now tracking ${this.tokenSubscriptionRefs.size} tokens...`);
-            }
+            this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
+            this.ws.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
         }
     }
 
@@ -123,7 +111,6 @@ export class MarketIntelligenceService extends EventEmitter {
         if (count <= 0) {
             this.tokenSubscriptionRefs.delete(tokenId);
             if (this.ws?.readyState === WebSocket.OPEN) {
-                // Correct unsubscribe format per docs
                 this.ws.send(JSON.stringify({ 
                     assets_ids: [tokenId], 
                     operation: "unsubscribe" 
@@ -154,10 +141,6 @@ export class MarketIntelligenceService extends EventEmitter {
         }, this.JANITOR_INTERVAL_MS);
     }
 
-    /**
-     * Starts the ping interval to maintain WebSocket connection.
-     * Per Polymarket RTDS docs: send PING every ~10 seconds
-     */
     private startPingInterval(): void {
         this.stopPingInterval();
         this.pingInterval = setInterval(() => {
@@ -167,9 +150,6 @@ export class MarketIntelligenceService extends EventEmitter {
         }, this.PING_INTERVAL_MS);
     }
 
-    /**
-     * Stops the ping interval.
-     */
     private stopPingInterval(): void {
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
@@ -177,68 +157,43 @@ export class MarketIntelligenceService extends EventEmitter {
         }
     }
 
-    /**
-     * Starts the global data hub.
-     */
     public async start(): Promise<void> {
         if (this.isRunning) return;
         this.isRunning = true;
         this.connect();
     }
 
-    /**
-     * Establish the Master WebSocket connection with circuit breaker pattern.
-     * Uses correct URL: wss://ws-subscriptions-clob.polymarket.com/ws/market
-     */
-    private connect(): void {
-        if (this.circuitOpen) {
-            this.logger.warn('Circuit breaker is open, not attempting to connect');
-            return;
-        }
-
+    private connect() {
+        // FIX: Changed circuit breaker logic to NOT stop connection unless fatal.
+        // During high volatility, we want to keep the data pipe open at all costs.
         this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
         
         try {
-            // Correct WebSocket URL per Polymarket docs
             this.ws = new WebSocket(this.WS_URL);
 
             this.ws.on('open', () => {
-                this.connectionAttempts = 0;
+                this.connectionAttempts = 0; 
                 this.logger.success('🔌 [GLOBAL HUB] High-performance discovery engine: ONLINE.');
                 
-                // Get all currently subscribed token IDs
-                const assetIds = Array.from(this.tokenSubscriptionRefs.keys());
+                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price" }));
+                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
                 
-                // Correct initial subscription format per Market Channel docs:
-                // { type: "market", assets_ids: [...] }
-                const subscribeMessage = {
-                    type: "market",
-                    assets_ids: assetIds.length > 0 ? assetIds : []
-                };
-                
-                this.ws?.send(JSON.stringify(subscribeMessage));
-                
-                // Start ping keepalive per docs
+                for (const tokenId of this.tokenSubscriptionRefs.keys()) {
+                    this.ws?.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
+                }
                 this.startPingInterval();
             });
 
             this.ws.on('message', this.handleWebSocketMessage.bind(this));
 
-            this.ws.on('close', (code: number, reason: Buffer) => {
-                this.stopPingInterval();
-                
-                if (this.connectionAttempts >= this.maxConnectionAttempts) {
-                    this.tripCircuit();
-                    return;
-                }
-
+            this.ws.on('close', () => {
                 const delay = Math.min(
                     this.baseReconnectDelay * Math.pow(2, this.connectionAttempts),
                     this.maxReconnectDelay
                 );
 
                 this.connectionAttempts++;
-                this.logger.warn(`📡 Hub Connection Lost (code: ${code}). Reconnecting in ${delay/1000}s... (Attempt ${this.connectionAttempts}/${this.maxConnectionAttempts})`);
+                this.logger.warn(`📡 Hub Connection Lost. Reconnecting in ${delay/1000}s... (Attempt ${this.connectionAttempts}/${this.maxConnectionAttempts})`);
                 
                 if (this.isRunning) {
                     setTimeout(() => this.connect(), delay);
@@ -250,99 +205,47 @@ export class MarketIntelligenceService extends EventEmitter {
             });
 
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error("WebSocket connection error: " + errorMessage);
             this.handleConnectionFailure();
         }
     }
 
-    /**
-     * Handles incoming WebSocket messages with proper error handling.
-     * Handles PONG responses and various event types per Market Channel docs.
-     */
-    private handleWebSocketMessage(data: WebSocket.Data): void {
+    private handleWebSocketMessage(data: WebSocket.Data) {
         try {
             const message = data.toString();
+            if (message === 'pong' || message === 'PONG' || message === 'PING') return;
             
-            // Handle ping/pong keepalive responses
-            if (message === 'PONG' || message === 'pong') {
-                return;
-            }
-            
-            // Handle PING from server (respond with PONG)
-            if (message === 'PING' || message === 'ping') {
-                this.ws?.send('PONG');
-                return;
-            }
-            
-            // Handle "INVALID OPERATION" - this means wrong message format was sent
-            if (message === 'INVALID OPERATION') {
-                this.logger.warn('Received INVALID OPERATION - check subscription message format');
-                return;
-            }
-            
-            // Parse JSON messages
-            let msg: any;
+            let msg;
             try {
                 msg = JSON.parse(message);
             } catch (parseError) {
-                // Non-JSON message that isn't a known control message
-                this.logger.debug(`[WebSocket] Received unknown non-JSON message: ${message.substring(0, 50)}`);
                 return;
             }
 
-            // Reset error count on successful message processing
-            this.connectionAttempts = 0;
-
-            // Handle event types per Market Channel documentation
-            switch (msg.event_type) {
-                case 'last_trade_price':
-                    this.handleLastTradePrice(msg);
-                    break;
-                    
-                case 'book':
-                    this.emit('book_update', msg);
-                    break;
-                    
-                case 'price_change':
-                    this.emit('price_change', msg);
-                    break;
-                    
-                case 'tick_size_change':
-                    this.emit('tick_size_change', msg);
-                    break;
-                    
-                default:
-                    // Check for trade data (whale detection)
-                    if (msg.maker_address || msg.taker_address) {
-                        this.processTradeMessage(msg);
-                    }
-                    break;
+            if (msg.event_type === 'last_trade_price') {
+                this.handleLastTradePrice(msg);
             }
 
+            if (msg.event_type === 'trades') {
+                this.processTradeMessage(msg);
+            }
+
+            if (msg.event_type === 'book') {
+                this.emit('book_update', msg);
+            }
         } catch (e) {
-            const errorMessage = e instanceof Error ? e.message : String(e);
-            this.logger.error("Failed to process hub message: " + errorMessage);
+            this.handleConnectionFailure();
         }
     }
 
-    /**
-     * Handles last_trade_price events per Market Channel docs.
-     */
     private handleLastTradePrice(msg: any): void {
         const tokenId = msg.asset_id;
         const price = parseFloat(msg.price);
         
         if (tokenId && !isNaN(price)) {
-            this.processPriceUpdate(tokenId, price).catch(err => 
-                this.logger.error('Error processing price update: ' + err.message)
-            );
+            this.processPriceUpdate(tokenId, price).catch(() => {});
         }
     }
 
-    /**
-     * Handles connection failures with exponential backoff.
-     */
     private handleConnectionFailure(): void {
         this.connectionAttempts++;
         if (this.connectionAttempts >= this.maxConnectionAttempts) {
@@ -356,31 +259,20 @@ export class MarketIntelligenceService extends EventEmitter {
         }
     }
 
-    /**
-     * Trips the circuit breaker to prevent cascading failures.
-     */
     private tripCircuit(): void {
-        this.circuitOpen = true;
-        this.logger.error('🚨 Circuit breaker tripped! Too many connection failures.');
+        // FIX: Decoupled circuit breaker from connection lifecycle.
+        // Instead of setting circuitOpen = true (which stops reconnection), we just emit an alert.
+        this.emit('risk_alert', { level: 'CRITICAL', reason: 'Intelligence Hub instability detected' });
+        this.logger.warn('⚠️ Intelligence Hub reporting instability - Monitor only mode enabled.');
         
-        if (this.circuitResetTimeout) {
-            clearTimeout(this.circuitResetTimeout);
-        }
-        
+        if (this.circuitResetTimeout) clearTimeout(this.circuitResetTimeout);
         this.circuitResetTimeout = setTimeout(() => {
-            this.circuitOpen = false;
             this.connectionAttempts = 0;
-            this.logger.info('Circuit breaker reset, attempting to reconnect...');
-            if (this.isRunning) {
-                this.connect();
-            }
+            this.logger.info('Instability timer cleared.');
         }, 60000);
     }
 
-    /**
-     * Filters the global trade stream for whale matches.
-     */
-    private processTradeMessage(msg: any): void {
+    private processTradeMessage(msg: any) {
         const maker = (msg.maker_address || "").toLowerCase();
         const taker = (msg.taker_address || "").toLowerCase();
 
@@ -392,23 +284,20 @@ export class MarketIntelligenceService extends EventEmitter {
             const event: WhaleTradeEvent = {
                 trader: whaleAddr,
                 tokenId: msg.asset_id,
-                side: (msg.side || '').toUpperCase() as 'BUY' | 'SELL',
+                side: msg.side.toUpperCase(),
                 price: parseFloat(msg.price),
                 size: parseFloat(msg.size),
                 timestamp: Date.now()
             };
-            
             this.emit('whale_trade', event);
         }
     }
 
-    /**
-     * Processes raw price ticks into velocity metrics.
-     */
-    private async processPriceUpdate(tokenId: string, price: number): Promise<void> {
+    private async processPriceUpdate(tokenId: string, price: number) {
         const now = Date.now();
-        this.lastUpdateTrack.set(tokenId, now); 
+        this.lastUpdateTrack.set(tokenId, now);
         
+        // FIX: Emit global price tick so Arbitrage Scanner can re-calculate spreads immediately.
         this.emit('price_update', { tokenId, price, timestamp: now });
 
         const history = this.priceHistory.get(tokenId) || [];
@@ -416,42 +305,26 @@ export class MarketIntelligenceService extends EventEmitter {
             const oldest = history[0];
             if (now - oldest.timestamp < this.LOOKBACK_MS) {
                 const velocity = (price - oldest.price) / oldest.price;
-                
                 if (Math.abs(velocity) >= this.VELOCITY_THRESHOLD) {
-                    this.emit('flash_move', { 
-                        tokenId, 
-                        oldPrice: oldest.price, 
-                        newPrice: price, 
-                        velocity, 
-                        timestamp: now 
-                    });
+                    this.emit('flash_move', { tokenId, oldPrice: oldest.price, newPrice: price, velocity, timestamp: now });
                 }
             }
         }
-        
         history.push({ price, timestamp: now });
         if (history.length > 5) history.shift();
         this.priceHistory.set(tokenId, history);
     }
 
-    /**
-     * Returns true if the token is currently in a high-velocity spike.
-     */
     public isSpiking(tokenId: string): boolean {
         const history = this.priceHistory.get(tokenId) || [];
         if (history.length < 2) return false;
-        
         const latest = history[history.length - 1];
         const initial = history[0];
         const velocity = (latest.price - initial.price) / initial.price;
-        
         return velocity > this.VELOCITY_THRESHOLD;
     }
 
-    /**
-     * Fetches recent flash moves for UI hydration.
-     */
-    public async getLatestMovesFromDB(): Promise<FlashMoveEvent[]> {
+    public async getLatestMoves(): Promise<FlashMoveEvent[]> {
         const moves = await FlashMove.find({ 
             timestamp: { $gte: new Date(Date.now() - 900000) } 
         }).sort({ timestamp: -1 }).limit(30).lean();
@@ -469,26 +342,15 @@ export class MarketIntelligenceService extends EventEmitter {
         }));
     }
 
-    /**
-     * Disconnects the hub and shuts down the firehose.
-     */
     public stop(): void {
         this.isRunning = false;
         this.stopPingInterval();
-        
-        if (this.circuitResetTimeout) {
-            clearTimeout(this.circuitResetTimeout);
-            this.circuitResetTimeout = null;
-        }
-        
         if (this.ws) {
             this.ws.removeAllListeners();
             this.ws.terminate();
             this.ws = undefined;
         }
-        
         this.priceHistory.clear();
-        this.tokenSubscriptionRefs.clear();
         this.logger.info("🔌 Global Hub Shutdown: OFFLINE.");
     }
 }

@@ -55,7 +55,7 @@ app.use(express.static(distPath));
 // Listen to the intelligence hub and emit to ALL connected users
 globalIntelligence.on('flash_move', async (event) => {
     const moves = await globalIntelligence.getLatestMovesFromDB();
-    io.emit('FOMO_VELOCITY_UPDATE', moves);
+    io.emit('FOMO_VELOCITY_UPDATE', { data: { fomoMoves: moves } });
 });
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId, config) {

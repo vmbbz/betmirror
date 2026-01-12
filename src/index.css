@@ -8,6 +8,9 @@ body {
   color: #0f172a; /* Slate-900 */
   font-family: 'Inter', sans-serif;
   transition: background-color 0.3s, color 0.3s;
+  /* Fix for webkit text size adjust */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 .dark body {

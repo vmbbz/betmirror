@@ -955,6 +955,100 @@ app.get('/api/market/:marketId', async (req, res) => {
         }
     }
 });
+// --- NEW MM SCANNER ENDPOINTS ---
+app.post('/api/bot/mm/add-market', async (req, res) => {
+    const { userId, conditionId, slug } = req.body;
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine)
+        return res.status(404).json({ error: "Engine offline" });
+    try {
+        const success = conditionId
+            ? await engine.addMarketToMM(conditionId)
+            : await engine.addMarketBySlug(slug);
+        res.json({ success });
+    }
+    catch (error) {
+        console.error('Error adding market:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to add market'
+        });
+    }
+});
+// In src/server/server.ts, update the /api/bot/mm/bookmark endpoint
+app.post('/api/bot/mm/bookmark', async (req, res) => {
+    const { userId, marketId, isBookmarked } = req.body;
+    console.log('📌 Bookmark request:', { userId, marketId, isBookmarked });
+    if (!userId) {
+        console.error('❌ No userId provided in request');
+        return res.status(400).json({ error: "userId is required" });
+    }
+    if (marketId === undefined) {
+        console.error('❌ No marketId provided in request');
+        return res.status(400).json({ error: "marketId is required" });
+    }
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine) {
+        console.error(`❌ No engine found for user: ${userId}`);
+        return res.status(404).json({ error: "Trading engine is not running. Please start the bot first." });
+    }
+    try {
+        console.log(`🔄 ${isBookmarked ? 'Bookmarking' : 'Unbookmarking'} market:`, marketId);
+        // Update in-memory state
+        if (isBookmarked) {
+            engine.bookmarkMarket(marketId);
+        }
+        else {
+            engine.unbookmarkMarket(marketId);
+        }
+        // Update database
+        const update = isBookmarked
+            ? { $addToSet: { bookmarkedMarkets: marketId } }
+            : { $pull: { bookmarkedMarkets: marketId } };
+        await User.updateOne({ address: normId }, update);
+        console.log(`✅ Successfully ${isBookmarked ? 'bookmarked' : 'unbookmarked'} market:`, marketId);
+        res.json({ success: true });
+    }
+    catch (error) {
+        console.error('❌ Error updating bookmark:', error);
+        res.status(500).json({
+            error: 'Failed to update bookmark',
+            details: error instanceof Error ? error.message : String(error)
+        });
+    }
+});
+app.get('/api/bot/mm/bookmarks', async (req, res) => {
+    const { userId } = req.query;
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine)
+        return res.status(404).json({ error: "Engine offline" });
+    res.json({ success: true, bookmarks: engine.getBookmarkedOpportunities() });
+});
+app.get('/api/bot/mm/opportunities/:category', async (req, res) => {
+    const { userId } = req.query;
+    const { category } = req.params;
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine)
+        return res.status(404).json({ error: "Engine offline" });
+    if (!engine.getArbOpportunities) {
+        return res.json({ success: true, opportunities: [] });
+    }
+    try {
+        const opportunities = engine.getOpportunitiesByCategory(category);
+        res.json({ success: true, opportunities });
+    }
+    catch (error) {
+        console.error('Error getting opportunities by category:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get opportunities'
+        });
+    }
+});
 app.get('*', (req, res) => {
     const indexPath = path.join(distPath, 'index.html');
     if (!fs.existsSync(indexPath)) {

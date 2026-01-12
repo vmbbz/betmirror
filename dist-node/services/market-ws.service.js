@@ -41,14 +41,19 @@ export class MarketWebSocketService extends EventEmitter {
                     this.subscribeToMarket(marketId);
                 });
             }
-            // Set up interval to keep connection alive
+            // Standardized ping interval (20 seconds)
             this.pingInterval = setInterval(() => {
-                // FIX: Browser WebSocket doesn't have .ping(), sending a message-based ping if needed
-                // Most servers handle connection health via standard TCP pings or idle timeouts
-                if (this.ws?.readyState === WebSocket.OPEN) {
-                    this.ws.send('ping');
+                try {
+                    if (this.ws?.readyState === WebSocket.OPEN) {
+                        // Use send with ping message for compatibility
+                        this.ws.send(JSON.stringify({ type: 'ping' }));
+                    }
                 }
-            }, 30000);
+                catch (error) {
+                    this.logger.warn('Ping failed, reconnecting...');
+                    this.handleReconnect();
+                }
+            }, 20000); // Standardized 20s interval
         };
         this.ws.onmessage = (event) => {
             try {

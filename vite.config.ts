@@ -23,6 +23,12 @@ export default defineConfig(({ mode }) => {
           secure: false,
         },
       },
+      headers: {
+        // Ensure proper MIME types for static assets
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+        '.mjs': 'application/javascript',
+      },
     },
     define: {
       // Expose env variables to the client
@@ -31,6 +37,10 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist', // Frontend goes here
       emptyOutDir: true,
+    },
+    css: {
+      postcss: {},
+      devSourcemap: true,
     },
   };
 });

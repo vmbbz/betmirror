@@ -2,6 +2,17 @@ import mongoose, { Schema } from 'mongoose';
 import { DatabaseEncryptionService } from '../services/database-encryption.service.js';
 // Initialize the encryption service immediately with the environment key
 DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
+const FlashMoveSchema = new Schema({
+    tokenId: { type: String, required: true, index: true },
+    conditionId: String,
+    oldPrice: Number,
+    newPrice: Number,
+    velocity: Number,
+    timestamp: { type: Date, default: Date.now, index: true },
+    question: String,
+    image: String,
+    marketSlug: String
+});
 const SportsMatchSchema = new Schema({
     matchId: { type: String, required: true, unique: true },
     conditionId: { type: String, required: true, index: true },
@@ -216,6 +227,7 @@ export { CopiedTrade, HunterEarning, WalletAnalytics } from './trade-tracking.sc
 export const BridgeTransaction = mongoose.model('BridgeTransaction', BridgeTransactionSchema);
 export const DepositLog = mongoose.model('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model('BotLog', BotLogSchema);
+export const FlashMove = mongoose.model('FlashMove', FlashMoveSchema);
 export const MoneyMarketOpportunity = mongoose.model('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
 export const SportsMatch = mongoose.model('SportsMatch', SportsMatchSchema);
 // --- Connection ---

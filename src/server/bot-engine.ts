@@ -486,6 +486,7 @@ export class BotEngine {
         };
 
         try {
+            // Initialize exchange
             this.exchange = new PolymarketAdapter({
                 rpcUrl: this.config.rpcUrl,
                 walletConfig: this.config.walletConfig!,
@@ -499,6 +500,7 @@ export class BotEngine {
             await this.exchange.initialize();
             await this.exchange.authenticate();
 
+            // Initialize executor
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,
                 proxyWallet: this.exchange.getFunderAddress(),
@@ -506,18 +508,72 @@ export class BotEngine {
                 logger: engineLogger
             });
 
-            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
-            this.fomoRunner.setConfig(this.config.enableFomoRunner, (this.config.autoTp || 20) / 100);
+            // Initialize all core modules
+            this.initializeCoreModules(engineLogger);
+            
+            this.startHeartbeat();
+            this.addLog('success', 'Full Strategy Engine Online.');
+        } catch (e: any) {
+            this.addLog('error', `Startup failed: ${e.message}`);
+            this.isRunning = false;
+            throw e; // Re-throw to allow callers to handle the error
+        }
+    }
 
-            // WIRE UP THE MONITOR (Now event-driven)
+    private initializeCoreModules(logger: Logger) {
+        if (!this.exchange || !this.executor) return;
+        
+        const funder = this.exchange.getFunderAddress();
+
+        // Initialize position monitoring
+        this.positionMonitor = new PositionMonitorService(
+            this.exchange, 
+            funder, 
+            { checkInterval: 30000, priceCheckInterval: 60000 },
+            logger, 
+            async (pos, reason) => { 
+                await this.executor?.executeManualExit(pos, 0);
+            }
+        );
+
+        // Initialize portfolio tracking
+        this.portfolioTracker = new PortfolioTrackerService(
+            this.exchange, 
+            funder, 
+            (this.config.maxTradeAmount || 1000) * 10, 
+            logger, 
+            this.positionMonitor,
+            (positions) => {
+                this.activePositions = positions;
+                this.callbacks?.onPositionsUpdate?.(positions);
+            }
+        );
+
+        // Initialize market making scanner if enabled
+        if (this.config.enableMoneyMarkets) {
+            this.arbScanner = new MarketMakingScanner(this.intelligence, this.exchange, logger);
+            this.arbScanner.start();
+        }
+
+        // Initialize FOMO runner if enabled
+        if (this.config.enableFomoRunner) {
+            this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, logger);
+            this.fomoRunner.setConfig(true, (this.config.autoTp || 20) / 100);
+        }
+
+        // Initialize trade monitor if copy trading is enabled
+        if (this.config.enableCopyTrading) {
             this.monitor = new TradeMonitorService({
                 adapter: this.exchange,
                 intelligence: this.intelligence,
-                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
-                logger: engineLogger,
+                env: { 
+                    tradeMultiplier: this.config.multiplier, 
+                    maxTradeAmount: this.config.maxTradeAmount || 100 
+                } as any,
+                logger,
                 userAddresses: this.config.userAddresses,
                 onDetectedTrade: async (signal: TradeSignal) => {
-                    if (!this.isRunning || !this.config.enableCopyTrading) return;
+                    if (!this.isRunning) return;
                     const result: ExecutionResult = await this.executor!.copyTrade(signal);
                     if (result.status === 'FILLED' && this.callbacks?.onTradeComplete) {
                         this.callbacks.onTradeComplete({
@@ -531,63 +587,12 @@ export class BotEngine {
                             price: result.priceFilled,
                             status: 'FILLED'
                         });
-                        this.syncPositions();
+                        await this.syncPositions();
                     }
                 }
             });
-
-            if (this.config.enableCopyTrading) this.monitor.start();
-            this.startHeartbeat();
-            
-            this.addLog('success', 'Full Strategy Engine Online.');
-        } catch (e: any) {
-            this.addLog('error', `Startup failed: ${e.message}`);
-            this.isRunning = false;
+            this.monitor.start();
         }
-    }
-
-    private initializeCoreModules(logger: Logger) {
-        if (!this.exchange) return;
-        const funder = this.exchange.getFunderAddress();
-
-        this.positionMonitor = new PositionMonitorService(
-            this.exchange, funder, { checkInterval: 30000, priceCheckInterval: 60000 },
-            logger, 
-            async (pos, reason) => { 
-                await this.executor?.executeManualExit(pos, 0);
-            }
-        );
-
-        this.portfolioTracker = new PortfolioTrackerService(
-            this.exchange, funder, (this.config.maxTradeAmount || 1000) * 10, 
-            logger, this.positionMonitor,
-            (positions) => {
-                this.activePositions = positions;
-                this.callbacks?.onPositionsUpdate?.(positions);
-            }
-        );
-
-        this.arbScanner = new MarketMakingScanner(this.intelligence, this.exchange, logger);
-        this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor!, this.exchange, logger);
-        this.fomoRunner.setConfig(this.config.enableFomoRunner, (this.config.autoTp || 20) / 100);
-
-        this.monitor = new TradeMonitorService({
-            adapter: this.exchange,
-            intelligence: this.intelligence,
-            env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 } as any,
-            logger,
-            userAddresses: this.config.userAddresses,
-            onDetectedTrade: async (signal: TradeSignal) => {
-                if (!this.isRunning || !this.config.enableCopyTrading) return;
-                const result: ExecutionResult = await this.executor!.copyTrade(signal);
-                if (result.status === 'FILLED') {
-                    await this.syncPositions();
-                }
-            }
-        });
-
-        if (this.config.enableCopyTrading) this.monitor.start();
-        if (this.config.enableMoneyMarkets) this.arbScanner.start();
     }
 
     private startHeartbeat() {
@@ -690,6 +695,14 @@ export class BotEngine {
 
     public getActiveSnipes() {
         return this.fomoRunner?.getActiveSnipes() || [];
+    }
+
+    public getOpportunitiesByCategory(category: string): any[] {
+        if (!this.arbScanner) return [];
+        const allOpps = this.arbScanner.getOpportunities();
+        return allOpps.filter(opp => 
+            opp.category?.toLowerCase() === category.toLowerCase()
+        );
     }
     
     public getActivePositions(): ActivePosition[] { return this.activePositions; }

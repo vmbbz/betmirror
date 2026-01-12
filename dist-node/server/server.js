@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import 'dotenv/config';
 import mongoose from 'mongoose';
+import { Server as SocketIOServer } from 'socket.io';
+import { createServer } from 'http';
 import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning } from '../database/index.js';
@@ -13,6 +15,7 @@ import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
+import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import axios from 'axios';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -20,13 +23,13 @@ import crypto from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
-const PORT = process.env.PORT || 3000;
-const ENV = loadEnv();
-// Service Singletons
-const dbRegistryService = new DbRegistryService();
-const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
-// In-Memory Bot Instances (Runtime State)
-const ACTIVE_BOTS = new Map();
+const httpServer = createServer(app);
+const io = new SocketIOServer(httpServer, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 // Simple Logger for Server context
 const serverLogger = {
     info: (msg) => console.log(`[SERVER] ${msg}`),
@@ -35,44 +38,41 @@ const serverLogger = {
     debug: (msg) => console.debug(`[SERVER DEBUG] ${msg}`),
     success: (msg) => console.log(`[SERVER SUCCESS] ${msg}`)
 };
+const PORT = process.env.PORT || 3000;
+const ENV = loadEnv();
+// Service Singletons
+const dbRegistryService = new DbRegistryService();
+const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
+const globalIntelligence = new MarketIntelligenceService(serverLogger);
+// In-Memory Bot Instances (Runtime State)
+const ACTIVE_BOTS = new Map();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 // --- STATIC FILES (For Production) ---
 const distPath = path.join(__dirname, '../../dist');
 app.use(express.static(distPath));
+// --- GLOBAL ALPHA BROADCAST ---
+// Listen to the intelligence hub and emit to ALL connected users
+globalIntelligence.on('flash_move', async (event) => {
+    const moves = await globalIntelligence.getLatestMovesFromDB();
+    io.emit('FOMO_VELOCITY_UPDATE', moves);
+});
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId, config) {
     const normId = userId.toLowerCase();
-    if (ACTIVE_BOTS.has(normId)) {
+    if (ACTIVE_BOTS.has(normId))
         ACTIVE_BOTS.get(normId)?.stop();
-    }
-    const startCursor = config.startCursor || Math.floor(Date.now() / 1000);
-    const engineConfig = { ...config, userId: normId, startCursor };
-    const engine = new BotEngine(engineConfig, dbRegistryService, {
-        // FOMO: This bridges the engine data to the frontend
-        onFomoVelocity: (moves) => {
-            if (moves.length > 0) {
-                serverLogger.info(`[FOMO] ${normId} detected ${moves.length} high-velocity moves.`);
-            }
-        },
-        onFomoSnipes: (snipes) => {
-            if (snipes.length > 0) {
-                serverLogger.info(`[FOMO] ${normId} monitoring ${snipes.length} active snipes.`);
-            }
-        },
+    const engine = new BotEngine(config, globalIntelligence, dbRegistryService, {
+        // Redundant onFomoVelocity REMOVED - handled by global listener above
+        onFomoSnipes: (snipes) => io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes),
         onPositionsUpdate: async (positions) => {
-            // We still update DB for persistence/backup, but UI will prefer live feed
             await User.updateOne({ address: normId }, { activePositions: positions });
-        },
-        onCashout: async (record) => {
-            await User.updateOne({ address: normId }, { $push: { cashoutHistory: record } });
+            io.to(normId).emit('POSITIONS_UPDATE', positions);
         },
         onTradeComplete: async (trade) => {
             try {
-                // FOMO UPDATE: Handle the service origin for sniper tracking
                 const origin = trade.serviceOrigin || 'COPY';
-                serverLogger.info(`Trade Complete [${origin}] for ${normId}: ${trade.side} ${trade.outcome} | Executed: $${trade.executedSize?.toFixed(2) || 0}`);
-                // ATOMIC STATS UPDATE
+                serverLogger.info(`Trade Complete [${origin}] for ${normId}: ${trade.side} ${trade.outcome}`);
                 const update = {
                     $inc: {
                         'stats.totalVolume': trade.executedSize || 0,
@@ -90,35 +90,22 @@ async function startUserBot(userId, config) {
                 const exists = await Trade.findById(trade.id);
                 if (!exists) {
                     await Trade.create({
-                        _id: trade.id,
-                        userId: normId,
-                        marketId: trade.marketId,
-                        outcome: trade.outcome,
-                        side: trade.side,
-                        size: trade.size,
-                        executedSize: trade.executedSize || 0,
-                        price: trade.price,
-                        pnl: trade.pnl,
-                        status: trade.status,
-                        txHash: trade.txHash,
-                        clobOrderId: trade.clobOrderId,
-                        assetId: trade.assetId,
-                        aiReasoning: trade.aiReasoning,
-                        riskScore: trade.riskScore,
-                        timestamp: trade.timestamp,
-                        marketSlug: trade.marketSlug,
-                        eventSlug: trade.eventSlug,
-                        serviceOrigin: origin
+                        _id: trade.id, userId: normId, marketId: trade.marketId, outcome: trade.outcome,
+                        side: trade.side, size: trade.size, executedSize: trade.executedSize || 0,
+                        price: trade.price, pnl: trade.pnl, status: trade.status, txHash: trade.txHash,
+                        clobOrderId: trade.clobOrderId, assetId: trade.assetId,
+                        aiReasoning: trade.aiReasoning, riskScore: trade.riskScore,
+                        timestamp: trade.timestamp, marketSlug: trade.marketSlug,
+                        eventSlug: trade.eventSlug, serviceOrigin: origin
                     });
                 }
                 else {
-                    // Update existing trade entry (e.g. closing an open position)
                     await Trade.findByIdAndUpdate(trade.id, {
-                        status: trade.status,
-                        pnl: trade.pnl,
+                        status: trade.status, pnl: trade.pnl,
                         executedSize: trade.executedSize || exists.executedSize
                     });
                 }
+                io.to(normId).emit('TRADE_COMPLETE', trade);
             }
             catch (err) {
                 serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
@@ -132,10 +119,9 @@ async function startUserBot(userId, config) {
                     'stats.allowanceApproved': stats.allowanceApproved
                 }
             });
+            io.to(normId).emit('STATS_UPDATE', stats);
         },
-        onArbUpdate: async (opportunities) => {
-            // Memory update handled by poll
-        },
+        onLog: (log) => io.to(normId).emit('BOT_LOG', log),
         onFeePaid: async (event) => {
             const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
             if (lister) {
@@ -145,24 +131,28 @@ async function startUserBot(userId, config) {
             }
         }
     });
-    // Load bookmarks for this user
+    // Load bookmarks
     try {
         const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
-        const bookmarks = user?.bookmarkedMarkets || [];
-        if (bookmarks.length > 0) {
+        if (user?.bookmarkedMarkets?.length) {
             const scanner = engine.arbScanner;
             if (scanner && typeof scanner.initializeBookmarks === 'function') {
-                scanner.initializeBookmarks(bookmarks);
-                console.log(`📌 Initialized ${bookmarks.length} bookmarks for user ${normId}`);
+                scanner.initializeBookmarks(user.bookmarkedMarkets);
             }
         }
     }
-    catch (e) {
-        console.error(`Failed to load bookmarks for ${normId}:`, e);
-    }
+    catch (e) { }
     ACTIVE_BOTS.set(normId, engine);
-    engine.start().catch(err => console.error(`[Bot Error] ${normId}:`, err.message));
+    await engine.start();
 }
+// Socket.io Room Management
+io.on('connection', (socket) => {
+    socket.on('join', (userId) => {
+        const normId = userId.toLowerCase();
+        socket.join(normId);
+        serverLogger.info(`Socket ${socket.id} joined room: ${normId}`);
+    });
+});
 // 0. Health Check
 app.get('/health', (req, res) => {
     const dbState = mongoose.connection.readyState;
@@ -172,6 +162,16 @@ app.get('/health', (req, res) => {
         db: dbStatusMap[dbState] || 'unknown',
         activeBots: ACTIVE_BOTS.size
     });
+});
+// 0. Fomo Data Feed
+app.get('/api/fomo/history', async (req, res) => {
+    try {
+        const moves = await globalIntelligence.getLatestMovesFromDB();
+        res.json(moves);
+    }
+    catch (e) {
+        res.status(500).json({ error: 'DB Error' });
+    }
 });
 // 1. Check Status / Init
 app.post('/api/wallet/status', async (req, res) => {
@@ -1110,13 +1110,15 @@ app.get('/api/portfolio/latest/:userId', async (req, res) => {
     }
 });
 // --- BOOTSTRAP ---
-const server = app.listen(Number(PORT), '0.0.0.0', () => {
+httpServer.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`🌍 Bet Mirror Server running on port ${PORT}`);
 });
 connectDB()
     .then(async () => {
     console.log("✅ DB Connected. Syncing system...");
     await seedRegistry();
+    // Explicitly start intelligence service on the global singleton
+    await globalIntelligence.start();
     restoreBots();
 })
     .catch((err) => {

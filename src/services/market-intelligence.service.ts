@@ -1,23 +1,20 @@
-
 import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { WS_URLS } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 import { FlashMove } from '../database/index.js';
-import axios from 'axios';
 
+/**
+ * PriceSnapshot: Simple structure for tracking price velocity.
+ */
 export interface PriceSnapshot {
     price: number;
     timestamp: number;
 }
-export interface WhaleTradeEvent {
-    trader: string;
-    tokenId: string;
-    side: 'BUY' | 'SELL';
-    price: number;
-    size: number;
-    timestamp: number;
-}
+
+/**
+ * FlashMoveEvent: Pushed when a token exhibits high price velocity.
+ */
 export interface FlashMoveEvent {
     tokenId: string;
     conditionId: string;
@@ -31,139 +28,186 @@ export interface FlashMoveEvent {
 }
 
 /**
- * WORLD CLASS: Global Intelligence Hub (True Singleton)
- * Optimized for low memory footprint and high-frequency data.
+ * WhaleTradeEvent: Pushed when a whitelisted address executes a trade.
+ */
+export interface WhaleTradeEvent {
+    trader: string;
+    tokenId: string;
+    side: 'BUY' | 'SELL';
+    price: number;
+    size: number;
+    timestamp: number;
+}
+
+/**
+ * GLOBAL INTELLIGENCE HUB: MarketIntelligenceService
+ * 
+ * Purpose: This is the ONLY service that maintains the primary WebSocket firehose 
+ * to Polymarket. It acts as a data broker for all other bot modules.
+ * 
+ * Efficiency: 
+ * - One TCP connection for all bots.
+ * - O(1) Whale lookups via Hash Sets.
+ * - Ref-counted subscription management.
  */
 export class MarketIntelligenceService extends EventEmitter {
     private ws?: WebSocket;
     private isRunning = false;
     
-    // Memory-efficient storage
+    // Core Data Structures
     private priceHistory: Map<string, PriceSnapshot[]> = new Map();
-    private metadataCache: Map<string, { data: any, ts: number }> = new Map();
     private lastUpdateTrack: Map<string, number> = new Map();
-    private mutedTokens: Set<string> = new Set();
-    // Global Watchlist of addresses we are interested in across all users
+    
+    // Subscription Management: Tracks how many modules are interested in a specific token
+    private tokenSubscriptionRefs: Map<string, number> = new Map();
+    
+    // Global Watchlist: Aggregated set of all whale addresses followed by all users
     private globalWatchlist: Set<string> = new Set();
     
-    private readonly VELOCITY_THRESHOLD = 0.05; 
-    private readonly LOOKBACK_MS = 15000;      
-    private readonly STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
-    private readonly JANITOR_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    // Performance Parameters
+    private readonly VELOCITY_THRESHOLD = 0.05; // 5% move
+    private readonly LOOKBACK_MS = 15000;      // 15 second window
+    private readonly JANITOR_INTERVAL_MS = 5 * 60 * 1000; // 5 minute cleanup
 
     constructor(private logger: Logger) {
         super();
-        this.setMaxListeners(10000);
+        // Allow the hub to scale to thousands of concurrent listeners without warnings
+        this.setMaxListeners(10000); 
         this.startJanitor();
     }
 
     /**
-     * THE JANITOR
-     * Periodically prunes stale data to prevent memory leaks (OOM).
+     * Updates the global whale filter. 
+     * When a new bot starts, it registers its whales here to enable O(1) matching 
+     * on the incoming trade firehose.
+     */
+    public updateWatchlist(addresses: string[]) {
+        addresses.forEach(addr => this.globalWatchlist.add(addr.toLowerCase()));
+        this.logger.debug(`[Intelligence] Global hub watchlist updated: ${this.globalWatchlist.size} whales total.`);
+    }
+
+    /**
+     * Requests data for a specific token (Prices + Orderbook).
+     * Uses ref-counting to ensure we only send one 'subscribe' message to the server.
+     */
+    public subscribeToToken(tokenId: string) {
+        const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
+        this.tokenSubscriptionRefs.set(tokenId, count + 1);
+
+        if (count === 0 && this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
+            this.ws.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
+            this.logger.debug(`📡 [NEW SUB] Firehose opened for token: ${tokenId.slice(0, 12)}...`);
+        }
+    }
+
+    /**
+     * Decrements interest in a token. Closes the pipe to the server if no bots remain.
+     */
+    public unsubscribeFromToken(tokenId: string) {
+        const count = (this.tokenSubscriptionRefs.get(tokenId) || 0) - 1;
+        if (count <= 0) {
+            this.tokenSubscriptionRefs.delete(tokenId);
+            // Optional: Send unsubscribe message if Polymarket supports it to reduce bandwidth
+        } else {
+            this.tokenSubscriptionRefs.set(tokenId, count);
+        }
+    }
+
+    /**
+     * Janitor: Automatically prunes stale price data to prevent memory leaks.
      */
     private startJanitor() {
         setInterval(() => {
             const now = Date.now();
-            let pruneCount = 0;
+            let prunedCount = 0;
             for (const [tokenId, lastTs] of this.lastUpdateTrack.entries()) {
-                if (now - lastTs > 10 * 60 * 1000) {
+                if (now - lastTs > 10 * 60 * 1000) { // Prune after 10 mins of silence
                     this.priceHistory.delete(tokenId);
                     this.lastUpdateTrack.delete(tokenId);
-                    this.metadataCache.delete(tokenId);
-                    pruneCount++;
+                    prunedCount++;
                 }
             }
-            if (pruneCount > 0) this.logger.info(`🧹 [Janitor] Pruned ${pruneCount} stale markets.`);
+            if (prunedCount > 0) {
+                this.logger.debug(`[Janitor] Memory reclaimed: Removed ${prunedCount} stale token buffers.`);
+            }
         }, this.JANITOR_INTERVAL_MS);
     }
 
     /**
-     * Mute a token that is confirmed dead (404) or irrelevant.
+     * Starts the global data hub.
      */
-    public muteToken(tokenId: string) {
-        this.mutedTokens.add(tokenId);
-        this.priceHistory.delete(tokenId);
-        this.lastUpdateTrack.delete(tokenId);
-        this.metadataCache.delete(tokenId);
-    }
-
-    private async getRichMetadata(tokenId: string) {
-        // 1. Check Cache
-        const cached = this.metadataCache.get(tokenId);
-        if (cached) {
-            cached.ts = Date.now();
-            return cached.data;
-        }
-
-        try {
-            const response = await axios.get(`https://gamma-api.polymarket.com/markets?token_id=${tokenId}`, { timeout: 5000 });
-            const data = response.data?.[0];
-            
-            if (data) {
-                const metadata = {
-                    conditionId: data.conditionId,
-                    question: data.question,
-                    image: data.image,
-                    marketSlug: data.slug,
-                    eventSlug: data.eventSlug || ""
-                };
-                this.metadataCache.set(tokenId, { data: metadata, ts: Date.now() });
-                return metadata;
-            } else {
-                // 404 or empty - Mute this token to stop the loop
-                this.logger.warn(`🔇 Muting invalid token: ${tokenId}`);
-                this.muteToken(tokenId);
-            }
-        } catch (e: any) {
-            if (e.response?.status === 404) {
-                this.muteToken(tokenId);
-            }
-        }
-        return null;
-    }
-
     public async start() {
         if (this.isRunning) return;
         this.isRunning = true;
-        this.logger.info("📡 [GLOBAL HUB] Initializing Shared Stream...");
         this.connect();
     }
 
+    /**
+     * Establish the Master WebSocket connection.
+     */
     private connect() {
+        this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
         this.ws = new WebSocket(`${WS_URLS.CLOB}/ws/market`);
 
         this.ws.on('open', () => {
-            this.logger.success('🔌 [GLOBAL HUB] Scaling discovery engine initialized.');
+            this.logger.success('🔌 [GLOBAL HUB] High-performance discovery engine: ONLINE.');
+            
+            // Subscribe to the global 'firehose' topics
             this.ws?.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price" }));
             this.ws?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
+            
+            // Re-sync any specific token interests
+            for (const tokenId of this.tokenSubscriptionRefs.keys()) {
+                this.ws?.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
+            }
         });
 
         this.ws.on('message', async (data) => {
             try {
                 const msg = JSON.parse(data.toString());
                 
+                // Handle Price Updates (FOMO Detection)
                 if (msg.event_type === 'last_trade_price') {
                     const tokenId = msg.asset_id || msg.token_id;
                     const price = parseFloat(msg.price);
                     if (tokenId && !isNaN(price)) await this.processPriceUpdate(tokenId, price);
                 }
 
+                // Handle Global Trades (Whale Detection)
                 if (msg.event_type === 'trades') {
                     this.processTradeMessage(msg);
                 }
-            } catch (e) {}
+
+                // Handle Order Book Updates (Money Market / Liquidity Rewards)
+                if (msg.event_type === 'book') {
+                    this.emit('book_update', msg);
+                }
+
+            } catch (e) {
+                this.logger.error("Failed to parse hub message", e as Error);
+            }
         });
 
         this.ws.on('close', () => {
+            this.logger.warn("📡 Hub Connection Lost. Reconnecting in 5s...");
             if (this.isRunning) setTimeout(() => this.connect(), 5000);
+        });
+
+        this.ws.on('error', (err) => {
+            this.logger.error("Hub Socket Error", err);
         });
     }
 
+    /**
+     * Filters the global trade stream for whale matches.
+     * Matches are emitted immediately to the TradeMonitorService logic layer.
+     */
     private processTradeMessage(msg: any) {
-        // Polymarket trade events contain maker_address and taker_address
         const maker = (msg.maker_address || "").toLowerCase();
         const taker = (msg.taker_address || "").toLowerCase();
 
+        // O(1) check against the global watchlist
         const isMakerWhale = this.globalWatchlist.has(maker);
         const isTakerWhale = this.globalWatchlist.has(taker);
 
@@ -177,15 +221,21 @@ export class MarketIntelligenceService extends EventEmitter {
                 size: parseFloat(msg.size),
                 timestamp: Date.now()
             };
-
-            this.logger.info(`🐳 [WHALE MOVE] Detected ${event.side} by ${whaleAddr.slice(0,8)}... via WebSocket`);
+            
+            // Broadcast the signal to all passive monitor listeners
             this.emit('whale_trade', event);
         }
     }
 
+    /**
+     * Processes raw price ticks into velocity metrics.
+     * Triggers FOMO signals if velocity thresholds are broken.
+     */
     private async processPriceUpdate(tokenId: string, price: number) {
         const now = Date.now();
         this.lastUpdateTrack.set(tokenId, now); 
+        
+        // Pass price update to any interested listeners (like MM module)
         this.emit('price_update', { tokenId, price, timestamp: now });
 
         const history = this.priceHistory.get(tokenId) || [];
@@ -193,17 +243,46 @@ export class MarketIntelligenceService extends EventEmitter {
             const oldest = history[0];
             if (now - oldest.timestamp < this.LOOKBACK_MS) {
                 const velocity = (price - oldest.price) / oldest.price;
+                
+                // Detection logic for a "Flash Move"
                 if (Math.abs(velocity) >= this.VELOCITY_THRESHOLD) {
-                    this.emit('flash_move', { tokenId, oldPrice: oldest.price, newPrice: price, velocity, timestamp: now });
+                    this.emit('flash_move', { 
+                        tokenId, 
+                        oldPrice: oldest.price, 
+                        newPrice: price, 
+                        velocity, 
+                        timestamp: now 
+                    });
                 }
             }
         }
+        
+        // Update history window for next velocity check
         history.push({ price, timestamp: now });
         if (history.length > 5) history.shift();
         this.priceHistory.set(tokenId, history);
     }
 
+    /**
+     * VIBE CHECK: Returns true if the token is currently in a high-velocity spike.
+     * Used by Copy-Trading to avoid buying at the peak of a pump.
+     */
+    public isSpiking(tokenId: string): boolean {
+        const history = this.priceHistory.get(tokenId) || [];
+        if (history.length < 2) return false;
+        
+        const latest = history[history.length - 1];
+        const initial = history[0];
+        const velocity = (latest.price - initial.price) / initial.price;
+        
+        return velocity > this.VELOCITY_THRESHOLD;
+    }
+
+    /**
+     * Fetches recent flash moves for UI hydration and historical alpha analysis.
+     */
     public async getLatestMovesFromDB(): Promise<FlashMoveEvent[]> {
+        // Fetch moves from the last 15 minutes
         const moves = await FlashMove.find({ 
             timestamp: { $gte: new Date(Date.now() - 900000) } 
         }).sort({ timestamp: -1 }).limit(30).lean();
@@ -221,8 +300,17 @@ export class MarketIntelligenceService extends EventEmitter {
         }));
     }
 
+    /**
+     * Disconnects the hub and shuts down the firehose.
+     */
     public stop() {
         this.isRunning = false;
-        if (this.ws) this.ws.terminate();
+        if (this.ws) {
+            this.ws.removeAllListeners();
+            this.ws.terminate();
+        }
+        this.priceHistory.clear();
+        this.tokenSubscriptionRefs.clear();
+        this.logger.info("🔌 Global Hub Hub Shutdown: OFFLINE.");
     }
 }

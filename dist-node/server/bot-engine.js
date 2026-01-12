@@ -1,33 +1,33 @@
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
-import { aiAgent } from '../services/ai-agent.service.js';
 import { PortfolioService } from '../services/portfolio.service.js';
 import { BotLog, Trade } from '../database/index.js';
 import { PolymarketAdapter } from '../adapters/polymarket/polymarket.adapter.js';
-import { TOKENS } from '../config/env.js';
+import { MarketMakingScanner } from '../services/arbitrage-scanner.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
-import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import { FomoRunnerService } from '../services/fomo-runner.services.js';
 import crypto from 'crypto';
 export class BotEngine {
     config;
+    intelligence;
     registryService;
     callbacks;
     isRunning = false;
     monitor;
     executor;
     arbScanner;
-    intelligence;
     fomoRunner;
     exchange;
     portfolioService;
     portfolioTracker;
     positionMonitor;
-    runtimeEnv;
     fundWatcher;
+    uiHeartbeatLoop = null;
+    backgroundSyncLoop = null;
+    heartbeatLoop = null;
+    heartbeatInterval;
     activePositions = [];
-    updateLoop = null;
     stats = {
         totalPnl: 0,
         totalVolume: 0,
@@ -44,8 +44,9 @@ export class BotEngine {
     POSITION_SYNC_INTERVAL = 30000;
     marketMetadataCache = new Map();
     MARKET_METADATA_CACHE_TTL = 24 * 60 * 60 * 1000;
-    constructor(config, registryService, callbacks) {
+    constructor(config, intelligence, registryService, callbacks) {
         this.config = config;
+        this.intelligence = intelligence;
         this.registryService = registryService;
         this.callbacks = callbacks;
         if (config.activePositions)
@@ -60,6 +61,9 @@ export class BotEngine {
         try {
             const consoleMethod = type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'log';
             console[consoleMethod](`[ENGINE][${this.config.userId.slice(0, 8)}] ${message}`);
+            if (this.callbacks?.onLog) {
+                this.callbacks.onLog({ time: new Date().toLocaleTimeString(), type, message });
+            }
             await BotLog.create({ userId: this.config.userId, type, message, timestamp: new Date() });
         }
         catch (e) {
@@ -69,34 +73,36 @@ export class BotEngine {
     updateConfig(newConfig) {
         if (newConfig.userAddresses && this.monitor) {
             this.monitor.updateTargets(newConfig.userAddresses);
-            this.config.userAddresses = newConfig.userAddresses;
         }
-        if (newConfig.enableCopyTrading === false && this.monitor?.isActive()) {
-            this.addLog('warn', '⏸️ Copy-Trading Module Standby.');
-            this.monitor.stop();
+        if (newConfig.enableCopyTrading !== undefined && this.monitor) {
+            if (newConfig.enableCopyTrading) {
+                this.monitor.start();
+                this.addLog('success', '▶️ Copy-Trading Module Online.');
+            }
+            else {
+                this.monitor.stop();
+                this.addLog('warn', '⏸️ Copy-Trading Module Standby.');
+            }
         }
-        else if (newConfig.enableCopyTrading === true && this.monitor && !this.monitor.isActive()) {
-            this.addLog('success', '▶️ Copy-Trading Module Online.');
-            this.monitor.start(this.config.startCursor || Math.floor(Date.now() / 1000));
+        if (newConfig.enableMoneyMarkets !== undefined && this.arbScanner) {
+            if (newConfig.enableMoneyMarkets) {
+                this.arbScanner.start();
+                this.addLog('success', '▶️ Money Markets Module Online.');
+            }
+            else {
+                this.arbScanner.stop();
+                this.addLog('warn', '⏸️ Money Markets Standby.');
+            }
         }
-        if (newConfig.enableMoneyMarkets === false && this.arbScanner?.isScanning) {
-            this.addLog('warn', '⏸️ Money Markets Standby.');
-            this.arbScanner.stop();
-        }
-        else if (newConfig.enableMoneyMarkets === true && this.arbScanner && !this.arbScanner.isScanning) {
-            this.addLog('success', '▶️ Money Markets Module Online.');
-            this.arbScanner.start();
-        }
-        if (newConfig.enableFomoRunner !== undefined) {
-            this.fomoRunner?.setConfig(newConfig.enableFomoRunner, (newConfig.autoTp || 20) / 100);
+        if (newConfig.enableFomoRunner !== undefined && this.fomoRunner) {
             if (newConfig.enableFomoRunner) {
+                this.fomoRunner.setConfig(newConfig.enableFomoRunner, (newConfig.autoTp || 20) / 100);
                 this.addLog('success', '▶️ FOMO Runner Online.');
             }
             else {
                 this.addLog('warn', '⏸️ FOMO Runner Standby.');
             }
         }
-        // Fomo Runner config update
         this.config = { ...this.config, ...newConfig };
     }
     async fetchMarketMetadata(marketId) {
@@ -302,24 +308,25 @@ export class BotEngine {
     async syncStats() {
         if (!this.exchange)
             return;
-        try {
-            const address = this.exchange.getFunderAddress();
-            if (!address)
-                return;
-            const cashBalance = await this.exchange.fetchBalance(address);
-            let positionValue = 0;
-            this.activePositions.forEach(p => {
-                if (p.shares && p.currentPrice && !isNaN(p.shares * p.currentPrice)) {
-                    positionValue += (p.shares * p.currentPrice);
-                }
+        const address = this.exchange.getFunderAddress();
+        const cashBalance = await this.exchange.fetchBalance(address);
+        let positionValue = 0;
+        this.activePositions.forEach(p => {
+            positionValue += (p.shares * (p.currentPrice || p.entryPrice));
+        });
+        if (this.callbacks?.onStatsUpdate) {
+            await this.callbacks.onStatsUpdate({
+                totalPnl: 0, // Calculated by server.ts from DB
+                totalVolume: 0,
+                totalFeesPaid: 0,
+                winRate: 0,
+                tradesCount: 0,
+                winCount: 0,
+                lossCount: 0,
+                allowanceApproved: true,
+                portfolioValue: cashBalance + positionValue,
+                cashBalance: cashBalance
             });
-            this.stats.portfolioValue = cashBalance + positionValue;
-            this.stats.cashBalance = cashBalance;
-            if (this.callbacks?.onStatsUpdate)
-                await this.callbacks.onStatsUpdate(this.stats);
-        }
-        catch (e) {
-            console.error("Sync Stats Error", e);
         }
     }
     async emergencySell(tradeIdOrMarketId, outcome) {
@@ -382,24 +389,6 @@ export class BotEngine {
             throw e;
         }
     }
-    async initializeServices() {
-        if (!this.exchange)
-            throw new Error('Exchange not initialized');
-        const logger = {
-            info: (m) => this.addLog('info', m),
-            warn: (m) => this.addLog('warn', m),
-            error: (m, e) => this.addLog('error', `${m} ${e ? e.message : ''}`),
-            debug: () => { },
-            success: (m) => this.addLog('success', m)
-        };
-        const funder = this.exchange.getFunderAddress();
-        this.positionMonitor = new PositionMonitorService(this.exchange, funder, { checkInterval: 30000, priceCheckInterval: 60000, orderBookValidationInterval: 3600000 }, logger, this.handleAutoCashout.bind(this), this.handleInvalidPosition.bind(this));
-        this.portfolioTracker = new PortfolioTrackerService(this.exchange, funder, (this.config.maxTradeAmount || 1000) * 10, logger, this.positionMonitor, (positions) => {
-            this.activePositions = positions;
-            return this.callbacks?.onPositionsUpdate?.(positions) || Promise.resolve();
-        });
-        await this.portfolioTracker.initialize();
-    }
     async start() {
         if (this.isRunning)
             return;
@@ -416,11 +405,13 @@ export class BotEngine {
                 rpcUrl: this.config.rpcUrl,
                 walletConfig: this.config.walletConfig,
                 userId: this.config.userId,
-                mongoEncryptionKey: this.config.mongoEncryptionKey
+                mongoEncryptionKey: this.config.mongoEncryptionKey,
+                builderApiKey: this.config.builderApiKey,
+                builderApiSecret: this.config.builderApiSecret,
+                builderApiPassphrase: this.config.builderApiPassphrase
             }, engineLogger);
             await this.exchange.initialize();
             await this.exchange.authenticate();
-            this.intelligence = new MarketIntelligenceService(engineLogger);
             this.executor = new TradeExecutorService({
                 adapter: this.exchange,
                 proxyWallet: this.exchange.getFunderAddress(),
@@ -428,43 +419,97 @@ export class BotEngine {
                 logger: engineLogger
             });
             this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, engineLogger);
-            this.fomoRunner.setConfig(this.config.enableFomoRunner, 0.20);
-            // Forward trade events from the sniper to your database handler
-            this.fomoRunner.on('fomo_trade_filled', (trade) => this.callbacks?.onTradeComplete?.(trade));
-            await this.syncPositions(true);
-            await this.intelligence.start();
-            // Start the internal sync loop for hooks (no io used)
-            this.startFomoSync();
-            this.addLog('success', 'Bot Engine Activated.');
+            this.fomoRunner.setConfig(this.config.enableFomoRunner, (this.config.autoTp || 20) / 100);
+            // WIRE UP THE MONITOR (Now event-driven)
+            this.monitor = new TradeMonitorService({
+                adapter: this.exchange,
+                intelligence: this.intelligence,
+                env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 },
+                logger: engineLogger,
+                userAddresses: this.config.userAddresses,
+                onDetectedTrade: async (signal) => {
+                    if (!this.isRunning || !this.config.enableCopyTrading)
+                        return;
+                    const result = await this.executor.copyTrade(signal);
+                    if (result.status === 'FILLED' && this.callbacks?.onTradeComplete) {
+                        this.callbacks.onTradeComplete({
+                            id: result.txHash || Math.random().toString(),
+                            timestamp: new Date().toISOString(),
+                            marketId: signal.marketId,
+                            outcome: "YES",
+                            side: signal.side,
+                            size: signal.sizeUsd,
+                            executedSize: result.executedAmount,
+                            price: result.priceFilled,
+                            status: 'FILLED'
+                        });
+                        this.syncPositions();
+                    }
+                }
+            });
+            if (this.config.enableCopyTrading)
+                this.monitor.start();
+            this.startHeartbeat();
+            this.addLog('success', 'Full Strategy Engine Online.');
         }
         catch (e) {
             this.addLog('error', `Startup failed: ${e.message}`);
             this.isRunning = false;
         }
     }
-    startFomoSync() {
-        // Clear any existing interval
-        if (this.updateLoop) {
-            clearInterval(this.updateLoop);
-            this.updateLoop = null;
-        }
-        // Set up new interval
-        this.updateLoop = setInterval(() => {
+    initializeCoreModules(logger) {
+        if (!this.exchange)
+            return;
+        const funder = this.exchange.getFunderAddress();
+        this.positionMonitor = new PositionMonitorService(this.exchange, funder, { checkInterval: 30000, priceCheckInterval: 60000 }, logger, async (pos, reason) => {
+            await this.executor?.executeManualExit(pos, 0);
+        });
+        this.portfolioTracker = new PortfolioTrackerService(this.exchange, funder, (this.config.maxTradeAmount || 1000) * 10, logger, this.positionMonitor, (positions) => {
+            this.activePositions = positions;
+            this.callbacks?.onPositionsUpdate?.(positions);
+        });
+        this.arbScanner = new MarketMakingScanner(this.intelligence, this.exchange, logger);
+        this.fomoRunner = new FomoRunnerService(this.intelligence, this.executor, this.exchange, logger);
+        this.fomoRunner.setConfig(this.config.enableFomoRunner, (this.config.autoTp || 20) / 100);
+        this.monitor = new TradeMonitorService({
+            adapter: this.exchange,
+            intelligence: this.intelligence,
+            env: { tradeMultiplier: this.config.multiplier, maxTradeAmount: this.config.maxTradeAmount || 100 },
+            logger,
+            userAddresses: this.config.userAddresses,
+            onDetectedTrade: async (signal) => {
+                if (!this.isRunning || !this.config.enableCopyTrading)
+                    return;
+                const result = await this.executor.copyTrade(signal);
+                if (result.status === 'FILLED') {
+                    await this.syncPositions();
+                }
+            }
+        });
+        if (this.config.enableCopyTrading)
+            this.monitor.start();
+        if (this.config.enableMoneyMarkets)
+            this.arbScanner.start();
+    }
+    startHeartbeat() {
+        if (this.heartbeatInterval)
+            clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = setInterval(async () => {
             if (!this.isRunning)
                 return;
-            // Fire the hooks to the server listener
-            if (this.intelligence && this.callbacks?.onFomoVelocity) {
-                this.callbacks.onFomoVelocity(this.intelligence.getLatestMoves());
+            // 1. User-specific Snipes update
+            if (this.fomoRunner) {
+                const snipes = this.fomoRunner.getActiveSnipes();
+                this.callbacks?.onFomoSnipes?.(snipes);
             }
-            if (this.fomoRunner && this.callbacks?.onFomoSnipes) {
-                this.callbacks.onFomoSnipes(this.fomoRunner.getActiveSnipes());
-            }
-        }, 2000);
+            // 2. User-specific Position & Stats sync
+            await this.syncPositions();
+            await this.syncStats();
+        }, 5000); // 5s is plenty for background sync
     }
     stop() {
         this.isRunning = false;
         this.arbScanner?.stop();
-        this.intelligence?.stop();
         this.fomoRunner?.setConfig(false, 0.2);
         if (this.monitor)
             this.monitor.stop();
@@ -474,76 +519,11 @@ export class BotEngine {
             clearInterval(this.fundWatcher);
             this.fundWatcher = undefined;
         }
+        if (this.uiHeartbeatLoop)
+            clearInterval(this.uiHeartbeatLoop);
+        if (this.backgroundSyncLoop)
+            clearInterval(this.backgroundSyncLoop);
         this.addLog('warn', 'Engine Stopped.');
-    }
-    async initializeCoreModules(logger) {
-        if (!this.exchange)
-            return;
-        const funder = this.exchange.getFunderAddress();
-        if (!this.positionMonitor) {
-            this.positionMonitor = new PositionMonitorService(this.exchange, funder, { checkInterval: 30000, priceCheckInterval: 60000 }, logger, this.handleAutoCashout.bind(this), this.handleInvalidPosition.bind(this));
-        }
-        if (!this.portfolioTracker) {
-            this.portfolioTracker = new PortfolioTrackerService(this.exchange, funder, (this.config.maxTradeAmount || 1000) * 10, logger, this.positionMonitor, (positions) => {
-                this.activePositions = positions;
-                if (this.callbacks?.onPositionsUpdate)
-                    this.callbacks.onPositionsUpdate(positions);
-            });
-        }
-        this.runtimeEnv = {
-            tradeMultiplier: this.config.multiplier,
-            maxTradeAmount: this.config.maxTradeAmount || 100,
-            usdcContractAddress: TOKENS.USDC_BRIDGED,
-            minLiquidityFilter: this.config.minLiquidityFilter || 'LOW'
-        };
-        this.monitor = new TradeMonitorService({
-            adapter: this.exchange,
-            env: this.runtimeEnv,
-            logger: logger,
-            userAddresses: this.config.userAddresses,
-            onDetectedTrade: async (signal) => {
-                if (!this.isRunning)
-                    return;
-                const isManagedByMM = this.arbScanner?.getOpportunities().some(o => o.tokenId === signal.tokenId);
-                if (isManagedByMM && (this.config.enableAutoArb || this.config.enableMoneyMarkets)) {
-                    this.addLog('info', `🛡️ Signal Skipped: Market ${signal.marketId.slice(0, 8)} is managed by MM Strategy.`);
-                    return;
-                }
-                if (signal.side === 'SELL') {
-                    const hasPosition = this.activePositions.some(p => p.marketId === signal.marketId && p.outcome === signal.outcome);
-                    if (!hasPosition)
-                        return;
-                }
-                const aiResult = await aiAgent.analyzeTrade(signal.marketId, signal.side, signal.outcome, signal.sizeUsd, signal.price, this.config.riskProfile);
-                if (!aiResult.shouldCopy) {
-                    this.addLog('info', `AI Skipped: ${aiResult.reasoning} (Score: ${aiResult.riskScore})`);
-                    if (this.callbacks?.onTradeComplete) {
-                        await this.callbacks.onTradeComplete({
-                            id: crypto.randomUUID(),
-                            timestamp: new Date().toISOString(),
-                            marketId: signal.marketId,
-                            outcome: signal.outcome,
-                            side: signal.side,
-                            size: signal.sizeUsd,
-                            executedSize: 0,
-                            price: signal.price,
-                            status: 'SKIPPED',
-                            aiReasoning: aiResult.reasoning,
-                            riskScore: aiResult.riskScore
-                        });
-                    }
-                    return;
-                }
-                if (this.executor) {
-                    const result = await this.executor.copyTrade(signal);
-                    if (result.status === 'FILLED') {
-                        this.addLog('success', `Trade Executed! Size: $${result.executedAmount.toFixed(2)}`);
-                        await this.syncPositions(true);
-                        await this.syncStats();
-                    }
-                }
-            }
-        });
     }
     async dispatchManualMM(marketId) {
         if (!this.executor)
@@ -577,26 +557,30 @@ export class BotEngine {
             if (funded) {
                 clearInterval(this.fundWatcher);
                 this.fundWatcher = undefined;
-                await this.proceedWithPostFundingSetup({ info: console.log, warn: console.warn, error: console.error, debug: () => { }, success: console.log });
+                await this.proceedWithPostFundingSetup();
             }
         }, 15000);
     }
-    async proceedWithPostFundingSetup(logger) {
+    async proceedWithPostFundingSetup() {
+        const engineLogger = {
+            info: (m) => this.addLog('info', m),
+            warn: (m) => this.addLog('warn', m),
+            error: (m, e) => this.addLog('error', `${m} ${e?.message || ''}`),
+            debug: () => { },
+            success: (m) => this.addLog('success', m)
+        };
         try {
-            this.portfolioService = new PortfolioService(logger);
+            this.portfolioService = new PortfolioService(engineLogger);
             this.portfolioService.startSnapshotService(this.config.userId, async () => ({
                 totalValue: this.stats.portfolioValue || 0,
                 cashBalance: this.stats.cashBalance || 0,
                 positions: this.activePositions,
                 totalPnL: this.stats.totalPnl || 0
             }));
-            if (this.intelligence)
-                await this.intelligence.start();
             if (this.config.enableMoneyMarkets && this.arbScanner)
                 await this.arbScanner.start();
             if (this.config.enableFomoRunner && this.fomoRunner)
                 this.fomoRunner.setConfig(true, (this.config.autoTp || 20) / 100);
-            // Fomo Runner service start
             if (this.config.enableCopyTrading && this.monitor)
                 await this.monitor.start();
             await this.syncPositions(true);
@@ -608,14 +592,14 @@ export class BotEngine {
         }
     }
     getActiveFomoMoves() {
-        return this.intelligence?.getLatestMoves() || [];
+        return this.intelligence?.getLatestMovesFromDB() || [];
     }
     getActiveSnipes() {
         return this.fomoRunner?.getActiveSnipes() || [];
     }
     getActivePositions() { return this.activePositions; }
     getArbOpportunities() { return this.arbScanner?.getOpportunities() || []; }
-    getActiveFomoChases() { return this.fomoRunner ? [] : []; }
+    getActiveFomoChases() { return []; }
     getCallbacks() { return this.callbacks; }
     async addMarketToMM(conditionId) { return this.arbScanner?.addMarketByConditionId(conditionId) || false; }
     async addMarketBySlug(slug) { return this.arbScanner?.addMarketBySlug(slug) || false; }

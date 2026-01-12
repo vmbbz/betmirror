@@ -11,8 +11,11 @@ export class TradeExecutorService {
     pendingSpend = 0;
     pendingOrders = new Map();
     // WebSocket fill state
+    // Fix: Changed type to any to resolve TypeScript errors with 'on' method in hybrid environments
     userWs;
     isWsRunning = false;
+    pingInterval;
+    inventory = new Map();
     /**
      * Update the pending spend amount for buy orders
      * @param amount - The amount to add or subtract from pending spend
@@ -44,7 +47,6 @@ export class TradeExecutorService {
     }
     // Market Making state
     activeQuotes = new Map();
-    inventory = new Map(); // tokenId -> share balance
     // Position tracking
     positionTracking = new Map();
     // Market state tracking
@@ -91,21 +93,38 @@ export class TradeExecutorService {
     connectUserChannel() {
         this.isWsRunning = true;
         const wsUrl = `${WS_URLS.CLOB}/ws/user`;
-        this.deps.logger.info(`🔌 Connecting Executor Fill Monitor: ${wsUrl}`);
+        // Fix: cast to any to resolve Node vs DOM WebSocket type conflicts
         this.userWs = new WebSocket(wsUrl);
+        // Fix: cast to any to access Node-style 'on' method
         this.userWs.on('open', () => {
             this.deps.logger.success('✅ Executor Fill Monitor Connected.');
+            // WEBSOCKET STABILITY FIX: Add heartbeat to user channel
+            if (this.pingInterval)
+                clearInterval(this.pingInterval);
+            this.pingInterval = setInterval(() => {
+                // Fix: cast to any
+                if (this.userWs?.readyState === 1)
+                    this.userWs.send('PING');
+            }, 10000);
         });
+        // Fix: cast to any
         this.userWs.on('message', (data) => {
             try {
                 const msg = JSON.parse(data.toString());
                 if (msg.event_type === 'order_filled') {
-                    this.handleLiveFill(msg);
+                    const isBuy = msg.side.toUpperCase() === 'BUY';
+                    const currentInv = this.inventory.get(msg.asset_id) || 0;
+                    this.inventory.set(msg.asset_id, isBuy ? currentInv + msg.size : currentInv - msg.size);
+                    if (isBuy)
+                        this.pendingSpend = Math.max(0, this.pendingSpend - (msg.size * msg.price));
                 }
             }
             catch (e) { }
         });
+        // Fix: cast to any
         this.userWs.on('close', () => {
+            if (this.pingInterval)
+                clearInterval(this.pingInterval);
             if (this.isWsRunning)
                 setTimeout(() => this.connectUserChannel(), 5000);
         });
@@ -1084,6 +1103,7 @@ export class TradeExecutorService {
         }
         catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
+            // FIX: Changed 'err as Error' to 'err as any' to resolve "Cannot find name 'error'" on line 1350
             logger.error(`Failed to copy trade: ${errorMessage}`, err);
             return {
                 status: 'FAILED',

@@ -17,7 +17,7 @@ export interface PriceSnapshot {
  */
 export interface FlashMoveEvent {
     tokenId: string;
-    conditionId: string;
+    conditionId?: string; // Optional because raw stream only has asset_id
     oldPrice: number;
     newPrice: number;
     velocity: number;
@@ -80,7 +80,7 @@ export class MarketIntelligenceService extends EventEmitter {
 
     constructor(private logger: Logger) {
         super();
-        this.setMaxListeners(100); // Reduced from 10000 to detect real leaks
+        this.setMaxListeners(100); 
         this.startJanitor();
     }
 
@@ -94,13 +94,11 @@ export class MarketIntelligenceService extends EventEmitter {
 
     /**
      * Requests data for a specific token using correct Polymarket format.
-     * Per docs: { assets_ids: [tokenId], operation: "subscribe" }
      */
     public subscribeToToken(tokenId: string) {
         const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
         this.tokenSubscriptionRefs.set(tokenId, count + 1);
         
-        // Only send subscription frame on the first reference
         if (count === 0 && this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
         }
@@ -113,7 +111,7 @@ export class MarketIntelligenceService extends EventEmitter {
         const count = (this.tokenSubscriptionRefs.get(tokenId) || 0) - 1;
         if (count <= 0) {
             this.tokenSubscriptionRefs.delete(tokenId);
-            this.priceHistory.delete(tokenId); // Purge from RAM immediately
+            this.priceHistory.delete(tokenId); 
             this.lastUpdateTrack.delete(tokenId);
         } else {
             this.tokenSubscriptionRefs.set(tokenId, count);
@@ -128,9 +126,8 @@ export class MarketIntelligenceService extends EventEmitter {
             if (!this.isRunning) return;
             const now = Date.now();
             let prunedCount = 0;
-            // Prune if inactive for more than 5 minutes to keep heap low
             for (const [tokenId, lastTs] of this.lastUpdateTrack.entries()) {
-                if (now - lastTs > 5 * 60 * 1000) {
+                if (now - lastTs > 15 * 60 * 1000) {
                     this.priceHistory.delete(tokenId);
                     this.lastUpdateTrack.delete(tokenId);
                     prunedCount++;
@@ -301,12 +298,19 @@ export class MarketIntelligenceService extends EventEmitter {
             if (now - oldest.timestamp < this.LOOKBACK_MS) {
                 const velocity = (price - oldest.price) / oldest.price;
                 if (Math.abs(velocity) >= this.VELOCITY_THRESHOLD) {
-                    this.emit('flash_move', { tokenId, oldPrice: oldest.price, newPrice: price, velocity, timestamp: now });
+                    // DECOUPLED EMIT: This allows server.ts to broadcast alpha to the UI
+                    // without waiting for specific bot execution loops.
+                    this.emit('flash_move', { 
+                        tokenId, 
+                        oldPrice: oldest.price, 
+                        newPrice: price, 
+                        velocity, 
+                        timestamp: now 
+                    });
                 }
             }
         }
         history.push({ price, timestamp: now });
-        // Optimization: Keep only the necessary history items in RAM
         if (history.length > this.MAX_HISTORY_ITEMS) history.shift();
         this.priceHistory.set(tokenId, history);
     }

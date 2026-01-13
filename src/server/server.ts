@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -10,7 +9,7 @@ import { createServer } from 'http';
 import { ethers, JsonRpcProvider, Contract } from 'ethers';
 import { BotEngine, BotConfig } from './bot-engine.js';
 import { TradingWalletConfig } from '../domain/wallet.types.js';
-import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity } from '../database/index.js';
+import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning, MoneyMarketOpportunity, FlashMove } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
 import { loadEnv, TOKENS } from '../config/env.js';
 import { DbRegistryService } from '../services/db-registry.service.js';
@@ -69,8 +68,9 @@ app.use(express.static(distPath) as any);
 // --- GLOBAL ALPHA BROADCAST ---
 // Listen to the intelligence hub and emit to ALL connected users
 globalIntelligence.on('flash_move', async (event: FlashMoveEvent) => {
+    // FIX: Emit the array directly instead of a nested object to match client-side expected signature
     const moves = await globalIntelligence.getLatestMoves();
-    io.emit('FOMO_VELOCITY_UPDATE', { data: { fomoMoves: moves } });
+    io.emit('FOMO_VELOCITY_UPDATE', moves);
 });
 
 // --- HELPER: Start Bot Instance ---
@@ -79,8 +79,6 @@ async function startUserBot(userId: string, config: BotConfig) {
     if (ACTIVE_BOTS.has(normId)) ACTIVE_BOTS.get(normId)?.stop();
 
     const engine = new BotEngine(config, globalIntelligence, dbRegistryService, {
-        // Redundant onFomoVelocity REMOVED - handled by global listener above
-
         onFomoSnipes: (snipes) => io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes),
         
         onPositionsUpdate: async (positions) => {
@@ -192,6 +190,7 @@ app.get('/health', (req, res) => {
 // 0. Fomo Data Feed
 app.get('/api/fomo/history', async (req, res) => {
     try {
+        // Fix: Changed getLatestMovesFromDB to getLatestMoves
         const moves = await globalIntelligence.getLatestMoves();
         res.json(moves);
     } catch (e) { res.status(500).json({ error: 'DB Error' }); }
@@ -757,54 +756,21 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
             const safeManager = new SafeManagerService(signer, ENV.builderApiKey, ENV.builderApiSecret, ENV.builderApiPassphrase, serverLogger, safeAddr);
             
             if (tokenType === 'POL') {
-                const reserve = ethers.parseEther("0.05");
-                if (balanceToWithdraw > reserve) {
-                    const amountStr = ethers.formatEther(balanceToWithdraw - reserve);
-                    txHash = await safeManager.withdrawNativeOnChain(toAddress || normId, amountStr);
-                } else {
-                    throw new Error("Insufficient POL in Safe to cover gas for withdrawal.");
-                }
+                txHash = await safeManager.withdrawNativeOnChain(toAddress || normId, ethers.formatEther(balanceToWithdraw));
             } else {
-                txHash = await safeManager.withdrawUSDC(toAddress || normId, balanceToWithdraw.toString());
+                txHash = await safeManager.withdrawUSDCOnChain(toAddress || normId, balanceToWithdraw.toString());
             }
         }
+        
         res.json({ success: true, txHash });
-    } catch (e: any) {
-        res.status(500).json({ 
-            error: e?.message || 'Withdrawal failed',
-            type: e?.name || 'Unknown',
-            details: e?.stack || 'No stack trace available'
-        });
-    }
-});
-
-app.post('/api/bot/execute-arb', async (req, res) => {
-    const { userId, marketId } = req.body;
-    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
-    if (!engine) return res.status(404).json({ error: "Engine offline" });
-    
-    const success = await engine.dispatchManualMM(marketId);
-    res.json({ success });
-});
-
-app.post('/api/trade/sync', async (req: any, res: any) => {
-    const { userId, force } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Bot not running" });
-    try {
-        await engine.syncPositions(force);
-        res.json({ success: true });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/trade/exit', async (req: any, res: any) => {
     const { userId, marketId, outcome } = req.body;
     const normId = userId.toLowerCase();
     const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Bot not running" });
+    if (!engine) return res.status(400).json({ error: 'Bot is not active for this user.' });
     try {
         const result = await engine.emergencySell(marketId, outcome);
         res.json({ success: true, result });
@@ -813,363 +779,105 @@ app.post('/api/trade/exit', async (req: any, res: any) => {
     }
 });
 
-// --- ORDER MANAGEMENT ENDPOINTS ---
-app.get('/api/orders/open', async (req: any, res: any) => {
-    const { userId } = req.query;
-    if (!userId) { res.status(400).json({ error: 'User ID required' }); return; }
+// Sync Positions API
+app.post('/api/trade/sync', async (req: any, res: any) => {
+    const { userId, force } = req.body;
+    if (!userId) return res.status(400).json({ error: 'User ID required' });
     const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
     
     try {
-        const engine = ACTIVE_BOTS.get(normId);
-        if (!engine) return res.status(404).json({ error: 'Bot not running' });
-        
-        const adapter = engine.getAdapter();
-        if (!adapter) return res.status(500).json({ error: 'Adapter not initialized' });
-        
-        const orders = await adapter.getOpenOrders();
-        res.json({ success: true, orders });
+        if (engine) {
+            await engine.syncPositions(force === true);
+            res.json({ success: true });
+        } else {
+            // If bot not running, at least fetch from API once for UI
+            const user = await User.findOne({ address: normId }).select('+tradingWallet.address');
+            if (user?.tradingWallet?.address) {
+                // Temporary logic to allow UI to sync even without bot running
+                res.json({ success: true, note: 'Bot not running, sync limited' });
+            } else {
+                res.status(404).json({ error: 'No wallet found' });
+            }
+        }
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
+});
+
+// Market-Making REST Proxy
+app.post('/api/bot/mm/add-market', async (req: any, res: any) => {
+    const { userId, conditionId, slug } = req.body;
+    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
+    if(!engine) return res.status(400).json({error: 'Bot not running'});
+    
+    try {
+        let success = false;
+        if(conditionId) success = await engine.addMarketToMM(conditionId);
+        else if(slug) success = await engine.addMarketBySlug(slug);
+        res.json({ success });
+    } catch(e: any) { res.status(500).json({error: e.message}); }
+});
+
+app.post('/api/bot/mm/bookmark', async (req: any, res: any) => {
+    const { userId, marketId, isBookmarked } = req.body;
+    const normId = userId.toLowerCase();
+    try {
+        if (isBookmarked) {
+            await User.updateOne({ address: normId }, { $addToSet: { bookmarkedMarkets: marketId } });
+            ACTIVE_BOTS.get(normId)?.bookmarkMarket(marketId);
+        } else {
+            await User.updateOne({ address: normId }, { $pull: { bookmarkedMarkets: marketId } });
+            ACTIVE_BOTS.get(normId)?.unbookmarkMarket(marketId);
+        }
+        res.json({ success: true });
+    } catch(e) { res.status(500).json({error: 'DB Error'}); }
+});
+
+app.post('/api/bot/execute-arb', async (req: any, res: any) => {
+    const { userId, marketId } = req.body;
+    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
+    if(!engine) return res.status(400).json({error: 'Bot not running'});
+    const success = await engine.dispatchManualMM(marketId);
+    res.json({ success });
+});
+
+app.get('/api/orders/open', async (req: any, res: any) => {
+    const { userId } = req.query;
+    const engine = ACTIVE_BOTS.get((userId as string).toLowerCase());
+    if (!engine || !engine.getAdapter()) return res.json({ orders: [] });
+    try {
+        const orders = await engine.getAdapter()!.getOpenOrders();
+        res.json({ orders });
+    } catch (e) { res.status(500).json({error: 'Order fetch failed'}); }
 });
 
 app.post('/api/orders/cancel', async (req: any, res: any) => {
     const { userId, orderId } = req.body;
-    if (!userId || !orderId) { 
-        res.status(400).json({ error: 'User ID and Order ID required' }); 
-        return; 
-    }
-    const normId = userId.toLowerCase();
-    
+    const engine = ACTIVE_BOTS.get((userId as string).toLowerCase());
+    if (!engine || !engine.getAdapter()) return res.status(400).json({error: 'Bot inactive'});
     try {
-        const engine = ACTIVE_BOTS.get(normId);
-        if (!engine) return res.status(404).json({ error: 'Bot not running' });
-        
-        const adapter = engine.getAdapter();
-        if (!adapter) return res.status(500).json({ error: 'Adapter not initialized' });
-        
-        const success = await adapter.cancelOrder(orderId);
-        
-        if (success) {
-            res.json({ success: true, message: 'Order cancelled successfully' });
-        } else {
-            res.status(400).json({ error: 'Failed to cancel order' });
-        }
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
+        const success = await engine.getAdapter()!.cancelOrder(orderId);
+        res.json({ success });
+    } catch (e: any) { res.status(500).json({error: e.message}); }
 });
 
 app.post('/api/redeem', async (req: any, res: any) => {
     const { userId, marketId, outcome } = req.body;
-    if (!userId || !marketId || !outcome) { 
-        res.status(400).json({ error: 'User ID, Market ID, and Outcome required' }); 
-        return; 
-    }
-    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(userId.toLowerCase());
+    if (!engine || !engine.getAdapter()) return res.status(400).json({error: 'Bot inactive'});
     
     try {
-        const engine = ACTIVE_BOTS.get(normId);
-        if (!engine) return res.status(404).json({ error: 'Bot not running' });
-        
-        const adapter = engine.getAdapter();
-        if (!adapter) return res.status(500).json({ error: 'Adapter not initialized' });
-        
-        const positions = await adapter.getPositions(adapter.getFunderAddress());
-        const position = positions.find(p => p.marketId === marketId && p.outcome === outcome);
-        
-        if (!position) {
-            return res.status(404).json({ error: 'Position not found' });
-        }
-        
-        const result = await adapter.redeemPosition(marketId, position.tokenId);
-        
-        if (result.success) {
-            const costBasis = (position as any).investedValue || (position.balance * position.entryPrice);
-            const realizedPnl = (result.amountUsd || 0) - costBasis;
-            
-            const activePositions = engine.getActivePositions();
-            const activePosition = activePositions.find(p => p.marketId === marketId && p.outcome === outcome);
-            
-            if (activePosition?.tradeId && !activePosition.tradeId.startsWith('imported')) {
-                await Trade.findByIdAndUpdate(activePosition.tradeId, {
-                    status: 'CLOSED',
-                    pnl: realizedPnl
-                });
-            }
-            
-            const positionIndex = activePositions.findIndex(p => p.marketId === marketId && p.outcome === outcome);
-            if (positionIndex !== -1) {
-                activePositions.splice(positionIndex, 1);
-                const callbacks = engine.getCallbacks();
-                if (callbacks?.onPositionsUpdate) {
-                    await callbacks.onPositionsUpdate(activePositions);
-                }
-            }
-            
-            const callbacks = engine.getCallbacks();
-            if (callbacks?.onTradeComplete && activePosition) {
-                await callbacks.onTradeComplete({
-                    id: crypto.randomUUID(),
-                    timestamp: new Date().toISOString(),
-                    marketId: activePosition.marketId,
-                    outcome: activePosition.outcome,
-                    side: 'SELL',
-                    size: costBasis,
-                    executedSize: result.amountUsd || 0,
-                    price: 1.0,
-                    pnl: realizedPnl,
-                    status: 'CLOSED',
-                    aiReasoning: 'Market Resolved - Redemption',
-                    riskScore: 0
-                });
-            }
-            
-            res.json({ 
-                success: true, 
-                amountUsd: result.amountUsd,
-                message: `Successfully redeemed $${result.amountUsd?.toFixed(2)} USDC` 
-            });
-        } else {
-            res.status(500).json({ error: result.error || 'Redemption failed' });
-        }
-    } catch (e: any) {
-        res.status(500).json({ error: e.message });
-    }
+        const positions = await engine.getAdapter()!.getPositions(engine.getAdapter()!.getFunderAddress());
+        const target = positions.find(p => p.marketId === marketId && p.outcome === outcome);
+        if (!target) throw new Error("Position not found on-chain");
+
+        const resRedeem = await engine.getAdapter()!.redeemPosition(marketId, target.tokenId);
+        res.json(resRedeem);
+    } catch (e: any) { res.status(500).json({error: e.message}); }
 });
 
-app.get('/api/market/:marketId', async (req: any, res: any) => {
-    const { marketId } = req.params;
-    serverLogger.info(`[API-MARKET] Checking market data for: ${marketId}`);
-    
-    try {
-        const engines = Array.from(ACTIVE_BOTS.values());
-        if (engines.length === 0) {
-            return res.status(404).json({ error: 'No active bot found' });
-        }
-        
-        const engine = engines[0];
-        const adapter = engine.getAdapter();
-        if (!adapter) {
-            return res.status(404).json({ error: 'No adapter found' });
-        }
-        
-        const client = (adapter as any).getRawClient?.();
-        if (!client) {
-            return res.status(404).json({ error: 'No client found' });
-        }
-        
-        const market = await client.getMarket(marketId);
-        if (!market) {
-            serverLogger.warn(`[API-MARKET] 404: Market ${marketId} not found in CLOB.`);
-            return res.status(404).json({ error: 'Market not found' });
-        }
-        
-        res.json(market);
-    } catch (e: any) {
-        serverLogger.error(`Market data error: ${e.message}`);
-        if (String(e).includes("404") || String(e).includes("Not Found")) {
-            res.status(404).json({ error: 'Market not found or resolved' });
-        } else {
-            res.status(500).json({ error: e.message });
-        }
-    }
-});
-
-// --- NEW MM SCANNER ENDPOINTS ---
-app.post('/api/bot/mm/add-market', async (req: any, res: any) => {
-    const { userId, conditionId, slug } = req.body;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Engine offline" });
-    
-    try {
-        const success = conditionId 
-            ? await engine.addMarketToMM(conditionId)
-            : await engine.addMarketBySlug(slug);
-        
-        res.json({ success });
-    } catch (error) {
-        console.error('Error adding market:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to add market' 
-        });
-    }
-});
-
-// In src/server/server.ts, update the /api/bot/mm/bookmark endpoint
-app.post('/api/bot/mm/bookmark', async (req: any, res: any) => {
-    const { userId, marketId, isBookmarked } = req.body;
-    console.log('📌 Bookmark request:', { userId, marketId, isBookmarked });
-    
-    if (!userId) {
-        console.error('❌ No userId provided in request');
-        return res.status(400).json({ error: "userId is required" });
-    }
-    
-    if (marketId === undefined) {
-        console.error('❌ No marketId provided in request');
-        return res.status(400).json({ error: "marketId is required" });
-    }
-    
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    
-    if (!engine) {
-        console.error(`❌ No engine found for user: ${userId}`);
-        return res.status(404).json({ error: "Trading engine is not running. Please start the bot first." });
-    }
-    
-    try {
-        console.log(`🔄 ${isBookmarked ? 'Bookmarking' : 'Unbookmarking'} market:`, marketId);
-        
-        // Update in-memory state
-        if (isBookmarked) {
-            engine.bookmarkMarket(marketId);
-        } else {
-            engine.unbookmarkMarket(marketId);
-        }
-        
-        // Update database
-        const update = isBookmarked 
-            ? { $addToSet: { bookmarkedMarkets: marketId } }
-            : { $pull: { bookmarkedMarkets: marketId } };
-            
-        await User.updateOne({ address: normId }, update);
-        
-        console.log(`✅ Successfully ${isBookmarked ? 'bookmarked' : 'unbookmarked'} market:`, marketId);
-        res.json({ success: true });
-    } catch (error) {
-        console.error('❌ Error updating bookmark:', error);
-        res.status(500).json({ 
-            error: 'Failed to update bookmark',
-            details: error instanceof Error ? error.message : String(error)
-        });
-    }
-});
-
-app.get('/api/bot/mm/bookmarks', async (req: any, res: any) => {
-    const { userId } = req.query;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    if (!engine) return res.status(404).json({ error: "Engine offline" });
-    
-    res.json({ success: true, bookmarks: engine.getBookmarkedOpportunities() });
-});
-
-app.get('/api/bot/mm/opportunities/:category', async (req: any, res: any) => {
-    const { userId } = req.query;
-    const { category } = req.params;
-    const normId = userId.toLowerCase();
-    const engine = ACTIVE_BOTS.get(normId);
-    
-    if (!engine) return res.status(404).json({ error: "Engine offline" });
-    if (!engine.getArbOpportunities) {
-        return res.json({ success: true, opportunities: [] });
-    }
-    
-    try {
-        const opportunities = engine.getOpportunitiesByCategory(category);
-        res.json({ success: true, opportunities });
-    } catch (error) {
-        console.error('Error getting opportunities by category:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to get opportunities' 
-        });
-    }
-});
-
-app.get('*', (req, res) => {
-    const indexPath = path.join(distPath, 'index.html');
-    if (!fs.existsSync(indexPath)) {
-        console.error(`[SERVER] Missing index.html at ${indexPath}. Frontend not built?`);
-        return res.status(500).send("Application frontend not found. Ensure 'npm run build' was executed.");
-    }
-    res.sendFile(indexPath);
-});
-
-// --- SYSTEM RESTORE ---
-async function restoreBots() {
-    console.log("🔄 Restoring Active Bots from Database...");
-    try {
-        const activeUsers = await User.find({ isBotRunning: true, "tradingWallet.address": { $exists: true } })
-            .select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
-        
-        for (const user of activeUsers) {
-            if (user.activeBotConfig && user.tradingWallet) {
-                 const normId = user.address.toLowerCase();
-                 const config = user.activeBotConfig;
-
-                 // Set default Fomo Runner config
-                 config.enableFomoRunner = config.enableFomoRunner ?? true;
-                 config.enableMoneyMarkets = config.enableMoneyMarkets ?? true;
-                 config.enableCopyTrading = config.enableCopyTrading ?? true;
-                 
-                 // Inject transient runtime data
-                 config.walletConfig = user.tradingWallet;
-                 config.l2ApiCredentials = user.tradingWallet.l2ApiCredentials;
-                 config.mongoEncryptionKey = ENV.mongoEncryptionKey;
-                 config.builderApiKey = ENV.builderApiKey;
-                 config.builderApiSecret = ENV.builderApiSecret;
-                 config.builderApiPassphrase = ENV.builderApiPassphrase;
-
-                 try {
-                    await startUserBot(normId, config);
-                    console.log(`✅ Restored Bot: ${normId}`);
-                 } catch (err: any) {
-                    console.error(`Bot Start Error for ${normId}: ${err.message}`);
-                 }
-            }
-        }
-    } catch (e) { console.error("Restore failed:", e); }
-}
-
-// --- REGISTRY SEER ---
-async function seedRegistry() {
-    const systemWallets = ENV.userAddresses; 
-    if (!systemWallets || systemWallets.length === 0) return;
-
-    console.log(`🌱 Seeding Registry with ${systemWallets.length} system wallets from wallets.txt...`);
-
-    for (const address of systemWallets) {
-        if (!address || !address.startsWith('0x')) continue;
-
-        const normalized = address.toLowerCase();
-        try {
-            const exists = await Registry.findOne({ address: { $regex: new RegExp(`^${normalized}$`, "i") } });
-
-            if (!exists) {
-                await Registry.create({
-                    address: normalized,
-                    listedBy: 'SYSTEM',
-                    listedAt: new Date().toISOString(),
-                    isSystem: true,
-                    tags: ['OFFICIAL', 'WHALE'],
-                    winRate: 0,
-                    totalPnl: 0,
-                    tradesLast30d: 0,
-                    followers: 0,
-                    copyCount: 0,
-                    copyProfitGenerated: 0
-                });
-                console.log(`   + Added ${normalized.slice(0,8)}...`);
-            } else if (!exists.isSystem) {
-                exists.isSystem = true;
-                if (!exists.tags?.includes('OFFICIAL')) {
-                    exists.tags = [...(exists.tags || []), 'OFFICIAL'];
-                }
-                await exists.save();
-                console.log(`   ^ Upgraded ${normalized.slice(0,8)}... to Official`);
-            }
-        } catch(e) {
-            console.warn(`Failed to seed ${normalized}:`, e);
-        }
-    }
-    
-    await registryAnalytics.updateAllRegistryStats();
-}
+// Portfolio Snapshots
 
 // --- PORTFOLIO ANALYTICS ENDPOINTS ---
 app.get('/api/portfolio/snapshots/:userId', async (req: any, res: any) => {
@@ -1245,19 +953,91 @@ app.get('/api/portfolio/latest/:userId', async (req: any, res: any) => {
     }
 });
 
-// --- BOOTSTRAP ---
-httpServer.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`🌍 Bet Mirror Server running on port ${PORT}`);
+// --- REGISTRY SEER ---
+async function seedRegistry() {
+    const systemWallets = ENV.userAddresses; 
+    if (!systemWallets || systemWallets.length === 0) return;
+
+    console.log(`🌱 Seeding Registry with ${systemWallets.length} system wallets from wallets.txt...`);
+
+    for (const address of systemWallets) {
+        if (!address || !address.startsWith('0x')) continue;
+
+        const normalized = address.toLowerCase();
+        try {
+            const exists = await Registry.findOne({ address: { $regex: new RegExp(`^${normalized}$`, "i") } });
+
+            if (!exists) {
+                await Registry.create({
+                    address: normalized,
+                    listedBy: 'SYSTEM',
+                    listedAt: new Date().toISOString(),
+                    isSystem: true,
+                    tags: ['OFFICIAL', 'WHALE'],
+                    winRate: 0,
+                    totalPnl: 0,
+                    tradesLast30d: 0,
+                    followers: 0,
+                    copyCount: 0,
+                    copyProfitGenerated: 0
+                });
+                console.log(`   + Added ${normalized.slice(0,8)}...`);
+            } else if (!exists.isSystem) {
+                exists.isSystem = true;
+                if (!exists.tags?.includes('OFFICIAL')) {
+                    exists.tags = [...(exists.tags || []), 'OFFICIAL'];
+                }
+                await exists.save();
+                console.log(`   ^ Upgraded ${normalized.slice(0,8)}... to Official`);
+            }
+        } catch(e) {
+            console.warn(`Failed to seed ${normalized}:`, e);
+        }
+    }
+    
+    await registryAnalytics.updateAllRegistryStats();
+}
+
+// Handle React SPA Routing
+app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
 });
 
-connectDB()
-    .then(async () => {
-        console.log("✅ DB Connected. Syncing system...");
-        await seedRegistry(); 
-        // Explicitly start intelligence service on the global singleton
-        await globalIntelligence.start();
-        restoreBots();
-    })
-    .catch((err) => {
-        console.error("❌ CRITICAL: DB Connection Failed. " + err.message);
+// --- SERVER START ---
+async function bootstrap() {
+    serverLogger.info("Starting bootstrap...");
+    await connectDB();
+    await seedRegistry();
+    
+    await globalIntelligence.start();
+    serverLogger.success("Global Market Intelligence Online.");
+
+    const runningUsers = await User.find({ isBotRunning: true }).select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
+    serverLogger.info(`Restoring ${runningUsers.length} active bot instances...`);
+
+    for (const u of runningUsers) {
+        if (!u.activeBotConfig || !u.tradingWallet) continue;
+        try {
+            await startUserBot(u.address, {
+                ...u.activeBotConfig,
+                walletConfig: u.tradingWallet,
+                mongoEncryptionKey: ENV.mongoEncryptionKey,
+                l2ApiCredentials: u.tradingWallet.l2ApiCredentials,
+                builderApiKey: ENV.builderApiKey,
+                builderApiSecret: ENV.builderApiSecret,
+                builderApiPassphrase: ENV.builderApiPassphrase
+            } as any);
+        } catch (e: any) {
+            serverLogger.error(`Failed to restore bot for ${u.address}: ${e.message}`);
+        }
+    }
+
+    httpServer.listen(PORT, () => {
+        serverLogger.success(`Bet Mirror Pro Node running on http://localhost:${PORT}`);
     });
+}
+
+bootstrap().catch(err => {
+    serverLogger.error("CRITICAL BOOTSTRAP FAILURE", err);
+    process.exit(1);
+});

@@ -401,6 +401,9 @@ export class BotEngine {
             success: (m) => this.addLog('success', m)
         };
         try {
+            if (!this.intelligence.isRunning) {
+                await this.intelligence.start();
+            }
             // Initialize exchange
             this.exchange = new PolymarketAdapter({
                 rpcUrl: this.config.rpcUrl,
@@ -428,7 +431,7 @@ export class BotEngine {
         catch (e) {
             this.addLog('error', `Startup failed: ${e.message}`);
             this.isRunning = false;
-            throw e; // Re-throw to allow callers to handle the error
+            throw e;
         }
     }
     initializeCoreModules(logger) {
@@ -494,15 +497,17 @@ export class BotEngine {
         this.heartbeatInterval = setInterval(async () => {
             if (!this.isRunning)
                 return;
-            // 1. User-specific Snipes update
+            // 1. User-specific Snipes update for the UI
             if (this.fomoRunner) {
                 const snipes = this.fomoRunner.getActiveSnipes();
                 this.callbacks?.onFomoSnipes?.(snipes);
             }
-            // 2. User-specific Position & Stats sync
+            // 2. Global FOMO moves are now handled by server.ts via real-time push events
+            // We no longer need to poll intelligence.getLatestMoves() here for the UI.
+            // 3. User-specific Position & Stats sync
             await this.syncPositions();
             await this.syncStats();
-        }, 5000); // 5s is plenty for background sync
+        }, 5000);
     }
     stop() {
         this.isRunning = false;
@@ -589,7 +594,7 @@ export class BotEngine {
         }
     }
     getActiveFomoMoves() {
-        return this.intelligence?.getLatestMovesFromDB() || [];
+        return this.intelligence?.getLatestMoves() || [];
     }
     getActiveSnipes() {
         return this.fomoRunner?.getActiveSnipes() || [];

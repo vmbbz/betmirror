@@ -49,6 +49,12 @@ export class FomoRunnerService extends EventEmitter {
         if (this.activeSnipes.has(event.tokenId)) return;
         if (event.velocity < 0.05) return; 
 
+        // Guard against missing conditionId to satisfy TypeScript required string constraints (Fix for TS2322)
+        if (!event.conditionId) {
+            this.logger.warn(`[FOMO] Skipping ${event.tokenId}: Missing conditionId in event data`);
+            return;
+        }
+
         try {
             const metrics = await this.adapter.getLiquidityMetrics?.(event.tokenId, 'BUY');
             if (metrics && metrics.availableDepthUsd < this.LIQUIDITY_FLOOR) {
@@ -95,7 +101,6 @@ export class FomoRunnerService extends EventEmitter {
                     orderType: 'GTC'
                 });
             } else {
-                // FIX: Enhanced logging to show WHY the snipe failed.
                 const velocityMsg = `Velocity was ${(event.velocity * 100).toFixed(2)}%`;
                 this.logger.warn(`[FOMO] Snipe REJECTED [${velocityMsg}]. Price gap moved beyond slippage cap or FOK expired: ${result.error || 'No liquidity'}`);
             }

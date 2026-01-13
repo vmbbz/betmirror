@@ -80,10 +80,8 @@ export class BotEngine {
     private positionMonitor?: PositionMonitorService;
     
     private fundWatcher?: NodeJS.Timeout;
-    private uiHeartbeatLoop: NodeJS.Timeout | null = null;
-    private backgroundSyncLoop: NodeJS.Timeout | null = null;
-    private heartbeatLoop: NodeJS.Timeout | null = null;
     private heartbeatInterval?: NodeJS.Timeout;
+
     private activePositions: ActivePosition[] = [];
     private stats: UserStats = {
         totalPnl: 0, 
@@ -326,6 +324,8 @@ export class BotEngine {
             for (const p of positions) {
                 const pos = await this.enrichPosition(p);
                 await this.updateMarketState(pos);
+                // Flag if managed by current MM strategy
+                pos.managedByMM = this.arbScanner?.hasActiveQuotes(pos.tokenId) || false;
                 enriched.push(pos);
             }
             
@@ -394,13 +394,13 @@ export class BotEngine {
 
         if (this.callbacks?.onStatsUpdate) {
             await this.callbacks.onStatsUpdate({
-                totalPnl: 0, // Calculated by server.ts from DB
-                totalVolume: 0, 
-                totalFeesPaid: 0,
-                winRate: 0,
-                tradesCount: 0,
-                winCount: 0,
-                lossCount: 0,
+                totalPnl: this.stats.totalPnl, 
+                totalVolume: this.stats.totalVolume, 
+                totalFeesPaid: this.stats.totalFeesPaid,
+                winRate: this.stats.winRate,
+                tradesCount: this.stats.tradesCount,
+                winCount: this.stats.winCount,
+                lossCount: this.stats.lossCount,
                 allowanceApproved: true,
                 portfolioValue: cashBalance + positionValue,
                 cashBalance: cashBalance
@@ -485,7 +485,7 @@ export class BotEngine {
         };
 
         try {
-            // FIX: Using the shared intelligence singleton from constructor to avoid redundant firehose.
+            // Use existing Intelligence singleton, do NOT overwrite
             if (!this.intelligence.isRunning) {
                 await this.intelligence.start();
             }
@@ -610,16 +610,16 @@ export class BotEngine {
                 this.callbacks?.onFomoSnipes?.(snipes);
             }
 
-            // 2. Poll intelligence hub for latest moves to push to the UI via callback
-            const moves = await this.intelligence.getLatestMoves();
-            if (moves.length > 0) {
-                this.callbacks?.onFomoVelocity?.(moves);
+            // 2. Market Making Opportunities for UI
+            if (this.arbScanner) {
+                const opps = this.arbScanner.getOpportunities();
+                this.callbacks?.onArbUpdate?.(opps);
             }
 
             // 3. User-specific Position & Stats sync
             await this.syncPositions();
             await this.syncStats();
-        }, 5000); 
+        }, 2000); 
     }
 
     public stop() {
@@ -628,12 +628,10 @@ export class BotEngine {
         this.fomoRunner?.setConfig(false, 0.2);
         if (this.monitor) this.monitor.stop();
         if (this.portfolioService) this.portfolioService.stopSnapshotService();
-        if (this.fundWatcher) {
-            clearInterval(this.fundWatcher);
-            this.fundWatcher = undefined;
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = undefined;
         }
-        if (this.uiHeartbeatLoop) clearInterval(this.uiHeartbeatLoop);
-        if (this.backgroundSyncLoop) clearInterval(this.backgroundSyncLoop);
         this.addLog('warn', 'Engine Stopped.');
     }
 
@@ -722,7 +720,6 @@ export class BotEngine {
 
     public async addMarketToMM(conditionId: string): Promise<boolean> { return this.arbScanner?.addMarketByConditionId(conditionId) || false; }
     public async addMarketBySlug(slug: string): Promise<boolean> { return this.arbScanner?.addMarketBySlug(slug) || false; }
-    public bookmarkMarket(conditionId: string): void { this.arbScanner?.bookmarkMarket(conditionId); }
-    public unbookmarkMarket(conditionId: string): void { this.arbScanner?.unbookmarkMarket(conditionId); }
-    public getBookmarkedOpportunities(): ArbitrageOpportunity[] { return this.arbScanner?.getBookmarkedOpportunities() || []; }
+    public bookmarkMarket(marketId: string): void { this.arbScanner?.bookmarkMarket(marketId); }
+    public unbookmarkMarket(marketId: string): void { this.arbScanner?.unbookmarkMarket(marketId); }
 }

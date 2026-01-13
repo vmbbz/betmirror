@@ -94,7 +94,6 @@ export class BotEngine {
         lossCount: 0, 
         allowanceApproved: false,
         portfolioValue: 0,
-        statsValueSyncTs: 0,
         cashBalance: 0
     };
 

@@ -94,6 +94,12 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private invalidTokenIds = new Set<string>();
     private lastTokenIdCheck = new Map<string, number>();
     private readonly TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000; // 5 minutes
+
+    // --- 429 MITIGATION CACHE ---
+    // Global static cache shared by all adapter instances to stop redundant Gamma/CLOB API hits
+    private static metadataCache = new Map<string, { data: MarketSlugs, ts: number }>();
+    private readonly METADATA_TTL = 24 * 60 * 60 * 1000; // 24 Hour Cache
+
     private wallet?: WalletV6; 
     private walletV5?: WalletV5; 
     private walletService?: EvmWalletService;
@@ -494,10 +500,16 @@ export class PolymarketAdapter implements IExchangeAdapter {
     // ============================================
 
     /**
-     * Fetches market slugs and metadata from CLOB + Gamma APIs
-     * Uses conditionId as the primary identifier
+     * 429 MITIGATION: Fetches market slugs and metadata from CLOB + Gamma APIs
+     * Uses a static global cache with 24-hour TTL to prevent rate limiting.
      */
     private async fetchMarketSlugs(conditionId: string): Promise<MarketSlugs> {
+        // Check memory cache first
+        const cached = PolymarketAdapter.metadataCache.get(conditionId);
+        if (cached && (Date.now() - cached.ts < this.METADATA_TTL)) {
+            return cached.data;
+        }
+
         const result: MarketSlugs = {
             marketSlug: '',
             eventSlug: '',
@@ -538,6 +550,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
             } catch (e) {
                 this.logger.debug(`Error fetching Gamma event slug for ${result.marketSlug}: ${e instanceof Error ? e.message : 'Unknown error'}`);
             }
+        }
+        
+        // Save to static cache if we got useful info
+        if (result.question || result.marketSlug) {
+            PolymarketAdapter.metadataCache.set(conditionId, { data: result, ts: Date.now() });
         }
         
         return result;
@@ -836,7 +853,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 taker: "0x0000000000000000000000000000000000000000"
             });
 
-            // CRITICAL: Respect orderType parameter for GTC (Maker) support
+            // Respect orderType parameter for GTC (Maker) support
             let orderType = OrderType.FOK; // Default to FOK for Safety (Taker)
             if (params.orderType === 'GTC') {
                 orderType = OrderType.GTC;

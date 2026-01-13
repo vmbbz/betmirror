@@ -189,7 +189,7 @@ const PerformanceChart = ({ userId, selectedRange }: {
             <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
                     <defs>
-                        <linearGradient id="colorValue" x1="0" x1="0" x2="0" y2="1">
+                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
                             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                         </linearGradient>
@@ -2279,7 +2279,7 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         // Handle FOMO data from API response with normalization
         if (res.data.fomoMoves) {
             setFomoMoves(prevMoves => {
-                const fomoMovesArray = (Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : []).map(m => ({
+                const fomoMovesArray = (Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : []).map((m: FlashMove) => ({
                     ...m,
                     timestamp: new Date(m.timestamp || Date.now()).getTime()
                 }));
@@ -2298,7 +2298,7 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         
         if (res.data.fomoSnipes) {
             setActiveSnipes(prevSnipes => {
-                const snipesArray = (Array.isArray(res.data.fomoSnipes) ? res.data.fomoSnipes : []).map(s => ({
+                const snipesArray = (Array.isArray(res.data.fomoSnipes) ? res.data.fomoSnipes : []).map((s: ActiveSnipe) => ({
                     ...s,
                     timestamp: new Date(s.timestamp || Date.now()).getTime()
                 }));

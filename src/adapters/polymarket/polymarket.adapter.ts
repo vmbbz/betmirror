@@ -29,10 +29,6 @@ enum SignatureType {
     POLY_GNOSIS_SAFE = 2
 }
 
-// ============================================
-// INTERFACES FOR MARKET DATA & POSITIONS
-// ============================================
-
 interface MarketSlugs {
     marketSlug: string;
     eventSlug: string;
@@ -93,12 +89,16 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private client?: ClobClient;
     private invalidTokenIds = new Set<string>();
     private lastTokenIdCheck = new Map<string, number>();
-    private readonly TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000; // 5 minutes
+    private readonly TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000;
 
-    // --- 429 MITIGATION CACHE ---
-    // Global static cache shared by ALL instances (users) to stop redundant hammering
+    // --- GLOBAL HFT PROTECTION ---
     private static metadataCache = new Map<string, { data: MarketSlugs, ts: number }>();
-    private readonly METADATA_TTL = 24 * 60 * 60 * 1000; // 24 Hour Cache
+    private static positionCache = new Map<string, { data: EnrichedPositionData[], ts: number }>();
+    private static isThrottled = false;
+    private static throttleExpiry = 0;
+    
+    private readonly METADATA_TTL = 24 * 60 * 60 * 1000; 
+    private readonly POSITION_CACHE_TTL = 10000; // 10 seconds fallback
 
     private wallet?: WalletV6; 
     private walletV5?: WalletV5; 
@@ -114,8 +114,6 @@ export class PolymarketAdapter implements IExchangeAdapter {
     ) {}
 
     async initialize(): Promise<void> {
-        this.logger.info(`[${this.exchangeName}] Initializing Adapter for user ${this.config.userId}...`);
-        
         this.walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
         
         if (this.config.walletConfig.encryptedPrivateKey) {
@@ -146,23 +144,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
         this.usdcContract = new Contract(TOKENS.USDC_BRIDGED, USDC_ABI_INTERNAL, this.provider);
     }
 
-    async validatePermissions(): Promise<boolean> {
-        return true;
-    }
+    async validatePermissions(): Promise<boolean> { return true; }
 
     async authenticate(): Promise<void> {
         if (!this.wallet || !this.safeManager || !this.safeAddress) throw new Error("Adapter not initialized");
-
         await this.safeManager.deploySafe();
         await this.safeManager.enableApprovals();
-
         let apiCreds = this.config.l2ApiCredentials;
         if (!apiCreds || !apiCreds.key) {
-            this.logger.info('Handshake: Deriving L2 API Keys...');
             await this.deriveAndSaveKeys();
             apiCreds = this.config.l2ApiCredentials; 
         }
-
         this.initClobClient(apiCreds);
     }
 
@@ -201,37 +193,14 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
     private async deriveAndSaveKeys() {
         try {
-            const tempClient = new ClobClient(
-                HOST_URL,
-                Chain.POLYGON,
-                this.walletV5 as any, 
-                undefined,
-                SignatureType.EOA,
-                undefined
-            );
-
+            const tempClient = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5 as any, undefined, SignatureType.EOA, undefined);
             const rawCreds = await tempClient.createOrDeriveApiKey();
             if (!rawCreds || !rawCreds.key) throw new Error("Empty keys returned");
-
-            const apiCreds = {
-                key: rawCreds.key,
-                secret: rawCreds.secret,
-                passphrase: rawCreds.passphrase
-            };
-
-            await User.findOneAndUpdate(
-                { address: this.config.userId },
-                { 
-                    "tradingWallet.l2ApiCredentials": apiCreds,
-                    "tradingWallet.safeAddress": this.safeAddress 
-                }
-            );
+            const apiCreds = { key: rawCreds.key, secret: rawCreds.secret, passphrase: rawCreds.passphrase };
+            await User.findOneAndUpdate({ address: this.config.userId }, { "tradingWallet.l2ApiCredentials": apiCreds, "tradingWallet.safeAddress": this.safeAddress });
             this.config.l2ApiCredentials = apiCreds;
-            this.logger.success('API Keys Derived and Saved');
-        } catch (e: any) {
-            this.logger.error(`Handshake Failed: ${e.message}`);
-            throw e;
-        }
+            this.logger.success('API Keys Derived');
+        } catch (e: any) { throw e; }
     }
 
     async fetchBalance(address: string): Promise<number> {
@@ -239,9 +208,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
         try {
             const bal = await this.usdcContract.balanceOf(address);
             return parseFloat(formatUnits(bal, 6));
-        } catch (e) {
-            return 0;
-        }
+        } catch (e) { return 0; }
     }
 
     async getPortfolioValue(address: string): Promise<number> {
@@ -438,22 +405,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
      * 429 MITIGATION: Shared static cache to prevent hammering Polymarket.
      */
     private async fetchMarketSlugs(conditionId: string): Promise<MarketSlugs> {
-        // Check global cache
         const cached = PolymarketAdapter.metadataCache.get(conditionId);
-        if (cached && (Date.now() - cached.ts < this.METADATA_TTL)) {
-            return cached.data;
-        }
+        if (cached && (Date.now() - cached.ts < this.METADATA_TTL)) return cached.data;
 
-        const result: MarketSlugs = {
-            marketSlug: '',
-            eventSlug: '',
-            question: '',
-            image: '',
-            conditionId: conditionId,
-            acceptingOrders: true,
-            closed: false
-        };
-        
+        const result: MarketSlugs = { marketSlug: '', eventSlug: '', question: '', image: '', conditionId, acceptingOrders: true, closed: false };
         if (!this.client || !conditionId) return result;
 
         try {
@@ -464,26 +419,15 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 result.image = marketData.image || '';
                 result.acceptingOrders = marketData.accepting_orders ?? true;
                 result.closed = marketData.closed || false;
-
                 if (result.marketSlug) {
                     try {
-                        const gammaUrl = `https://gamma-api.polymarket.com/markets/slug/${result.marketSlug}`;
-                        const gammaRes = await axios.get(gammaUrl);
-                        if (gammaRes.data?.events?.length > 0) {
-                            result.eventSlug = gammaRes.data.events[0]?.slug || '';
-                        }
+                        const gammaRes = await axios.get(`https://gamma-api.polymarket.com/markets/slug/${result.marketSlug}`);
+                        result.eventSlug = gammaRes.data.events?.[0]?.slug || '';
                     } catch (e) {}
                 }
             }
-        } catch (e) {
-            this.logger.debug(`Metadata fetch failed for ${conditionId}: ${e instanceof Error ? e.message : 'Unknown'}`);
-        }
-        
-        // Only cache if we got something useful
-        if (result.question || result.marketSlug) {
-            PolymarketAdapter.metadataCache.set(conditionId, { data: result, ts: Date.now() });
-        }
-        
+        } catch (e) {}
+        if (result.question || result.marketSlug) PolymarketAdapter.metadataCache.set(conditionId, { data: result, ts: Date.now() });
         return result;
     }
 
@@ -565,50 +509,43 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getPositions(address: string): Promise<EnrichedPositionData[]> {
+        // --- GLOBAL THROTTLE CHECK ---
+        if (PolymarketAdapter.isThrottled) {
+            if (Date.now() < PolymarketAdapter.throttleExpiry) {
+                return PolymarketAdapter.positionCache.get(address)?.data || [];
+            }
+            PolymarketAdapter.isThrottled = false;
+        }
+
         try {
             const res = await axios.get(`https://data-api.polymarket.com/positions?user=${address}`);
             if (!Array.isArray(res.data)) return [];
             
             const positions: EnrichedPositionData[] = [];
-            
             for (const p of res.data) {
                 const size = parseFloat(p.size) || 0;
                 if (size <= 0.01) continue;
-                
-                const conditionId = p.conditionId || '';
-                const tokenId = p.asset || '';
-                const outcome = p.outcome || 'YES';
-                
-                const entryPrice = parseFloat(p.avgPrice) || 0.5;
-                const currentPrice = parseFloat(p.price) || entryPrice;
-                
-                // Use cached slugs to prevent 429 errors
-                const metadata = await this.fetchMarketSlugs(conditionId);
-                
+                const metadata = await this.fetchMarketSlugs(p.conditionId || '');
+                const entry = parseFloat(p.avgPrice) || 0.5;
+                const current = parseFloat(p.price) || 0.5;
                 positions.push({
-                    marketId: conditionId,
-                    conditionId: conditionId,
-                    tokenId: tokenId,
-                    clobOrderId: tokenId,
-                    outcome: outcome,
-                    balance: size,
-                    valueUsd: size * currentPrice,
-                    investedValue: size * entryPrice,
-                    entryPrice: entryPrice,
-                    currentPrice: currentPrice,
-                    unrealizedPnL: (size * currentPrice) - (size * entryPrice),
-                    question: metadata.question || `Market ${conditionId.slice(0, 10)}...`,
-                    image: metadata.image,
-                    marketSlug: metadata.marketSlug,
-                    eventSlug: metadata.eventSlug,
-                    isResolved: metadata.closed,
-                    acceptingOrders: metadata.acceptingOrders
+                    marketId: p.conditionId, conditionId: p.conditionId, tokenId: p.asset || '', clobOrderId: p.asset || '',
+                    outcome: p.outcome || 'YES', balance: size, valueUsd: size * current,
+                    investedValue: size * entry, entryPrice: entry, currentPrice: current,
+                    unrealizedPnL: (size * current) - (size * entry),
+                    question: metadata.question || `Market ${p.conditionId.slice(0, 10)}...`, image: metadata.image,
+                    marketSlug: metadata.marketSlug, eventSlug: metadata.eventSlug, isResolved: metadata.closed, acceptingOrders: metadata.acceptingOrders
                 });
             }
+            PolymarketAdapter.positionCache.set(address, { data: positions, ts: Date.now() });
             return positions;
         } catch (e: any) {
-            this.logger.error(`Error fetching positions: ${e.message}`);
-            return [];
+            if (e.response?.status === 429) {
+                this.logger.error(`🚨 429 Throttled. Activating Global Cool-Down (60s).`);
+                PolymarketAdapter.isThrottled = true;
+                PolymarketAdapter.throttleExpiry = Date.now() + 60000;
+            }
+            return PolymarketAdapter.positionCache.get(address)?.data || [];
         }
     }
 

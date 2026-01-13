@@ -524,6 +524,22 @@ export class BotEngine {
         }
     }
 
+    /**
+     * Orchestrated Tick: Called by Master Heartbeat to sync state.
+     */
+    public async performTick() {
+        if (!this.isRunning || !this.exchange) return;
+        try {
+            const positions = await this.exchange.getPositions(this.exchange.getFunderAddress());
+            this.activePositions = positions.map(p => ({
+                tradeId: `synced-${p.tokenId}`, marketId: p.marketId, tokenId: p.tokenId,
+                outcome: p.outcome as any, entryPrice: p.entryPrice, shares: p.balance,
+                valueUsd: p.valueUsd, sizeUsd: p.investedValue || p.valueUsd, timestamp: Date.now(), currentPrice: p.currentPrice
+            }));
+            if (this.callbacks?.onPositionsUpdate) await this.callbacks.onPositionsUpdate(this.activePositions);
+        } catch (e) {}
+    }
+
     private initializeCoreModules(logger: Logger) {
         if (!this.exchange || !this.executor) return;
         
@@ -713,7 +729,7 @@ export class BotEngine {
         );
     }
     
-    public getActivePositions(): ActivePosition[] { return this.activePositions; }
+    public getActivePositions() { return this.activePositions; }
     public getArbOpportunities(): ArbitrageOpportunity[] { return this.arbScanner?.getOpportunities() || []; }
     public getActiveFomoChases(): any[] { return []; }
     public getCallbacks(): BotCallbacks | undefined { return this.callbacks; }

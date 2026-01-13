@@ -1,3 +1,4 @@
+
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -93,12 +94,13 @@ export class BotEngine {
         lossCount: 0, 
         allowanceApproved: false,
         portfolioValue: 0,
+        statsValueSyncTs: 0,
         cashBalance: 0
     };
 
     private lastPositionSync = 0;
-    private readonly POSITION_SYNC_INTERVAL = 30000; 
-    
+    private readonly POSITION_SYNC_INTERVAL = 300000; // Increased to 5 minutes for stability
+
     private marketMetadataCache = new Map<string, {
         marketSlug: string;
         eventSlug: string;

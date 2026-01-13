@@ -1,3 +1,4 @@
+
 import { 
     IExchangeAdapter, 
     OrderParams,
@@ -98,7 +99,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private static throttleExpiry = 0;
     
     private readonly METADATA_TTL = 24 * 60 * 60 * 1000; 
-    private readonly POSITION_CACHE_TTL = 10000; // 10 seconds fallback
+    private readonly POSITION_CACHE_TTL = 300000; // Increased to 5 minutes to prevent 429 errors
 
     private wallet?: WalletV6; 
     private walletV5?: WalletV5; 

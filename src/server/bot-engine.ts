@@ -1,3 +1,4 @@
+
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -20,8 +21,8 @@ import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { PortfolioTrackerService } from '../services/portfolio-tracker.service.js';
 import { PositionMonitorService } from '../services/position-monitor.service.js';
 import { AutoCashoutConfig } from '../domain/trade.types.js';
-import { MarketIntelligenceService, FlashMoveEvent } from '../services/market-intelligence.service.js';
-import { FomoRunnerService, ActiveSnipe } from '../services/fomo-runner.services.js';
+import { MarketIntelligenceService, FlashMoveEvent } from '../services/market-intelligence.service.ts';
+import { FomoRunnerService, ActiveSnipe } from '../services/fomo-runner.service.ts';
 import crypto from 'crypto';
 import axios from 'axios';
 

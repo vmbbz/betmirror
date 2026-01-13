@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import { Logger } from '../utils/logger.util.js';
@@ -70,15 +71,16 @@ export class MarketIntelligenceService extends EventEmitter {
     // Performance Parameters
     private readonly VELOCITY_THRESHOLD = 0.05;
     private readonly LOOKBACK_MS = 15000;
-    private readonly JANITOR_INTERVAL_MS = 5 * 60 * 1000;
+    private readonly JANITOR_INTERVAL_MS = 60 * 1000; // Aggressive: Check every minute
     private readonly PING_INTERVAL_MS = 10000;
+    private readonly MAX_HISTORY_ITEMS = 3; // Capped at 3 to save heap memory
     
     // WebSocket URL per Polymarket docs
     private readonly WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 
     constructor(private logger: Logger) {
         super();
-        this.setMaxListeners(10000); 
+        this.setMaxListeners(100); // Reduced from 10000 to detect real leaks
         this.startJanitor();
     }
 
@@ -97,9 +99,10 @@ export class MarketIntelligenceService extends EventEmitter {
     public subscribeToToken(tokenId: string) {
         const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
         this.tokenSubscriptionRefs.set(tokenId, count + 1);
+        
+        // Only send subscription frame on the first reference
         if (count === 0 && this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
-            this.ws.send(JSON.stringify({ type: "subscribe", topic: "book", asset_id: tokenId }));
         }
     }
 
@@ -110,12 +113,8 @@ export class MarketIntelligenceService extends EventEmitter {
         const count = (this.tokenSubscriptionRefs.get(tokenId) || 0) - 1;
         if (count <= 0) {
             this.tokenSubscriptionRefs.delete(tokenId);
-            if (this.ws?.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({ 
-                    assets_ids: [tokenId], 
-                    operation: "unsubscribe" 
-                }));
-            }
+            this.priceHistory.delete(tokenId); // Purge from RAM immediately
+            this.lastUpdateTrack.delete(tokenId);
         } else {
             this.tokenSubscriptionRefs.set(tokenId, count);
         }
@@ -126,16 +125,18 @@ export class MarketIntelligenceService extends EventEmitter {
      */
     private startJanitor(): void {
         setInterval(() => {
+            if (!this.isRunning) return;
             const now = Date.now();
             let prunedCount = 0;
+            // Prune if inactive for more than 5 minutes to keep heap low
             for (const [tokenId, lastTs] of this.lastUpdateTrack.entries()) {
-                if (now - lastTs > 10 * 60 * 1000) {
+                if (now - lastTs > 5 * 60 * 1000) {
                     this.priceHistory.delete(tokenId);
                     this.lastUpdateTrack.delete(tokenId);
                     prunedCount++;
                 }
             }
-            if (prunedCount > 0) {
+            if (prunedCount > 50) {
                 this.logger.debug(`[Janitor] Memory reclaimed: Removed ${prunedCount} stale token buffers.`);
             }
         }, this.JANITOR_INTERVAL_MS);
@@ -164,8 +165,6 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     private connect() {
-        // FIX: Changed circuit breaker logic to NOT stop connection unless fatal.
-        // During high volatility, we want to keep the data pipe open at all costs.
         this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
         
         try {
@@ -260,8 +259,6 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     private tripCircuit(): void {
-        // FIX: Decoupled circuit breaker from connection lifecycle.
-        // Instead of setting circuitOpen = true (which stops reconnection), we just emit an alert.
         this.emit('risk_alert', { level: 'CRITICAL', reason: 'Intelligence Hub instability detected' });
         this.logger.warn('⚠️ Intelligence Hub reporting instability - Monitor only mode enabled.');
         
@@ -296,8 +293,6 @@ export class MarketIntelligenceService extends EventEmitter {
     private async processPriceUpdate(tokenId: string, price: number) {
         const now = Date.now();
         this.lastUpdateTrack.set(tokenId, now);
-        
-        // FIX: Emit global price tick so Arbitrage Scanner can re-calculate spreads immediately.
         this.emit('price_update', { tokenId, price, timestamp: now });
 
         const history = this.priceHistory.get(tokenId) || [];
@@ -311,7 +306,8 @@ export class MarketIntelligenceService extends EventEmitter {
             }
         }
         history.push({ price, timestamp: now });
-        if (history.length > 5) history.shift();
+        // Optimization: Keep only the necessary history items in RAM
+        if (history.length > this.MAX_HISTORY_ITEMS) history.shift();
         this.priceHistory.set(tokenId, history);
     }
 
@@ -327,7 +323,7 @@ export class MarketIntelligenceService extends EventEmitter {
     public async getLatestMoves(): Promise<FlashMoveEvent[]> {
         const moves = await FlashMove.find({ 
             timestamp: { $gte: new Date(Date.now() - 900000) } 
-        }).sort({ timestamp: -1 }).limit(30).lean();
+        }).sort({ timestamp: -1 }).limit(20).lean();
 
         return moves.map(m => ({
             tokenId: m.tokenId,

@@ -189,7 +189,7 @@ const PerformanceChart = ({ userId, selectedRange }: {
             <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
                     <defs>
-                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                        <linearGradient id="colorValue" x1="0" x1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
                             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                         </linearGradient>
@@ -725,12 +725,12 @@ const DepositModal = ({
                         </div>
                         <div 
                             onClick={() => setSelectedUsdcType('USDC')}
-                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-blue-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
+                            className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedUsdcType === 'USDC' ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-500 ring-1 ring-green-500' : 'bg-gray-50 dark:bg-black/20 border-gray-200 dark:border-gray-800 hover:border-gray-300'}`}
                         >
                             <div className="text-[10px] text-gray-500 font-bold uppercase mb-1">Native (Circle)</div>
                             <div className="text-sm font-mono font-bold text-gray-900 dark:text-white flex justify-between items-center">
                                 USDC 
-                                <span className="text-blue-600 dark:text-blue-400 text-xs">${balances.usdcNative || '0.00'}</span>
+                                <span className="text-blue-600 dark:text-green-400 text-xs">${balances.usdcNative || '0.00'}</span>
                             </div>
                         </div>
                     </div>
@@ -1977,18 +1977,18 @@ useEffect(() => {
             setIsLoadingFomo(true);
             // Load persistent alpha from server DB to avoid empty list on refresh
             const res = await axios.get('/api/fomo/history');
+            const newMoves = (Array.isArray(res.data) ? res.data : []).map(m => ({
+                ...m,
+                timestamp: new Date(m.timestamp).getTime()
+            }));
             setFomoMoves(prevMoves => {
-                const newMoves = Array.isArray(res.data) ? res.data : [];
-                return [...newMoves, ...prevMoves]
-                    .filter((move, index, self) => 
-                        index === self.findIndex(m => 
-                            m.tokenId === move.tokenId && 
-                            m.conditionId === move.conditionId &&
-                            m.timestamp === move.timestamp
-                        )
+                const combined = [...newMoves, ...prevMoves];
+                return combined.filter((move, index, self) => 
+                    index === self.findIndex(m => 
+                        m.tokenId === move.tokenId && 
+                        new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
                     )
-                    .sort((a, b) => b.timestamp - a.timestamp)
-                    .slice(0, 50);
+                ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
             });
         } catch (e) {
             console.error("Failed to hydrate FOMO moves", e);
@@ -2016,23 +2016,32 @@ useEffect(() => {
 
     // Updates fomoMoves which is passed as 'flashMoves' to the FomoRunner component
     s.on('FOMO_VELOCITY_UPDATE', (moves: any[]) => {
-        // Ensure we have the correct type by mapping to the expected shape
+        // Ensure we have the correct type and normalized timestamps
         const typedMoves = Array.isArray(moves) ? moves.map(move => ({
             tokenId: move.tokenId,
             conditionId: move.conditionId || '',
             oldPrice: move.oldPrice || 0,
             newPrice: move.newPrice || 0,
             velocity: move.velocity || 0,
-            timestamp: move.timestamp || Date.now(),
+            timestamp: new Date(move.timestamp || Date.now()).getTime(), // Normalize
             question: move.question,
             image: move.image,
             marketSlug: move.marketSlug
         })) : [];
-        setFomoMoves(typedMoves);
+
+        setFomoMoves(prevMoves => {
+            const combined = [...typedMoves, ...prevMoves];
+            return combined.filter((move, index, self) => 
+                index === self.findIndex(m => 
+                    m.tokenId === move.tokenId && 
+                    new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
+                )
+            ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
+        });
     });
 
     s.on('FOMO_SNIPES_UPDATE', (snipes: any[]) => {
-        // Ensure we have the correct type by mapping to the expected shape
+        // Ensure we have the correct type and normalized timestamps
         const typedSnipes = Array.isArray(snipes) ? snipes.map(snipe => ({
             tokenId: snipe.tokenId,
             conditionId: snipe.conditionId || '',
@@ -2040,10 +2049,19 @@ useEffect(() => {
             currentPrice: snipe.currentPrice || 0,
             targetPrice: snipe.targetPrice,
             shares: snipe.shares || 0,
-            timestamp: snipe.timestamp || Date.now(),
+            timestamp: new Date(snipe.timestamp || Date.now()).getTime(), // Normalize
             question: snipe.question
         })) : [];
-        setActiveSnipes(typedSnipes);
+
+        setActiveSnipes(prevSnipes => {
+            const combined = [...typedSnipes, ...prevSnipes];
+            return combined.filter((snipe, index, self) => 
+                index === self.findIndex(s => 
+                    s.tokenId === snipe.tokenId &&
+                    new Date(s.timestamp).getTime() === new Date(snipe.timestamp).getTime()
+                )
+            ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
+        });
     });
 
     // Cleanup: Decouple instance from browser lifecycle
@@ -2258,18 +2276,18 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
             setStats(res.data.stats);
         }
         
-        // Handle FOMO data from API response
+        // Handle FOMO data from API response with normalization
         if (res.data.fomoMoves) {
             setFomoMoves(prevMoves => {
-                // Ensure fomoMoves is an array before spreading
-                const fomoMovesArray = Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : [];
-                // Merge with existing moves and keep only the 50 most recent
+                const fomoMovesArray = (Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : []).map(m => ({
+                    ...m,
+                    timestamp: new Date(m.timestamp || Date.now()).getTime()
+                }));
                 const updatedMoves = [...fomoMovesArray, ...prevMoves]
                     .filter((move, index, self) => 
                         index === self.findIndex(m => 
                             m.tokenId === move.tokenId && 
-                            m.conditionId === move.conditionId &&
-                            m.timestamp === move.timestamp
+                            new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
                         )
                     )
                     .sort((a, b) => b.timestamp - a.timestamp)
@@ -2280,12 +2298,15 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
         
         if (res.data.fomoSnipes) {
             setActiveSnipes(prevSnipes => {
-                // Merge with existing snipes and remove duplicates
-                const updatedSnipes = [...(res.data.fomoSnipes || []), ...prevSnipes]
+                const snipesArray = (Array.isArray(res.data.fomoSnipes) ? res.data.fomoSnipes : []).map(s => ({
+                    ...s,
+                    timestamp: new Date(s.timestamp || Date.now()).getTime()
+                }));
+                const updatedSnipes = [...snipesArray, ...prevSnipes]
                     .filter((snipe, index, self) => 
                         index === self.findIndex(s => 
                             s.tokenId === snipe.tokenId &&
-                            s.timestamp === snipe.timestamp
+                            new Date(s.timestamp).getTime() === new Date(snipe.timestamp).getTime()
                         )
                     )
                     .sort((a, b) => b.timestamp - a.timestamp);
@@ -2368,12 +2389,12 @@ useEffect(() => {
     if (!isConnected || !userAddress || needsActivation) return;
     
     // Poll Server State
-    const interval = setInterval(fetchBotStatus, 15000);
+    const interval = setInterval(() => fetchBotStatus(false), 15000);
     
     // Poll Balances (Every 10s)
-    const balanceInterval = setInterval(fetchBalances, 10000);
-    fetchBalances(); // Initial
-    fetchBotStatus(); // Initial
+    const balanceInterval = setInterval(() => fetchBalances(false), 10000);
+    fetchBalances(false); // Initial
+    fetchBotStatus(false); // Initial
 
     return () => {
         clearInterval(interval);
@@ -2386,7 +2407,7 @@ useEffect(() => {
 }, [isConnected, needsActivation]);
 
 // --- HELPER: Fetch Balances ---
-const fetchBalances = async (force?: boolean) => {
+const fetchBalances = async (force: boolean = false) => {
     if (!userAddress || !(window as any).ethereum) return;
     try {
         const provider = new BrowserProvider((window as any).ethereum);
@@ -4199,7 +4220,7 @@ return (
                         <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-2">
                             <Sliders size={14} className="text-purple-500"/> Engine Calibration
                         </h4>
-
+                        
                         <div className="space-y-6">
                             <div className="space-y-4">
                                 <div className="flex justify-between items-center">

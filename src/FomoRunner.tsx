@@ -1,3 +1,4 @@
+
 // DO add comment above each fix.
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { 
@@ -6,19 +7,8 @@ import {
   Target, Loader2, Radar, Flame, Info,
   TrendingDown, Timer, BarChart3, ChevronRight
 } from 'lucide-react';
-import { io, Socket } from 'socket.io-client';
 
 import { FlashMove, ActiveSnipe } from './types/fomo.types.js';
-
-// Define WebSocket message types
-interface WebSocketMessage {
-    type?: string;
-    data?: {
-        fomoMoves?: any[];
-        [key: string]: any;
-    };
-    [key: string]: any;
-}
 
 const FlashCard = ({ move }: { move: FlashMove }) => {
     const isUp = move.velocity > 0;
@@ -113,17 +103,13 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
   flashMoves: propFlashMoves = [],
   activeSnipes: propActiveSnipes = []
 }) => {
-    const [isLoading, setIsLoading] = useState(true);
-    const [isConnected, setIsConnected] = useState(false);
-    const [socket, setSocket] = useState<Socket | null>(null);
     const [activeTab, setActiveTab] = useState<'scanner' | 'snipes'>('scanner');
-    const [wsFlashMoves, setWsFlashMoves] = useState<FlashMove[]>([]);
     const prevFlashMovesCount = useRef(0);
     const notificationSound = useRef<HTMLAudioElement | null>(null);
     
-    const propFlashMovesArray = Array.isArray(propFlashMoves) ? propFlashMoves : [];
+    // FIX: FomoRunner now relies entirely on data from parent props. wsFlashMoves state and internal socket.io connection removed to avoid split-brain sync issues.
+    const flashMoves = Array.isArray(propFlashMoves) ? propFlashMoves : [];
     const activeSnipes = Array.isArray(propActiveSnipes) ? propActiveSnipes : [];
-    const flashMoves = [...propFlashMovesArray, ...wsFlashMoves];
     const heat = flashMoves.length > 5 ? 'EXTREME' : flashMoves.length > 0 ? 'HIGH' : 'STABLE';
     
     // Initialize audio
@@ -151,67 +137,6 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
         prevFlashMovesCount.current = currentCount;
     }, [flashMoves.length]);
 
-    useEffect(() => {
-        const connectWebSocket = () => {
-            try {
-                // Use Socket.io client instead of raw WebSocket for better reliability
-                const socket = io('wss://betmirror.bet', {
-                    transports: ['websocket', 'polling'],
-                    upgrade: false
-                });
-                
-                socket.on('connect', () => {
-                    console.log('Socket.io connected');
-                    setIsConnected(true);
-                    setIsLoading(false);
-                });
-
-                socket.on('FOMO_VELOCITY_UPDATE', (response) => {
-                    if (response?.data?.fomoMoves) {
-                        setWsFlashMoves(response.data.fomoMoves);
-                        if (notificationSound.current) {
-                            notificationSound.current.currentTime = 0;
-                            notificationSound.current.play().catch(() => {});
-                        }
-                    }
-                });
-
-                socket.on('disconnect', () => {
-                    console.log('Socket.io disconnected');
-                    setIsConnected(false);
-                    setIsLoading(false);
-                    // Attempt to reconnect after a delay
-                    setTimeout(connectWebSocket, 3000);
-                });
-
-                socket.on('connect_error', (error) => {
-                    console.error('Socket.io connection error:', error);
-                    setIsConnected(false);
-                    setIsLoading(false);
-                    // Attempt to reconnect after a delay
-                    setTimeout(connectWebSocket, 5000);
-                });
-
-                setSocket(socket as any);
-            } catch (error) {
-                console.error('WebSocket connection error:', error);
-                setIsLoading(false);
-                // Retry connection after a delay
-                setTimeout(connectWebSocket, 5000);
-            }
-        };
-
-        connectWebSocket();
-
-        // Cleanup function
-        return () => {
-            if (socket) {
-                socket.disconnect();
-                setSocket(null);
-            }
-        };
-    }, []);    
-    
     return (
         <div className="space-y-6 md:space-y-10 animate-in fade-in duration-700 px-0 md:px-4">
             {/* Real-time Hero Section */}
@@ -219,7 +144,6 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                 <div className="space-y-2 text-center md:text-left">
                     <div className="flex items-center justify-center md:justify-start gap-3">
                         <div className="p-2 bg-rose-600 rounded-xl shadow-lg shadow-rose-900/30">
-                            {/* Removed non-existent md:size prop to resolve TypeScript error */}
                             <Flame className="text-white" size={24}/>
                         </div>
                         <h2 className="text-2xl md:text-5xl font-black text-white uppercase tracking-tighter italic leading-none">
@@ -227,7 +151,7 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                         </h2>
                     </div>
                     <p className="text-[8px] md:text-xs text-slate-500 font-bold uppercase tracking-[0.4em] ml-1">Price Flash Sniper</p>
-                            </div>
+                </div>
 
                 <div className="w-full md:w-auto bg-slate-900/60 p-4 rounded-2xl border border-white/10 flex items-center justify-between md:justify-start gap-6 md:gap-8 backdrop-blur-md">
                     <div className="text-center md:text-left">
@@ -238,8 +162,8 @@ const FomoRunner: React.FC<FomoRunnerProps> = ({
                     <div className="text-center md:text-left">
                         <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1">Active Snipes</p>
                         <p className="text-sm md:text-xl font-black text-white font-mono">{activeSnipes.length}</p>
-                        </div>
                     </div>
+                </div>
             </div>
 
             {/* View Selection Tabs */}

@@ -1,3 +1,4 @@
+
 import { OrderBook, PositionData } from '../domain/market.types.js';
 import { TradeSignal, TradeHistoryEntry } from '../domain/trade.types.js';
 
@@ -89,6 +90,7 @@ export interface ArbitrageOpportunity {
     isBookmarked?: boolean;
     lastPriceMovePct?: number;
     isVolatile?: boolean;
+    skew?: number;
 }
 
 /**

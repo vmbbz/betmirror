@@ -1,4 +1,3 @@
-
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { TradeExecutorService, ExecutionResult } from '../services/trade-executor.service.js';
 import { aiAgent } from '../services/ai-agent.service.js';
@@ -98,7 +97,8 @@ export class BotEngine {
     };
 
     private lastPositionSync = 0;
-    private readonly POSITION_SYNC_INTERVAL = 300000; // Increased to 5 minutes for stability
+    private lastKnownBalance = 0;
+    private readonly POSITION_SYNC_INTERVAL = 300000; // 5 minute standard cycle
 
     private marketMetadataCache = new Map<string, {
         marketSlug: string;
@@ -307,18 +307,29 @@ export class BotEngine {
         }
     }
 
+    /**
+     * SYNC POSITIONS: High-performance pipeline.
+     * Only executes RPC getPositions if timer expires OR if balance has changed significantly.
+     */
     public async syncPositions(forceChainSync = false): Promise<void> {
         if (!this.exchange) return;
         
         const now = Date.now();
-        if (!forceChainSync && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
+        const funder = this.exchange.getFunderAddress();
+        
+        // 1. Fetch current balance (light call)
+        const currentBalance = await this.exchange.fetchBalance(funder);
+        const hasBalanceChanged = Math.abs(currentBalance - this.lastKnownBalance) > 0.05;
+        this.lastKnownBalance = currentBalance;
+
+        // 2. Throttling Check
+        if (!forceChainSync && !hasBalanceChanged && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
             return;
         }
         
         this.lastPositionSync = now;
 
         try {
-            const funder = this.exchange.getFunderAddress();
             const positions = await this.exchange.getPositions(funder);
             
             const enriched: ActivePosition[] = [];
@@ -527,18 +538,11 @@ export class BotEngine {
 
     /**
      * Orchestrated Tick: Called by Master Heartbeat to sync state.
+     * Uses the throttled syncPositions instead of raw RPC calls.
      */
     public async performTick() {
         if (!this.isRunning || !this.exchange) return;
-        try {
-            const positions = await this.exchange.getPositions(this.exchange.getFunderAddress());
-            this.activePositions = positions.map(p => ({
-                tradeId: `synced-${p.tokenId}`, marketId: p.marketId, tokenId: p.tokenId,
-                outcome: p.outcome as any, entryPrice: p.entryPrice, shares: p.balance,
-                valueUsd: p.valueUsd, sizeUsd: p.investedValue || p.valueUsd, timestamp: Date.now(), currentPrice: p.currentPrice
-            }));
-            if (this.callbacks?.onPositionsUpdate) await this.callbacks.onPositionsUpdate(this.activePositions);
-        } catch (e) {}
+        await this.syncPositions(false);
     }
 
     private initializeCoreModules(logger: Logger) {
@@ -608,7 +612,7 @@ export class BotEngine {
                             price: result.priceFilled,
                             status: 'FILLED'
                         });
-                        await this.syncPositions();
+                        await this.syncPositions(true); // Force sync after trade
                     }
                 }
             });
@@ -633,27 +637,18 @@ export class BotEngine {
                 this.callbacks?.onArbUpdate?.(opps);
                 
                 // AUTOMATED LIQUIDITY PROVISION:
-                // Only auto-provide if enableMoneyMarkets is true. 
-                // We pick the top opportunity that meets criteria.
                 if (opps.length > 0 && this.executor) {
                     const topOpp = opps[0];
                     const ageSeconds = (Date.now() - topOpp.timestamp) / 1000;
                     
-                    // CRITERIA: 
-                    // 1. Must be a "fresh" signal (detecting move within last 30s)
-                    // 2. Must be within the reward scoring band (spread <= rewardsMaxSpread)
-                    // 3. Market must be active
-                    const isRewardScoring = topOpp.rewardsMaxSpread ? (topOpp.spreadCents <= topOpp.rewardsMaxSpread) : true;
-                    
+                    const isRewardScoring = topOpp.spreadCents <= (topOpp.rewardsMaxSpread || 10);
                     if (ageSeconds < 30 && isRewardScoring && topOpp.acceptingOrders) {
-                        this.executor.executeMarketMakingQuotes(topOpp).catch(e => {
-                            this.addLog('error', `MM Auto-Provision failed: ${e.message}`);
-                        });
+                        this.executor.executeMarketMakingQuotes(topOpp).catch(() => {});
                     }
                 }
             }
 
-            // 3. User-specific Position & Stats sync
+            // 3. User-specific Position & Stats sync (Handles throttling internally)
             await this.syncPositions();
             await this.syncStats();
         }, 2000); 

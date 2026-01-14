@@ -1,8 +1,9 @@
-
 import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
+import type { Data } from 'ws';
 import { Logger } from '../utils/logger.util.js';
-import { FlashMove } from '../database/index.js';
+import { FlashMove, MoneyMarketOpportunity } from '../database/index.js';
+import axios from 'axios';
 
 /**
  * PriceSnapshot: Simple structure for tracking price velocity.
@@ -69,11 +70,11 @@ export class MarketIntelligenceService extends EventEmitter {
     private globalWatchlist: Set<string> = new Set();
     
     // Performance Parameters
-    private readonly VELOCITY_THRESHOLD = 0.05;
-    private readonly LOOKBACK_MS = 15000;
+    private readonly VELOCITY_THRESHOLD = 0.03; // Adjusted to 3% to catch more alpha
+    private readonly LOOKBACK_MS = 30000;      // 30 second window for smoother velocity
     private readonly JANITOR_INTERVAL_MS = 60 * 1000; // Aggressive: Check every minute
     private readonly PING_INTERVAL_MS = 10000;
-    private readonly MAX_HISTORY_ITEMS = 3; // Capped at 3 to save heap memory
+    private readonly MAX_HISTORY_ITEMS = 5; // Capped at 5 for better velocity calculation
     
     // WebSocket URL per Polymarket docs
     private readonly WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -99,6 +100,7 @@ export class MarketIntelligenceService extends EventEmitter {
         const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
         this.tokenSubscriptionRefs.set(tokenId, count + 1);
         
+        // FIX: Access static OPEN property from imported WebSocket class
         if (count === 1 && this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
         }
@@ -142,6 +144,7 @@ export class MarketIntelligenceService extends EventEmitter {
     private startPingInterval(): void {
         this.stopPingInterval();
         this.pingInterval = setInterval(() => {
+            // FIX: Access static OPEN property from imported WebSocket class
             if (this.ws?.readyState === WebSocket.OPEN) {
                 this.ws.send('PING');
             }
@@ -165,9 +168,13 @@ export class MarketIntelligenceService extends EventEmitter {
         this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
         
         try {
+            // FIX: Using named import for WebSocket construction
             this.ws = new WebSocket(this.WS_URL);
 
-            this.ws.on('open', () => {
+            // FIX: Using explicit cast to any to satisfy TS for Node.js EventEmitter-style 'on' method
+            const ws = this.ws as any;
+
+            ws.on('open', () => {
                 this.connectionAttempts = 0; 
                 this.logger.success('🔌 [GLOBAL HUB] High-performance discovery engine: ONLINE.');
                 
@@ -180,9 +187,9 @@ export class MarketIntelligenceService extends EventEmitter {
                 this.startPingInterval();
             });
 
-            this.ws.on('message', this.handleWebSocketMessage.bind(this));
+            ws.on('message', (data: Data) => this.handleWebSocketMessage(data));
 
-            this.ws.on('close', () => {
+            ws.on('close', () => {
                 const delay = Math.min(
                     this.baseReconnectDelay * Math.pow(2, this.connectionAttempts),
                     this.maxReconnectDelay
@@ -196,7 +203,7 @@ export class MarketIntelligenceService extends EventEmitter {
                 }
             });
 
-            this.ws.on('error', (err: Error) => {
+            ws.on('error', (err: Error) => {
                 this.logger.error("Hub Socket Error: " + err.message);
             });
 
@@ -205,7 +212,7 @@ export class MarketIntelligenceService extends EventEmitter {
         }
     }
 
-    private handleWebSocketMessage(data: WebSocket.Data) {
+    private handleWebSocketMessage(data: Data) {
         try {
             const message = data.toString();
             if (message === 'pong' || message === 'PONG' || message === 'PING') return;
@@ -299,22 +306,59 @@ export class MarketIntelligenceService extends EventEmitter {
             if (now - oldest.timestamp < this.LOOKBACK_MS) {
                 const velocity = (price - oldest.price) / oldest.price;
                 if (Math.abs(velocity) >= this.VELOCITY_THRESHOLD) {
+                    
+                    // --- METADATA ENRICHMENT ENGINE ---
+                    // Raw stream only has asset_id. We must find the question/image for the UI.
+                    let question = "Aggressive Price Action";
+                    let image = "";
+                    let marketSlug = "";
+                    let conditionId = "";
+
+                    try {
+                        // 1. Check local Market Making cache (fastest)
+                        const existingOpp = await MoneyMarketOpportunity.findOne({ tokenId });
+                        if (existingOpp) {
+                            question = existingOpp.question;
+                            image = existingOpp.image || "";
+                            marketSlug = existingOpp.marketSlug || "";
+                            conditionId = existingOpp.marketId;
+                        } else {
+                            // 2. Fallback to Gamma API
+                            const res = await axios.get(`https://gamma-api.polymarket.com/markets?token_id=${tokenId}`);
+                            if (res.data?.[0]) {
+                                const m = res.data[0];
+                                question = m.question;
+                                image = m.image;
+                                marketSlug = m.slug;
+                                conditionId = m.conditionId;
+                            }
+                        }
+                    } catch (e) {}
+
                     const event: FlashMoveEvent = { 
                         tokenId, 
+                        conditionId,
                         oldPrice: oldest.price, 
                         newPrice: price, 
                         velocity, 
-                        timestamp: now 
+                        timestamp: now,
+                        question,
+                        image,
+                        marketSlug
                     };
                     
                     // PERSIST TO DB: This ensures getLatestMoves() actually returns data to the UI
                     try {
                         await FlashMove.create({
                             tokenId: event.tokenId,
+                            conditionId: event.conditionId,
                             oldPrice: event.oldPrice,
                             newPrice: event.newPrice,
                             velocity: event.velocity,
-                            timestamp: new Date(event.timestamp)
+                            timestamp: new Date(event.timestamp),
+                            question: event.question,
+                            image: event.image,
+                            marketSlug: event.marketSlug
                         });
                     } catch (dbErr) {
                         this.logger.debug(`Failed to persist flash move: ${tokenId}`);
@@ -339,11 +383,12 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     public async getLatestMoves(): Promise<FlashMoveEvent[]> {
+        // Extended lookback to 24 hours to ensure UI hydration on load
         const moves = await FlashMove.find({ 
-            timestamp: { $gte: new Date(Date.now() - 900000) } 
+            timestamp: { $gte: new Date(Date.now() - 86400000) } 
         }).sort({ timestamp: -1 }).limit(20).lean();
 
-        return moves.map(m => ({
+        return moves.map((m: any) => ({
             tokenId: m.tokenId,
             conditionId: m.conditionId || "",
             oldPrice: m.oldPrice || 0,
@@ -360,8 +405,9 @@ export class MarketIntelligenceService extends EventEmitter {
         this.isRunning = false;
         this.stopPingInterval();
         if (this.ws) {
-            this.ws.removeAllListeners();
-            this.ws.terminate();
+            const ws = this.ws as any;
+            ws.removeAllListeners();
+            ws.terminate();
             this.ws = undefined;
         }
         this.priceHistory.clear();

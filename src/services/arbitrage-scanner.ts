@@ -158,6 +158,7 @@ export class MarketMakingScanner extends EventEmitter {
     private rateLimiter = new RateLimiter(1500); // 1.5 seconds between requests
 
     // Risk management state
+    private readonly MAX_TRACKED_MARKETS = 300; 
     private lastMidpoints: Map<string, number> = new Map();
     private inventoryBalances: Map<string, InventoryBalance> = new Map();
     private tickSizes: Map<string, TickSizeInfo> = new Map();
@@ -203,7 +204,7 @@ export class MarketMakingScanner extends EventEmitter {
         // Listen to the shared Intelligence Hub for market data
         this.intelligence.on('book_update', (msg) => this.handleBookUpdate(msg));
         this.intelligence.on('price_update', (data) => this.handlePriceUpdate(data));
-        //this.intelligence.on('flash_move', (event) => this.handleFlashMove(event));
+        this.intelligence.on('flash_move', (event) => this.handleFlashMove(event));
     }
 
     async start() {
@@ -223,7 +224,7 @@ export class MarketMakingScanner extends EventEmitter {
             this.logger.info('🌐 Starting initial market discovery...');
             await this.discoverMarkets();
             
-            this.logger.info(`✅ Initial discovery complete. Tracking ${this.trackedMarkets.size} markets`);
+            this.logger.info(`✅ Initial discovery complete. Tracking ${this.trackedMarkets.size} markets (Capped at ${this.MAX_TRACKED_MARKETS})`);
             
             this.logger.info('🔌 Connecting to WebSockets (Market + User Channels)...');
             this.connect();
@@ -289,7 +290,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         try {
             const response = await this.rateLimiter.limit(() => 
-                fetch('https://gamma-api.polymarket.com/tags?limit=200')
+                fetch('https://gamma-api.polymarket.com/tags?limit=100')
             );
             
             if (!response.ok) {
@@ -321,76 +322,87 @@ export class MarketMakingScanner extends EventEmitter {
     /**
      * PRODUCTION: Multi-source market discovery
      */
-    private async discoverMarkets() {
-        this.logger.info('📡 Discovering markets from Gamma API...');
+        private async discoverMarkets() {
+        this.logger.info(`📡 Discovering markets (Target: Top ${this.MAX_TRACKED_MARKETS})...`);
         
         try {
-            let samplingTokens = new Set<string>();
+            const previousTokenIds = new Set(this.trackedMarkets.keys());
+            const currentTokenIds = new Set<string>();
+
+            // 1. Get Reward Eligible Markets (Highest Priority)
             try {
                 const sampling = await this.adapter.getSamplingMarkets?.();
                 if (sampling && Array.isArray(sampling)) {
-                    sampling.forEach(m => samplingTokens.add(m.token_id));
-                    this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools.`);
+                    for (const m of sampling) {
+                        if (currentTokenIds.size >= this.MAX_TRACKED_MARKETS) break;
+                        this.intelligence.subscribeToToken(m.token_id);
+                        currentTokenIds.add(m.token_id);
+                    }
+                    this.logger.info(`🎯 Priority: Subscribed to ${sampling.length} Reward pools.`);
                 }
             } catch (e) {}
 
             const tagIds = await this.fetchTagIds();
-            
-            // Priority categories to fetch (if they exist)
             const priorityCategories = [
                 'sports', 'politics', 'crypto', 'business', 'climate', 
-                'tech', 'elections', 'finance', 'mentions', 'geopolitics',
-                'entertainment', 'science', 'world', 'earnings'
+                'mentions', 'elections', 'entertainment','finance', 'geopolitics',
+                'science', 'tech', 'world', 'earnings'
             ];
             
-            const categoryEndpoint = (tagId: number, limit = 100) =>
-                `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&related_tags=true&limit=${limit}&order=volume&ascending=false`;
-
             const endpoints = [
-                // Trending & newest
+                // Global Volume Leaders
                 'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&order=volume&ascending=false',
-                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=id&ascending=false',
-                
-                // Dynamic category endpoints - only adds if tag exists
+                // Category Specific Alpha
                 ...priorityCategories
                     .filter(cat => tagIds[cat])
-                    .map(cat => categoryEndpoint(tagIds[cat]))
+                    .map(cat => `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds[cat]}&limit=20&order=volume&ascending=false`)
             ];
 
-            let addedCount = 0;
-            const newTokenIds: string[] = [];
             const seenConditionIds = new Set<string>();
 
             for (const url of endpoints) {
+                if (currentTokenIds.size >= this.MAX_TRACKED_MARKETS) break;
+
                 try {
                     const response = await this.rateLimiter.limit(() => fetch(url));
                     if (!response.ok) continue;
                     
                     const events = await response.json();
                     for (const event of events) {
+                        if (currentTokenIds.size >= this.MAX_TRACKED_MARKETS) break;
                         for (const market of (event.markets || [])) {
                             const rawTokenIds = market.clobTokenIds || market.clob_token_ids;
                             const tokenIds = this.parseJsonArray(rawTokenIds);
                             
                             if (tokenIds.length > 0) {
-                                // Tell the global hub we are interested in these books
-                                tokenIds.forEach((id: string) => this.intelligence.subscribeToToken(id));
-                                // Re-process structural data
-                                this.processMarketData(market, event, seenConditionIds);
+                                tokenIds.forEach((id: string) => {
+                                    if (currentTokenIds.size < this.MAX_TRACKED_MARKETS) {
+                                        this.intelligence.subscribeToToken(id);
+                                        currentTokenIds.add(id);
+                                        this.processMarketData(market, event, seenConditionIds);
+                                    }
+                                });
                             }
                         }
                     }
-                } catch (error) {
-                    this.logger.warn(`Error: ${error}`);
+                } catch (error) {}
+            }
+
+            // 4. CLEANUP: Un-subscribe from tokens no longer in the top tier list
+            let unsubCount = 0;
+            for (const id of previousTokenIds) {
+                if (!currentTokenIds.has(id)) {
+                    this.intelligence.unsubscribeFromToken(id);
+                    this.trackedMarkets.delete(id);
+                    unsubCount++;
                 }
             }
 
-            this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new)`);
-
-            if (newTokenIds.length > 0 && this.ws?.readyState === 1) {
-                this.subscribeToTokens(newTokenIds);
+            if (unsubCount > 0) {
+                this.logger.info(`🧹 Discovery Janitor: Unsubscribed from ${unsubCount} stale/low-volume markets.`);
             }
 
+            this.logger.info(`✅ Discovery complete. Active pipeline: ${this.trackedMarkets.size} tokens.`);
             this.updateOpportunities();
 
         } catch (error) {
@@ -1204,28 +1216,18 @@ export class MarketMakingScanner extends EventEmitter {
         const spreadCents = spread * 100;
         const spreadPct = midpoint > 0 ? (spread / midpoint) * 100 : 0;
         
-        // 4. Apply spread filters from config
         if (spreadCents < this.config.minSpreadCents) return;
         if (spreadCents > this.config.maxSpreadCents) return;
         
-        // 5. Check if market is still considered "new" for relaxed requirements
         const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
         const isStillNew = market.isNewMarket && ageMinutes < this.config.newMarketAgeMinutes;
         
-        // 6. Apply volume/liquidity filters with relaxed thresholds for new markets
-        const effectiveMinVolume = isStillNew ? 
-            Math.max(100, this.config.minVolume * 0.1) : // At least $100 for new markets
-            this.config.minVolume;
-            
-        const effectiveMinLiquidity = isStillNew ? 
-            Math.max(50, this.config.minLiquidity * 0.1) : // At least $50 for new markets
-            this.config.minLiquidity;
-        
+        const effectiveMinVolume = isStillNew ? 100 : this.config.minVolume;
+        const effectiveMinLiquidity = isStillNew ? 50 : this.config.minLiquidity;
         
         const skew = await this.getInventorySkew(market.conditionId);
         const isFresh = market.isNewMarket && ageMinutes < this.config.newMarketAgeMinutes;
             
-        // We always add to monitored list, but only opportunities get special treatment
         const opportunity: MarketOpportunity = {
             marketId: market.conditionId,
             conditionId: market.conditionId,
@@ -1255,11 +1257,9 @@ export class MarketMakingScanner extends EventEmitter {
 
         this.monitoredMarkets.set(market.tokenId, opportunity);
 
-        // Check strict MM filters for the actionable opportunities array
         if (market.volume < effectiveMinVolume) return;
         if (market.liquidity < effectiveMinLiquidity) return;
         
-        // 9. Update opportunities
         this.updateOpportunitiesInternal(opportunity);
     }
 

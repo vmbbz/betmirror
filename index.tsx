@@ -1959,7 +1959,7 @@ useEffect(() => {
     if (!isConnected || !userAddress) return;
 
     // Initialize shared socket instance
-    const s = io();
+     const s = io({ transports: ['websocket'], upgrade: false });
     socketRef.current = s;
 
     // Join user room

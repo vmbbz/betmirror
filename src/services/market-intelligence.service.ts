@@ -99,7 +99,7 @@ export class MarketIntelligenceService extends EventEmitter {
         const count = this.tokenSubscriptionRefs.get(tokenId) || 0;
         this.tokenSubscriptionRefs.set(tokenId, count + 1);
         
-        if (count === 0 && this.ws?.readyState === WebSocket.OPEN) {
+        if (count === 1 && this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price", asset_id: tokenId }));
         }
     }
@@ -267,6 +267,7 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     private processTradeMessage(msg: any) {
+        // Normalizing addresses to lowercase for consistent matching
         const maker = (msg.maker_address || "").toLowerCase();
         const taker = (msg.taker_address || "").toLowerCase();
 
@@ -298,15 +299,28 @@ export class MarketIntelligenceService extends EventEmitter {
             if (now - oldest.timestamp < this.LOOKBACK_MS) {
                 const velocity = (price - oldest.price) / oldest.price;
                 if (Math.abs(velocity) >= this.VELOCITY_THRESHOLD) {
-                    // DECOUPLED EMIT: This allows server.ts to broadcast alpha to the UI
-                    // without waiting for specific bot execution loops.
-                    this.emit('flash_move', { 
+                    const event: FlashMoveEvent = { 
                         tokenId, 
                         oldPrice: oldest.price, 
                         newPrice: price, 
                         velocity, 
                         timestamp: now 
-                    });
+                    };
+                    
+                    // PERSIST TO DB: This ensures getLatestMoves() actually returns data to the UI
+                    try {
+                        await FlashMove.create({
+                            tokenId: event.tokenId,
+                            oldPrice: event.oldPrice,
+                            newPrice: event.newPrice,
+                            velocity: event.velocity,
+                            timestamp: new Date(event.timestamp)
+                        });
+                    } catch (dbErr) {
+                        this.logger.debug(`Failed to persist flash move: ${tokenId}`);
+                    }
+
+                    this.emit('flash_move', event);
                 }
             }
         }

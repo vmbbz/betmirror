@@ -631,6 +631,26 @@ export class BotEngine {
             if (this.arbScanner) {
                 const opps = this.arbScanner.getOpportunities();
                 this.callbacks?.onArbUpdate?.(opps);
+                
+                // AUTOMATED LIQUIDITY PROVISION:
+                // Only auto-provide if enableMoneyMarkets is true. 
+                // We pick the top opportunity that meets criteria.
+                if (opps.length > 0 && this.executor) {
+                    const topOpp = opps[0];
+                    const ageSeconds = (Date.now() - topOpp.timestamp) / 1000;
+                    
+                    // CRITERIA: 
+                    // 1. Must be a "fresh" signal (detecting move within last 30s)
+                    // 2. Must be within the reward scoring band (spread <= rewardsMaxSpread)
+                    // 3. Market must be active
+                    const isRewardScoring = topOpp.rewardsMaxSpread ? (topOpp.spreadCents <= topOpp.rewardsMaxSpread) : true;
+                    
+                    if (ageSeconds < 30 && isRewardScoring && topOpp.acceptingOrders) {
+                        this.executor.executeMarketMakingQuotes(topOpp).catch(e => {
+                            this.addLog('error', `MM Auto-Provision failed: ${e.message}`);
+                        });
+                    }
+                }
             }
 
             // 3. User-specific Position & Stats sync
@@ -669,19 +689,6 @@ export class BotEngine {
             const balanceUSDC = await this.exchange.fetchBalance(funderAddr);
             return balanceUSDC >= 1.0 || this.activePositions.length > 0;
         } catch (e) { return false; }
-    }
-
-    private startFundWatcher() {
-        if (this.fundWatcher) clearInterval(this.fundWatcher);
-        this.fundWatcher = setInterval(async () => {
-            if (!this.isRunning) return;
-            const funded = await this.checkFunding();
-            if (funded) {
-                clearInterval(this.fundWatcher);
-                this.fundWatcher = undefined;
-                await this.proceedWithPostFundingSetup();
-            }
-        }, 15000);
     }
 
     private async proceedWithPostFundingSetup() {

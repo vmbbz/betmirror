@@ -985,10 +985,6 @@ export class MarketMakingScanner extends EventEmitter {
 
         if (!msg.event_type) return;
 
-        if (this.killSwitchActive && msg.event_type !== 'market_resolved') {
-            return;
-        }
-
         switch (msg.event_type) {
             case 'best_bid_ask':
                 this.handleBestBidAsk(msg);
@@ -1380,6 +1376,12 @@ export class MarketMakingScanner extends EventEmitter {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = undefined;
         }
+
+        // AGGRESSIVE PURGE: When stopping the module, clear all open orders via the adapter
+        this.logger.warn('[MM] Module Standby: Sending global cancellation request to purge resting orders...');
+        this.adapter.cancelAllOrders().catch(e => {
+            this.logger.error(`Failed to purge MM orders on stop: ${e.message}`);
+        });
 
         this.logger.warn('🛑 Scanner stopped');
     }

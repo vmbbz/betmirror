@@ -415,46 +415,45 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getSamplingMarkets(): Promise<PaginationPayload<Market>> {
-        try {
-            // Use cached public client for better performance
-            const client = this.getPublicClient();
-            
-            const response = await client.getSamplingMarkets();
-            const markets = response?.data || [];
-            
-            // Transform to match the new Market interface format
-            const transformedMarkets: Market[] = markets.map((market: any) => ({
-                accepting_orders: market.accepting_orders !== false,
-                active: market.active !== false,
-                archived: market.archived === true,
-                closed: market.closed === true,
-                condition_id: market.condition_id,
-                description: market.description || '',
-                icon: market.icon || '',
-                image: market.image || '',
-                market_slug: market.market_slug || '',
-                minimum_order_size: market.minimum_order_size || 5,
-                minimum_tick_size: market.minimum_tick_size || 0.01,
-                question: market.question || '',
-                rewards: {
-                    max_spread: market.rewards?.max_spread || 15,
-                    min_size: market.rewards?.min_size || 10,
-                    rates: market.rewards?.rates || null
-                },
-                tags: market.tags || [],
-                tokens: market.tokens || []
-            }));
-            
-            return { 
-                limit: response?.limit || transformedMarkets.length, 
-                count: response?.count || transformedMarkets.length, 
-                data: transformedMarkets 
-            };
-        } catch (e: any) {
-            this.logger.warn(`getSamplingMarkets failed: ${e.message}`);
-            return { limit: 0, count: 0, data: [] };
-        }
+    // For public methods like getSamplingMarkets, create a public-only client if no authenticated client exists
+    const client = this.getPublicClient();
+    
+    try {
+        const response = await client.getSamplingMarkets();
+        const markets = response?.data || [];
+        
+        const transformedMarkets: Market[] = markets.map((market: any) => ({
+            accepting_orders: market.accepting_orders !== false,
+            active: market.active !== false,
+            archived: market.archived === true,
+            closed: market.closed === true,
+            condition_id: market.condition_id,
+            description: market.description || '',
+            icon: market.icon || '',
+            image: market.image || '',
+            market_slug: market.market_slug || '',
+            minimum_order_size: market.minimum_order_size || 5,
+            minimum_tick_size: market.minimum_tick_size || 0.01,
+            question: market.question || '',
+            rewards: {
+                max_spread: market.rewards?.max_spread || 15,
+                min_size: market.rewards?.min_size || 10,
+                rates: market.rewards?.rates || null
+            },
+            tags: market.tags || [],
+            tokens: market.tokens || []
+        }));
+        
+        return { limit: response?.limit || transformedMarkets.length, count: response?.count || transformedMarkets.length, data: transformedMarkets };
+    } catch (e: any) {
+        this.logger.warn(`getSamplingMarkets failed: ${e}`);
+        return { limit: 0, count: 0, data: [] };
     }
+}
+
+private getEmptySamplingPayload(): PaginationPayload<Market> {
+    return { limit: 0, count: 0, data: [] };
+}
 
     // ============================================
     // POSITION & MARKET DATA METHODS (CACHED)

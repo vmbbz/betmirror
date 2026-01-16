@@ -125,13 +125,18 @@ export class MarketIntelligenceService extends EventEmitter {
         if (this.wsManager) {
             this.logger.success('✅ [GLOBAL HUB] Using centralized WebSocket manager');
             this.isRunning = true;
-            // DON'T RETURN EARLY - let the service actually connect and use the WebSocket manager!
+            
+            // CRITICAL: Actually start the WebSocket manager to connect to Polymarket!
+            this.wsManager.start().then(() => {
+                this.logger.success('🚀 [GLOBAL HUB] WebSocket manager started - connected to Polymarket');
+            }).catch((error) => {
+                this.logger.error(`❌ [GLOBAL HUB] Failed to start WebSocket manager: ${error}`);
+            });
         } else {
             // Fallback to direct connection if no manager available
             try {
                 // Note: Centralized manager handles WebSocket connections
                 this.logger.warn('⚠️ [GLOBAL HUB] No WebSocket manager provided - skipping direct connection');
-                return;
             } catch (error) {
                 this.logger.error(`❌ [GLOBAL HUB] Failed to initialize: ${error}`);
             }

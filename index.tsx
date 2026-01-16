@@ -410,6 +410,7 @@ enableSounds: boolean;
 enableAutoArb: boolean;
 enableCopyTrading: boolean;
 enableMoneyMarkets: boolean;
+enableFlashMoves: boolean;
 }
 
 interface WalletBalances {
@@ -1147,7 +1148,7 @@ const OrderManagementModal = ({
         settling?: boolean;
     }>({ resolved: false, loading: true });
     
-    const wsService = useRef<ReturnType<typeof getMarketWebSocketService>>();
+    const wsService = useRef<any>(); // TODO: Replace with actual WebSocket service when available
     const wsCleanup = useRef<() => void>();
 
     useEffect(() => {
@@ -2095,7 +2096,8 @@ const [config, setConfig] = useState<AppConfig>({
     enableSounds: true,
     enableAutoArb: false,
     enableCopyTrading: true,
-    enableMoneyMarkets: false
+    enableMoneyMarkets: false,
+    enableFlashMoves: false
 });
 
 const socketRef = useRef<any>(null); // Fixed type error (Socket as value vs type)
@@ -2673,11 +2675,18 @@ const openDepositModal = () => {
 
 
 const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL') => {
-    if (!proxyAddress) return;
+    if (!proxyAddress) {
+        toast.error("❌ No vault address available. Please create a trading wallet first.");
+        return;
+    }
     
     setIsDepositing(true);
     try {
         let txHash = '';
+        const tokenSymbol = tokenType === 'POL' ? 'POL' : tokenType;
+        
+        // Show initiating toast
+        toast.info(`🚀 Initiating ${tokenSymbol} deposit...`);
         
         if (tokenType === 'POL') {
             txHash = await web3Service.depositNative(proxyAddress, amount);
@@ -2686,20 +2695,59 @@ const handleDeposit = async (amount: string, tokenType: 'USDC.e' | 'USDC' | 'POL
             txHash = await web3Service.depositErc20(proxyAddress, amount, tokenAddr);
         }
 
-        toast.success("Deposit Sent! Funds will arrive in your Vault shortly.");
+        // Success toast with transaction link
+        toast.success(
+            <div>
+                <div className="font-bold">✅ Deposit Sent!</div>
+                <div className="text-xs mt-1">
+                    {amount} {tokenSymbol} → Vault
+                    <br />
+                    <a 
+                        href={`https://polygonscan.com/tx/${txHash}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:underline"
+                    >
+                        View on PolygonScan
+                    </a>
+                </div>
+            </div>,
+            { autoClose: 8000 }
+        );
+        
         setIsDepositModalOpen(false);
         
+        // Record deposit in backend
         try {
             await axios.post('/api/deposit/record', { userId: userAddress, amount: parseFloat(amount), txHash });
-        } catch(ignore){}
+        } catch(recordError) {
+            console.warn("Failed to record deposit:", recordError);
+            // Don't show error to user since deposit succeeded
+        }
+        
+        // Refresh balances after delay
+        setTimeout(() => {
+            fetchBalances();
+        }, 3000);
         
     } catch (e: any) {
-        console.error(e);
-        if (e.message.includes('insufficient') || e.message.includes('balance')) {
-            toast.error("Deposit Failed: Insufficient funds.");
+        console.error("Deposit error:", e);
+        
+        // Detailed error messages
+        let errorMessage = "Deposit failed";
+        if (e.message?.includes('insufficient funds')) {
+            errorMessage = "❌ Insufficient balance for this deposit";
+        } else if (e.message?.includes('gas estimation')) {
+            errorMessage = "❌ Insufficient POL for gas fees";
+        } else if (e.message?.includes('User rejected')) {
+            errorMessage = "❌ Transaction cancelled by user";
+        } else if (e.message?.includes('transfer amount exceeds balance')) {
+            errorMessage = "❌ Amount exceeds available balance";
         } else {
-            toast.error(`Deposit Failed: ${e.message}`);
+            errorMessage = `❌ Deposit failed: ${e.message}`;
         }
+        
+        toast.error(errorMessage, { autoClose: 6000 });
     } finally {
         setIsDepositing(false);
     }
@@ -4360,17 +4408,17 @@ return (
                             <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Autonomous Market Making & Spread capture via GTC maker orders.</p>
                         </div>
 
-                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableFomoRunner ? 'bg-amber-600/10 border-amber-500/40 shadow-[0_0_30px_rgba(245,158,11,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
+                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableFlashMoves ? 'bg-amber-600/10 border-amber-500/40 shadow-[0_0_30px_rgba(245,158,11,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
                             <div className="flex justify-between items-start mb-6">
                                 <div className="p-3 bg-amber-600 rounded-xl text-white shadow-lg"><Zap size={22} /></div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input 
                                         type="checkbox" 
-                                        checked={config.enableFomoRunner} 
+                                        checked={config.enableFlashMoves} 
                                         onChange={async (e) => {
                                             const enabled = e.target.checked;
                                             // Update local config immediately for UI responsiveness
-                                            updateConfig({ enableFomoRunner: enabled });
+                                            updateConfig({ enableFlashMoves: enabled });
                                             
                                             // Call runtime API
                                             try {
@@ -4390,12 +4438,12 @@ return (
                                                 } else {
                                                     toast.error(`Failed to toggle Flash Moves: ${result.message}`);
                                                     // Revert local state on failure
-                                                    updateConfig({ enableFomoRunner: !enabled });
+                                                    updateConfig({ enableFlashMoves: !enabled });
                                                 }
                                             } catch (error) {
                                                 toast.error('Failed to toggle Flash Moves service');
                                                 // Revert local state on failure
-                                                updateConfig({ enableFomoRunner: !enabled });
+                                                updateConfig({ enableFlashMoves: !enabled });
                                             }
                                         }} 
                                         className="sr-only peer" 

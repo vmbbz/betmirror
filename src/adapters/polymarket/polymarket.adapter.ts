@@ -256,10 +256,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getMarketPrice(marketId: string, tokenId: string, side: 'BUY' | 'SELL' = 'BUY'): Promise<number> {
-        if (!this.client) {
-            this.logger.warn('Client not initialized when getting market price');
-            return 0;
-        }
+        // Use cached public client for better performance
+        const client = this.client ?? this.getPublicClient();
 
         const isTradeable = await this.isMarketTradeable(marketId);
         if (!isTradeable) {
@@ -267,11 +265,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
 
         try {
-            const priceRes = await this.client.getPrice(tokenId, side);
+            const priceRes = await client.getPrice(tokenId, side);
             return parseFloat(priceRes.price) || 0;
         } catch (e: any) {
             try {
-                const mid = await this.client.getMidpoint(tokenId);
+                const mid = await client.getMidpoint(tokenId);
                 return parseFloat(mid.mid) || 0;
             } catch (midErr: any) {
                 return 0;
@@ -348,13 +346,14 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getOrderBook(tokenId: string): Promise<OrderBook> {
-        if (!this.client) return this.getEmptyOrderBook();
+        // Use cached public client for better performance
+        const client = this.client ?? this.getPublicClient();
 
         const isTradeable = await this.isMarketTradeable(tokenId);
         if (!isTradeable) return this.getEmptyOrderBook();
 
         try {
-            const book = await this.client.getOrderBook(tokenId);
+            const book = await client.getOrderBook(tokenId);
             if (!book) return this.getEmptyOrderBook();
 
             return {
@@ -676,12 +675,15 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 size: size,
                 feeRateBps: 0,
                 taker: "0x0000000000000000000000000000000000000000"
+            }, {
+                tickSize: tickSize as any, // Type assertion for TickSize
+                negRisk: market.neg_risk || false
             });
 
             let orderType = params.orderType === 'GTC' ? OrderType.GTC : OrderType.FOK;
             const res = await this.client.postOrder(signedOrder, orderType);
 
-            if (res && res.success) {
+            if (res && res.success && !res.errorMsg) {
                 return { 
                     success: true, 
                     orderId: res.orderID, 
@@ -690,7 +692,17 @@ export class PolymarketAdapter implements IExchangeAdapter {
                     priceFilled: price 
                 };
             }
-            throw new Error(res.errorMsg || "Rejected");
+            
+            // Handle specific errors as per docs
+            if (res.errorMsg?.includes('MIN_TICK_SIZE')) {
+                throw new Error(`Price doesn't match tick size: ${tickSize}`);
+            } else if (res.errorMsg?.includes('MIN_SIZE')) {
+                throw new Error(`Order too small. Minimum: ${minOrderSize} USDC`);
+            } else if (res.errorMsg?.includes('NOT_ENOUGH_BALANCE')) {
+                throw new Error('Insufficient funds for this order');
+            } else {
+                throw new Error(res.errorMsg || "Order rejected");
+            }
 
         } catch (error: any) {
             if (retryCount < 1 && (String(error).includes("401") || String(error).includes("signature"))) {

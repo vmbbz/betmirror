@@ -171,9 +171,9 @@ export class Web3Service {
       }
   }
 
-  // Legacy wrapper for backward compatibility (defaults to Native USDC)
+  // Legacy wrapper for backward compatibility (defaults to USDC.e for Polymarket)
   async deposit(toAddress: string, amount: string): Promise<string> {
-      return this.depositErc20(toAddress, amount, USDC_POLYGON);
+      return this.depositErc20(toAddress, amount, USDC_BRIDGED_POLYGON);
   }
 
   /**

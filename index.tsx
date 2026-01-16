@@ -2128,6 +2128,25 @@ useEffect(() => {
             }));
             setFlashMoves(prevMoves => {
                 const combined = [...newMoves, ...prevMoves];
+                return combined.filter((move, index, self) => 
+                    index === self.findIndex(m => 
+                        m.tokenId === move.tokenId && 
+                        new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
+                    )
+                ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
+            });
+        } catch (e) {
+            console.error("Failed to hydrate Flash Moves", e);
+            toast.error('Failed to load Flash Move history');
+        } finally {
+            setIsLoadingFlashMoves(false);
+        }
+    };
+    
+    if (isConnected) {
+        hydrateFlashMoves();
+    }
+    
     s.on('STATS_UPDATE', (st: any) => {
         console.log('📊 UI Sync: Stats Updated');
         setStats(st);
@@ -2192,8 +2211,6 @@ useEffect(() => {
     };
 }, [isConnected, userAddress]);
 
-// --- MOENY MARKETS LIQUIDITY MINING AND SLIPPAGE HFT
-const [marketplaceSubTab, setMarketplaceSubTab] = useState<'registry' | 'revenue'>('registry');
 // --- STATE: Bridging (Updated for Bidirectional Flow) ---
 const [bridgeMode, setBridgeMode] = useState<'IN' | 'OUT'>('IN');
 const [selectedSourceChain, setSelectedSourceChain] = useState<number>(8453); // Default Base for IN

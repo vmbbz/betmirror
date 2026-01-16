@@ -1147,9 +1147,6 @@ const OrderManagementModal = ({
         loading: boolean;
         settling?: boolean;
     }>({ resolved: false, loading: true });
-    
-    const wsService = useRef<any>(); // TODO: Replace with actual WebSocket service when available
-    const wsCleanup = useRef<() => void>();
 
     useEffect(() => {
         if (!isOpen || !position) {

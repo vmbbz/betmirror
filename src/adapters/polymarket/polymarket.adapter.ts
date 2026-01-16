@@ -90,41 +90,70 @@ export interface PolymarketAdapterConfig {
 }
 
 export class PolymarketAdapter implements IExchangeAdapter {
-    readonly exchangeName = 'Polymarket';
+    private static publicClient: ClobClient | null = null;
+    private static readonly PUBLIC_CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    private static publicClientCreatedAt = 0;
     
-    private client?: ClobClient;
-    private invalidTokenIds = new Set<string>();
+    private config: PolymarketAdapterConfig;
+    private client: ClobClient | null = null;
+    private logger: Logger;
+    private walletV5!: WalletV5;
+    private walletV6!: WalletV6;
+    private provider!: JsonRpcProvider;
+    private safeAddress!: string;
+    private usdcContract: Contract | null = null;
     private lastTokenIdCheck = new Map<string, number>();
-    private readonly TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000;
-
-    // --- GLOBAL HFT PROTECTION: Shared across all instances to prevent 429s ---
-    private static metadataCache = new Map<string, { data: MarketSlugs, ts: number }>();
-    private static positionCache = new Map<string, { data: EnrichedPositionData[], ts: number }>();
-    private static isThrottled = false;
-    private static throttleExpiry = 0;
+    private readonly TOKEN_ID_CHECK_COOLDOWN = 60000; // 1 minute
+    private invalidTokenIds = new Set<string>();
     
-    private readonly METADATA_TTL = 24 * 60 * 60 * 1000; 
-    private readonly POSITION_CACHE_TTL = 300000; // 5 minutes
-
-    private wallet?: WalletV6; 
-    private walletV5?: WalletV5; 
+    // Additional properties needed for initialization
     private walletService?: EvmWalletService;
     private safeManager?: SafeManagerService;
-    private usdcContract?: Contract;
-    private provider?: JsonRpcProvider;
-    private safeAddress?: string;
+    
+    // Static caches for shared state across all instances
+    private static readonly metadataCache = new Map<string, { data: MarketSlugs; ts: number }>();
+    private static readonly METADATA_TTL = 24 * 60 * 60 * 1000; // 24 hours
+    private static isThrottled = false;
+    private static throttleExpiry = 0;
+    private static readonly positionCache = new Map<string, { data: EnrichedPositionData[]; ts: number }>();
+    private static readonly POSITION_CACHE_TTL = 30000; // 30 seconds
+
+    // Required by IExchangeAdapter
+    public readonly exchangeName = 'Polymarket';
 
     constructor(
-        private config: PolymarketAdapterConfig,
-        private logger: Logger
-    ) {}
+        config: PolymarketAdapterConfig,
+        logger: Logger
+    ) {
+        this.config = config;
+        this.logger = logger;
+    }
+
+    /**
+     * Get or create cached public client for non-authenticated API calls
+     */
+    private getPublicClient(): ClobClient {
+        const now = Date.now();
+        
+        // Create new client if cache expired or doesn't exist
+        if (!PolymarketAdapter.publicClient || 
+            (now - PolymarketAdapter.publicClientCreatedAt) > PolymarketAdapter.PUBLIC_CLIENT_CACHE_TTL) {
+            
+            PolymarketAdapter.publicClient = new ClobClient(HOST_URL, Chain.POLYGON);
+            PolymarketAdapter.publicClientCreatedAt = now;
+            
+            this.logger.debug('Created new public client instance');
+        }
+        
+        return PolymarketAdapter.publicClient;
+    }
 
     async initialize(): Promise<void> {
-        this.walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
+        const walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
         
         if (this.config.walletConfig.encryptedPrivateKey) {
-             this.wallet = await this.walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
-             this.walletV5 = await this.walletService.getWalletInstanceV5(this.config.walletConfig.encryptedPrivateKey);
+             this.walletV6 = await walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
+             this.walletV5 = await walletService.getWalletInstanceV5(this.config.walletConfig.encryptedPrivateKey);
         } else {
              throw new Error("Missing Encrypted Private Key for Trading Wallet");
         }
@@ -132,8 +161,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
         const sdkAlignedAddress = await SafeManagerService.computeAddress(this.config.walletConfig.address);
         this.safeAddress = sdkAlignedAddress;
 
-        this.safeManager = new SafeManagerService(
-            this.wallet,
+        const safeManager = new SafeManagerService(
+            this.walletV6,
             this.config.builderApiKey,
             this.config.builderApiSecret,
             this.config.builderApiPassphrase,
@@ -153,7 +182,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
     async validatePermissions(): Promise<boolean> { return true; }
 
     async authenticate(): Promise<void> {
-        if (!this.wallet || !this.safeManager || !this.safeAddress) throw new Error("Adapter not initialized");
+        if (!this.walletV6 || !this.safeManager || !this.safeAddress) throw new Error("Adapter not initialized");
         await this.safeManager.deploySafe();
         await this.safeManager.enableApprovals();
         let apiCreds = this.config.l2ApiCredentials;
@@ -387,13 +416,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getSamplingMarkets(): Promise<PaginationPayload<Market>> {
-        if (!this.client) {
-            console.warn('[ADAPTER] Client not authenticated for sampling markets');
-            return { data: [], limit: 0, count: 0 };
-        }
-        
         try {
-            const response = await this.client.getSamplingMarkets();
+            // Use cached public client for better performance
+            const client = this.getPublicClient();
+            
+            const response = await client.getSamplingMarkets();
             const markets = response?.data || [];
             
             // Transform to match the new Market interface format
@@ -402,39 +429,31 @@ export class PolymarketAdapter implements IExchangeAdapter {
                 active: market.active !== false,
                 archived: market.archived === true,
                 closed: market.closed === true,
-                condition_id: market.condition_id || market.market_id,
-                description: market.description || market.question || '',
-                icon: market.icon || market.image || '',
+                condition_id: market.condition_id,
+                description: market.description || '',
+                icon: market.icon || '',
                 image: market.image || '',
-                market_slug: market.market_slug || market.slug || '',
-                minimum_order_size: market.minimum_order_size || market.minimumSize || 5,
-                minimum_tick_size: market.minimum_tick_size || market.minimumTickSize || 0.01,
+                market_slug: market.market_slug || '',
+                minimum_order_size: market.minimum_order_size || 5,
+                minimum_tick_size: market.minimum_tick_size || 0.01,
                 question: market.question || '',
                 rewards: {
-                    max_spread: market.rewards?.max_spread || market.rewards_max_spread || 15,
-                    min_size: market.rewards?.min_size || market.rewards_min_size || 10,
+                    max_spread: market.rewards?.max_spread || 15,
+                    min_size: market.rewards?.min_size || 10,
                     rates: market.rewards?.rates || null
                 },
                 tags: market.tags || [],
-                tokens: market.tokens || [{
-                    outcome: 'Yes',
-                    price: 0.5,
-                    token_id: market.token_id || '',
-                    winner: false
-                }]
+                tokens: market.tokens || []
             }));
             
-            return {
-                limit: response?.limit || transformedMarkets.length,
-                count: response?.count || transformedMarkets.length,
-                data: transformedMarkets
+            return { 
+                limit: response?.limit || transformedMarkets.length, 
+                count: response?.count || transformedMarkets.length, 
+                data: transformedMarkets 
             };
-        } catch (e) {
-            return {
-                limit: 0,
-                count: 0,
-                data: []
-            };
+        } catch (e: any) {
+            this.logger.warn(`getSamplingMarkets failed: ${e.message}`);
+            return { limit: 0, count: 0, data: [] };
         }
     }
 
@@ -447,7 +466,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
      */
     private async fetchMarketSlugs(conditionId: string): Promise<MarketSlugs> {
         const cached = PolymarketAdapter.metadataCache.get(conditionId);
-        if (cached && (Date.now() - cached.ts < this.METADATA_TTL)) return cached.data;
+        if (cached && (Date.now() - cached.ts < PolymarketAdapter.METADATA_TTL)) return cached.data;
 
         const result: MarketSlugs = { marketSlug: '', eventSlug: '', question: '', image: '', conditionId, acceptingOrders: true, closed: false };
         if (!this.client || !conditionId) return result;
@@ -747,7 +766,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
     
     getFunderAddress() { return this.safeAddress || this.config.walletConfig.address; }
     getRawClient() { return this.client; }
-    getSigner() { return this.wallet; }
+    getSigner() { return this.walletV6; }
 
     async redeemPosition(conditionId: string, tokenId: string): Promise<{ success: boolean; amountUsd?: number; txHash?: string; error?: string }> {
         if (!this.safeManager || !this.safeAddress) throw new Error('Safe manager not initialized');

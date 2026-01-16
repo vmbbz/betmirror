@@ -160,6 +160,9 @@ export class PortfolioTrackerService {
       // Update metadata for all positions, including closed ones
       await this.updateAllPositionsMetadata(activePositions);
       
+      // Store the actual synced positions for getActivePositions()
+      this.lastSyncedPositions = activePositions;
+      
       this.logger.info(`[Portfolio] Synced ${activePositions.length} positions. Allocated: $${this.allocatedCapital.toFixed(2)}`);
       
       // Notify listeners about the position update
@@ -227,24 +230,16 @@ export class PortfolioTrackerService {
   }
 
   getActivePositions(): ActivePosition[] {
-    return Array.from(this.positions.entries()).map(([marketId, valueUsd]) => ({
-      tradeId: `tracker-${marketId}`,
-      marketId,
-      tokenId: '', // Will be updated when we have the actual token ID
-      outcome: 'YES', // Default to 'YES', will be updated with actual data
-      entryPrice: 0, // Will be updated when we have the actual entry price
-      currentPrice: 0, // Will be updated with current market data
-      shares: 0, // Will be updated with actual share count
-      valueUsd,
-      sizeUsd: valueUsd,
-      lastUpdated: Date.now(),
-      pnl: 0,
-      pnlPercentage: 0,
-      investedValue: valueUsd,
-      autoCashout: undefined,
-      timestamp: Date.now()
-    }));
+    // Return the actual synced positions from the last syncPositions() call
+    // Store the last synced positions to avoid re-fetching
+    if (!this.lastSyncedPositions) {
+      // If no sync has happened yet, return empty array
+      return [];
+    }
+    return this.lastSyncedPositions;
   }
+
+  private lastSyncedPositions: ActivePosition[] = [];
 
   private async notifyPositionsUpdate() {
     if (this.onPositionsUpdate) {

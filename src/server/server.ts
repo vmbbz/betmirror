@@ -833,11 +833,16 @@ app.post('/api/trade/sync', async (req: any, res: any) => {
             await engine.getPortfolioTracker().syncPositions(force === true);
             res.json({ success: true });
         } else {
-            // If bot not running, at least fetch from API once for UI
-            const user = await User.findOne({ address: normId }).select('+tradingWallet.address');
+            // If bot not running, fetch positions from database for UI
+            const user = await User.findOne({ address: normId }).select('+tradingWallet.address +activePositions');
             if (user?.tradingWallet?.address) {
-                // Temporary logic to allow UI to sync even without bot running
-                res.json({ success: true, note: 'Bot not running, sync limited' });
+                // Return database positions if available
+                const dbPositions = user.activePositions || [];
+                res.json({ 
+                    success: true, 
+                    positions: dbPositions,
+                    note: 'Bot not running, showing database positions'
+                });
             } else {
                 res.status(404).json({ error: 'No wallet found' });
             }
@@ -1038,49 +1043,110 @@ app.get('/api/portfolio/latest/:userId', async (req: any, res: any) => {
     }
 });
 
-// --- REGISTRY SEER ---
+// --- ENHANCED REGISTRY SEEDING ---
 async function seedRegistry() {
     const systemWallets = ENV.userAddresses; 
-    if (!systemWallets || systemWallets.length === 0) return;
+    if (!systemWallets || systemWallets.length === 0) {
+        console.log('⚠️ No system wallets found in ENV.userAddresses');
+        return;
+    }
 
     console.log(`🌱 Seeding Registry with ${systemWallets.length} system wallets from wallets.txt...`);
-
-    for (const address of systemWallets) {
-        if (!address || !address.startsWith('0x')) continue;
-
-        const normalized = address.toLowerCase();
-        try {
-            const exists = await Registry.findOne({ address: { $regex: new RegExp(`^${normalized}$`, "i") } });
-
-            if (!exists) {
-                await Registry.create({
-                    address: normalized,
-                    listedBy: 'SYSTEM',
-                    listedAt: new Date().toISOString(),
-                    isSystem: true,
-                    tags: ['OFFICIAL', 'WHALE'],
-                    winRate: 0,
-                    totalPnl: 0,
-                    tradesLast30d: 0,
-                    followers: 0,
-                    copyCount: 0,
-                    copyProfitGenerated: 0
-                });
-                console.log(`   + Added ${normalized.slice(0,8)}...`);
-            } else if (!exists.isSystem) {
-                exists.isSystem = true;
-                if (!exists.tags?.includes('OFFICIAL')) {
-                    exists.tags = [...(exists.tags || []), 'OFFICIAL'];
-                }
-                await exists.save();
-                console.log(`   ^ Upgraded ${normalized.slice(0,8)}... to Official`);
-            }
-        } catch(e) {
-            console.warn(`Failed to seed ${normalized}:`, e);
-        }
+    
+    let addedCount = 0;
+    let upgradedCount = 0;
+    let errorCount = 0;
+    
+    // Validate addresses first
+    const validWallets = systemWallets.filter(address => {
+        return address && 
+               address.startsWith('0x') && 
+               address.length === 42 && 
+               /^0x[a-fA-F0-9]{40}$/.test(address);
+    });
+    
+    if (validWallets.length !== systemWallets.length) {
+        console.warn(`⚠️ Filtered ${systemWallets.length - validWallets.length} invalid addresses`);
     }
     
-    await registryAnalytics.updateAllRegistryStats();
+    // Batch operations for better performance
+    const operations: Promise<void>[] = [];
+    
+    for (const address of validWallets) {
+        const normalized = address.toLowerCase();
+        
+        operations.push(
+            (async () => {
+                try {
+                    const exists = await Registry.findOne({ 
+                        address: { $regex: new RegExp(`^${normalized}$`, "i") } 
+                    });
+
+                    if (!exists) {
+                        await Registry.create({
+                            address: normalized,
+                            listedBy: 'SYSTEM',
+                            listedAt: new Date().toISOString(),
+                            isSystem: true,
+                            tags: ['OFFICIAL', 'WHALE', 'SYSTEM'],
+                            winRate: 0,
+                            totalPnl: 0,
+                            tradesLast30d: 0,
+                            followers: 0,
+                            copyCount: 0,
+                            copyProfitGenerated: 0,
+                            lastUpdated: new Date(),
+                            verified: true
+                        });
+                        addedCount++;
+                        console.log(`   ✅ Added ${normalized.slice(0, 8)}... as Official System Wallet`);
+                    } else if (!exists.isSystem) {
+                        // Upgrade existing wallet to system status
+                        const updateData: any = {
+                            isSystem: true,
+                            verified: true,
+                            lastUpdated: new Date()
+                        };
+                        
+                        // Merge tags properly
+                        const existingTags = exists.tags || [];
+                        const newTags = new Set([...existingTags, 'OFFICIAL', 'SYSTEM']);
+                        if (!newTags.has('WHALE')) newTags.add('WHALE');
+                        updateData.tags = Array.from(newTags);
+                        
+                        await Registry.updateOne(
+                            { address: { $regex: new RegExp(`^${normalized}$`, "i") } },
+                            updateData
+                        );
+                        upgradedCount++;
+                        console.log(`   🔄 Upgraded ${normalized.slice(0, 8)}... to Official System Status`);
+                    } else {
+                        console.log(`   ℹ️ ${normalized.slice(0, 8)}... already exists as System Wallet`);
+                    }
+                } catch (e) {
+                    errorCount++;
+                    console.error(`   ❌ Failed to process ${normalized.slice(0, 8)}...:`, e instanceof Error ? e.message : e);
+                }
+            })()
+        );
+    }
+    
+    // Wait for all operations to complete
+    await Promise.allSettled(operations);
+    
+    console.log(`\n📊 Registry Seeding Complete:`);
+    console.log(`   ✅ Added: ${addedCount} new system wallets`);
+    console.log(`   🔄 Upgraded: ${upgradedCount} existing wallets`);
+    console.log(`   ❌ Errors: ${errorCount} failed operations`);
+    console.log(`   📈 Total processed: ${validWallets.length} wallets\n`);
+    
+    // Update analytics for all wallets
+    try {
+        await registryAnalytics.updateAllRegistryStats();
+        console.log('📈 Registry analytics updated successfully');
+    } catch (e) {
+        console.error('⚠️ Failed to update registry analytics:', e);
+    }
 }
 
 // Handle React SPA Routing

@@ -2,6 +2,49 @@
 import { OrderBook, PositionData } from '../domain/market.types.js';
 import { TradeSignal, TradeHistoryEntry } from '../domain/trade.types.js';
 
+export interface MarketToken {
+    outcome: string;
+    price: number;
+    token_id: string;
+    winner: boolean;
+}
+
+export interface MarketRewards {
+    max_spread: number;
+    min_size: number;
+    rates: any | null;
+}
+
+export interface Market {
+    accepting_orders: boolean;
+    active: boolean;
+    archived: boolean;
+    closed: boolean;
+    condition_id: string;
+    description: string;
+    icon: string;
+    image: string;
+    market_slug: string;
+    minimum_order_size: number;
+    minimum_tick_size: number;
+    question: string;
+    rewards: MarketRewards;
+    tags: string[];
+    tokens: MarketToken[];
+}
+
+export interface PaginationPayload<T> {
+    limit: number;
+    count: number;
+    data: T[];
+}
+
+export interface ApiCredentials {
+    key: string;
+    secret: string;
+    passphrase: string;
+}
+
 /**
  * Side of an order
  */
@@ -107,11 +150,7 @@ export interface IExchangeAdapter {
     getOrderBook(tokenId: string): Promise<OrderBook>;
     getLiquidityMetrics?(tokenId: string, side: 'BUY' | 'SELL'): Promise<LiquidityMetrics>;
     getNegRiskMarkets?(): Promise<any[]>;
-    getSamplingMarkets?(): Promise<Array<{
-        token_id: string;
-        market_id: string;
-        rewards_max_spread?: number;
-    }>>;
+    getSamplingMarkets?(): Promise<PaginationPayload<Market>>;
     getPositions(address: string): Promise<PositionData[]>;
     fetchPublicTrades(address: string, limit?: number): Promise<TradeSignal[]>;
     getTradeHistory(address: string, limit?: number): Promise<TradeHistoryEntry[]>;
@@ -130,13 +169,10 @@ export interface IExchangeAdapter {
         error?: string;
     }>;
     getDbPositions(): Promise<any[]>;
-    getMarketData(marketId: string): Promise<{
-        question: string;
-        image: string;
-        isResolved: boolean;
-        marketSlug: string;
-        eventSlug: string;
-        conditionId: string;
-    } | null>;
-    updatePositionMetadata(marketId: string, metadata: any): Promise<void>;
+    getMarketData(marketId: string): Promise<Market | null>;
+    updatePositionMetadata(marketId: string, metadata: Market): Promise<void>;
+    getApiCredentials(): ApiCredentials | undefined;
+    placeOrder(params: OrderParams): Promise<OrderResult>;
+    getServerTime(): Promise<number>;
+    getOk(): Promise<boolean>;
 }

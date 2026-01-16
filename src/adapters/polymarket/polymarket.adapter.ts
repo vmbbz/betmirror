@@ -5,7 +5,12 @@ import {
     OrderResult,
     LiquidityHealth,
     LiquidityMetrics,
-    OrderSide
+    OrderSide,
+    Market,
+    MarketToken,
+    MarketRewards,
+    PaginationPayload,
+    ApiCredentials
 } from '../interfaces.js';
 import { OrderBook, PositionData } from '../../domain/market.types.js';
 import { TradeSignal, TradeHistoryEntry } from '../../domain/trade.types.js';
@@ -92,14 +97,14 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private lastTokenIdCheck = new Map<string, number>();
     private readonly TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000;
 
-    // --- GLOBAL HFT PROTECTION ---
+    // --- GLOBAL HFT PROTECTION: Shared across all instances to prevent 429s ---
     private static metadataCache = new Map<string, { data: MarketSlugs, ts: number }>();
     private static positionCache = new Map<string, { data: EnrichedPositionData[], ts: number }>();
     private static isThrottled = false;
     private static throttleExpiry = 0;
     
     private readonly METADATA_TTL = 24 * 60 * 60 * 1000; 
-    private readonly POSITION_CACHE_TTL = 300000; // Increased to 5 minutes to prevent 429 errors
+    private readonly POSITION_CACHE_TTL = 300000; // 5 minutes
 
     private wallet?: WalletV6; 
     private walletV5?: WalletV5; 
@@ -381,20 +386,52 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
     }
 
-    async getSamplingMarkets(): Promise<Array<{ token_id: string; market_id: string; rewards_max_spread?: number }>> {
+    async getSamplingMarkets(): Promise<PaginationPayload<Market>> {
         if (!this.client) throw new Error("Not authenticated");
         
         try {
             const response = await this.client.getSamplingMarkets();
             const markets = response?.data || [];
             
-            return markets.map((market: any) => ({
-                token_id: market.token_id || market.tokenId,
-                market_id: market.market_id || market.conditionId,
-                rewards_max_spread: market.rewards_max_spread || market.maxSpread
+            // Transform to match the new Market interface format
+            const transformedMarkets: Market[] = markets.map((market: any) => ({
+                accepting_orders: market.accepting_orders !== false,
+                active: market.active !== false,
+                archived: market.archived === true,
+                closed: market.closed === true,
+                condition_id: market.condition_id || market.market_id,
+                description: market.description || market.question || '',
+                icon: market.icon || market.image || '',
+                image: market.image || '',
+                market_slug: market.market_slug || market.slug || '',
+                minimum_order_size: market.minimum_order_size || market.minimumSize || 5,
+                minimum_tick_size: market.minimum_tick_size || market.minimumTickSize || 0.01,
+                question: market.question || '',
+                rewards: {
+                    max_spread: market.rewards?.max_spread || market.rewards_max_spread || 15,
+                    min_size: market.rewards?.min_size || market.rewards_min_size || 10,
+                    rates: market.rewards?.rates || null
+                },
+                tags: market.tags || [],
+                tokens: market.tokens || [{
+                    outcome: 'Yes',
+                    price: 0.5,
+                    token_id: market.token_id || '',
+                    winner: false
+                }]
             }));
+            
+            return {
+                limit: response?.limit || transformedMarkets.length,
+                count: response?.count || transformedMarkets.length,
+                data: transformedMarkets
+            };
         } catch (e) {
-            return [];
+            return {
+                limit: 0,
+                count: 0,
+                data: []
+            };
         }
     }
 
@@ -464,19 +501,31 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
     }
 
-    async getMarketData(conditionId: string): Promise<MarketMetadata | null> {
+    async getMarketData(conditionId: string): Promise<Market | null> {
         try {
             const marketSlugs = await this.fetchMarketSlugs(conditionId);
             
             if (marketSlugs.question || marketSlugs.marketSlug) {
                 return {
-                    question: marketSlugs.question || `Market ${conditionId.slice(0, 10)}...`,
+                    accepting_orders: marketSlugs.acceptingOrders,
+                    active: !marketSlugs.closed,
+                    archived: false,
+                    closed: marketSlugs.closed,
+                    condition_id: conditionId,
+                    description: marketSlugs.question || '',
+                    icon: marketSlugs.image || '',
                     image: marketSlugs.image || '',
-                    isResolved: marketSlugs.closed,
-                    acceptingOrders: marketSlugs.acceptingOrders,
-                    marketSlug: marketSlugs.marketSlug,
-                    eventSlug: marketSlugs.eventSlug,
-                    conditionId: conditionId
+                    market_slug: marketSlugs.marketSlug || '',
+                    minimum_order_size: 5,
+                    minimum_tick_size: 0.01,
+                    question: marketSlugs.question || `Market ${conditionId.slice(0, 10)}...`,
+                    rewards: {
+                        max_spread: 15,
+                        min_size: 10,
+                        rates: null
+                    },
+                    tags: [],
+                    tokens: []
                 };
             }
             return null;
@@ -485,28 +534,28 @@ export class PolymarketAdapter implements IExchangeAdapter {
         }
     }
 
-    async updatePositionMetadata(conditionId: string, metadata: MarketMetadata): Promise<void> {
+    async updatePositionMetadata(marketId: string, metadata: Market): Promise<void> {
         try {
             await Trade.updateMany(
                 { 
                     userId: this.config.userId,
-                    $or: [{ conditionId: conditionId }, { marketId: conditionId }]
+                    $or: [{ conditionId: marketId }, { marketId: marketId }]
                 },
                 {
                     $set: { 
                         'metadata.question': metadata.question,
                         'metadata.image': metadata.image,
-                        'metadata.isResolved': metadata.isResolved,
-                        'metadata.acceptingOrders': metadata.acceptingOrders,
-                        'metadata.updatedAt': metadata.updatedAt || new Date(),
-                        marketSlug: metadata.marketSlug,
-                        eventSlug: metadata.eventSlug,
-                        conditionId: conditionId,
+                        'metadata.isResolved': metadata.closed,
+                        'metadata.acceptingOrders': metadata.accepting_orders,
+                        'metadata.marketSlug': metadata.market_slug,
+                        'metadata.eventSlug': metadata.market_slug,
                         updatedAt: new Date()
                     }
                 }
             );
-        } catch (error) {}
+        } catch (error) {
+            throw new Error(`Failed to update position metadata: ${error}`);
+        }
     }
 
     async getPositions(address: string): Promise<EnrichedPositionData[]> {
@@ -715,5 +764,65 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private encodeRedeemPositions(collateralToken: string, parentCollectionId: string, conditionId: string, indexSets: bigint[]): string {
         const iface = new Interface(["function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] calldata indexSets)"]);
         return iface.encodeFunctionData("redeemPositions", [collateralToken, parentCollectionId, conditionId, indexSets]);
+    }
+
+    // ============================================================
+    // NEW INTERFACE METHODS
+    // ============================================================
+
+    async placeOrder(params: OrderParams): Promise<OrderResult> {
+        try {
+            if (!this.client) throw new Error("Not authenticated");
+
+            const result = await this.createOrder(params);
+            return {
+                success: result.success,
+                orderId: result.orderId,
+                txHash: result.txHash,
+                sharesFilled: result.sharesFilled,
+                priceFilled: result.priceFilled,
+                error: result.error
+            };
+        } catch (error) {
+            return {
+                success: false,
+                sharesFilled: 0,
+                priceFilled: 0,
+                error: error instanceof Error ? error.message : 'Unknown error'
+            };
+        }
+    }
+
+    getApiCredentials(): ApiCredentials | undefined {
+        if (!this.config.builderApiKey || !this.config.builderApiSecret || !this.config.builderApiPassphrase) {
+            return undefined;
+        }
+        return {
+            key: this.config.builderApiKey,
+            secret: this.config.builderApiSecret,
+            passphrase: this.config.builderApiPassphrase
+        };
+    }
+
+    async getServerTime(): Promise<number> {
+        try {
+            const response = await axios.get('https://clob.polymarket.com/time');
+            if (response.data) {
+                return response.data.timestamp || Date.now();
+            }
+        } catch (error) {
+            // Silent fail
+        }
+        return Date.now();
+    }
+
+    async getOk(): Promise<boolean> {
+        try {
+            const response = await axios.get('https://clob.polymarket.com/health');
+            return response.status === 200;
+        } catch (error) {
+            // Silent fail
+        }
+        return false;
     }
 }

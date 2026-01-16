@@ -2,6 +2,7 @@ import { Logger } from '../utils/logger.util.js';
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
 import { PositionMonitorService } from './position-monitor.service.js';
+import { MarketMetadataService } from './market-metadata.service.js';
 
 export class PortfolioTrackerService {
   private allocatedCapital: number = 0;
@@ -16,6 +17,7 @@ export class PortfolioTrackerService {
     private maxPortfolioAllocation: number,
     private logger: Logger,
     private positionMonitor: PositionMonitorService,
+    private marketMetadataService?: MarketMetadataService,
     onPositionsUpdate?: (positions: ActivePosition[]) => void
   ) {
     this.onPositionsUpdate = onPositionsUpdate;
@@ -35,40 +37,74 @@ export class PortfolioTrackerService {
    */
   private async updateAllPositionsMetadata(positions: ActivePosition[]): Promise<void> {
     try {
-      // Get all market IDs from the database
-      const dbPositions = await this.adapter.getDbPositions();
-      const activeMarketIds = new Set(positions.map((p: ActivePosition) => p.marketId));
+      // Collect all unique market IDs
+      const allMarketIds = new Set<string>();
+      const activeMarketIds = new Set<string>();
       
-      // Combine active and database positions to ensure we update all
-      const allMarketIds = new Set([...activeMarketIds, ...dbPositions.map((p: { marketId: string }) => p.marketId)]);
+      for (const position of positions) {
+        allMarketIds.add(position.marketId);
+        if (position.shares > 0) {
+          activeMarketIds.add(position.marketId);
+        }
+      }
       
       this.logger.info(`[Portfolio] Updating metadata for ${allMarketIds.size} positions`);
       
-      // Update metadata for all positions
-      for (const marketId of allMarketIds) {
-        try {
-          const marketData = await this.adapter.getMarketData(marketId);
-          if (marketData) {
+      // Use MarketMetadataService for efficient batch retrieval
+      if (this.marketMetadataService) {
+        const marketMetadataMap = await this.marketMetadataService.getBatchMetadata(Array.from(allMarketIds));
+        
+        // Update metadata for all positions using cached data
+        for (const [marketId, metadata] of marketMetadataMap) {
+          try {
+            // Update database with latest metadata
             await this.adapter.updatePositionMetadata(marketId, {
-              question: marketData.question,
-              image: marketData.image,
-              isResolved: marketData.isResolved,
-              updatedAt: new Date()
-            });
+              question: metadata.question,
+              image: metadata.image,
+              isResolved: metadata.closed,
+              acceptingOrders: metadata.acceptingOrders,
+              marketSlug: metadata.marketSlug,
+              eventSlug: metadata.eventSlug
+            } as any);
             
             // If this is an active position, update the in-memory data
             if (activeMarketIds.has(marketId)) {
               const position = positions.find((p: ActivePosition) => p.marketId === marketId);
               if (position) {
-                position.question = marketData.question;
-                position.image = marketData.image;
-                position.isResolved = marketData.isResolved;
+                position.question = metadata.question;
+                position.image = metadata.image;
+                position.isResolved = metadata.closed;
               }
             }
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(`Failed to update metadata for position ${marketId}: ${errorMessage}`, error instanceof Error ? error : undefined);
           }
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          this.logger.error(`Failed to update metadata for position ${marketId}: ${errorMessage}`, error instanceof Error ? error : undefined);
+        }
+      } else {
+        // Fallback to direct API calls if MarketMetadataService not available
+        this.logger.warn('[Portfolio] MarketMetadataService not available, using direct API calls');
+        
+        for (const marketId of allMarketIds) {
+          try {
+            const marketData = await this.adapter.getMarketData(marketId);
+            if (marketData) {
+              await this.adapter.updatePositionMetadata(marketId, marketData);
+              
+              // If this is an active position, update the in-memory data
+              if (activeMarketIds.has(marketId)) {
+                const position = positions.find((p: ActivePosition) => p.marketId === marketId);
+                if (position) {
+                  position.question = marketData.question;
+                  position.image = marketData.image;
+                  position.isResolved = marketData.closed;
+                }
+              }
+            }
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(`Failed to update metadata for position ${marketId}: ${errorMessage}`, error instanceof Error ? error : undefined);
+          }
         }
       }
     } catch (error: unknown) {

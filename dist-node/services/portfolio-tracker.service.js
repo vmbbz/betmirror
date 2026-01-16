@@ -39,19 +39,14 @@ export class PortfolioTrackerService {
                 try {
                     const marketData = await this.adapter.getMarketData(marketId);
                     if (marketData) {
-                        await this.adapter.updatePositionMetadata(marketId, {
-                            question: marketData.question,
-                            image: marketData.image,
-                            isResolved: marketData.isResolved,
-                            updatedAt: new Date()
-                        });
+                        await this.adapter.updatePositionMetadata(marketId, marketData);
                         // If this is an active position, update the in-memory data
                         if (activeMarketIds.has(marketId)) {
                             const position = positions.find((p) => p.marketId === marketId);
                             if (position) {
                                 position.question = marketData.question;
                                 position.image = marketData.image;
-                                position.isResolved = marketData.isResolved;
+                                position.isResolved = marketData.closed;
                             }
                         }
                     }

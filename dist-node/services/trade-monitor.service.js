@@ -51,18 +51,13 @@ export class TradeMonitorService {
         if (this.running)
             return;
         this.running = true;
-        // Attach to the Singleton's trade stream
         this.deps.intelligence.on('whale_trade', this.boundHandler);
-        this.deps.logger.info(`🔌 Multi-Tenant Signal Monitor: ONLINE. Listening for Push events.`);
+        this.deps.logger.info(`🔌 Signal Monitor: ONLINE. Tracking ${this.targetWallets.size} targets.`);
     }
-    /**
-     * Detaches from the global stream and enters standby mode.
-     */
     stop() {
         this.running = false;
         this.deps.intelligence.removeListener('whale_trade', this.boundHandler);
         this.processedTrades.clear();
-        this.deps.logger.info('Cb Monitor: STANDBY.');
     }
     /**
      * CORE LOGIC: handleWhaleSignal
@@ -74,33 +69,27 @@ export class TradeMonitorService {
     async handleWhaleSignal(event) {
         if (!this.running)
             return;
-        // 1. Filter: Check if this specific bot instance cares about this whale
+        // Normalization check
         if (!this.targetWallets.has(event.trader.toLowerCase()))
             return;
-        // 2. Deduplication: Guard against WebSocket frame duplicates
-        // We create a unique key based on trader, token, side, and a 5-second time window
         const tradeKey = `${event.trader}-${event.tokenId}-${event.side}-${Math.floor(event.timestamp / 5000)}`;
         if (this.processedTrades.has(tradeKey))
             return;
         this.processedTrades.set(tradeKey, Date.now());
         this.pruneCache();
-        // 3. Logic Preservation: Map the event to a TradeSignal
-        // This replicates the logic from your legacy 'processTrade' method
-        this.deps.logger.info(`🚨 [SIGNAL] Push Match: ${event.trader.slice(0, 8)}... ${event.side} @ ${event.price}`);
+        // FIXED: Added explicit dashboard log for visual feedback
+        this.deps.logger.info(`🚨 [WHALE MATCH] ${event.trader.slice(0, 10)}... traded ${event.side} @ ${event.price}`);
         const signal = {
             trader: event.trader,
-            marketId: "resolved_by_adapter", // The Executor will use the tokenId to fetch full metadata
+            marketId: "resolved_by_adapter",
             tokenId: event.tokenId,
-            outcome: "YES", // Default mapping for Push signals, refined by the AI/Executor logic
+            outcome: "YES",
             side: event.side,
             sizeUsd: event.size * event.price,
             price: event.price,
             timestamp: event.timestamp
         };
-        // 4. Execution: Pass the validated signal to the BotEngine's detected trade handler
-        this.deps.onDetectedTrade(signal).catch(err => {
-            this.deps.logger.error(`Mirror execution failed for whale ${event.trader}`, err);
-        });
+        await this.deps.onDetectedTrade(signal);
     }
     /**
      * Memory Janitor: Cleans up the deduplication cache.

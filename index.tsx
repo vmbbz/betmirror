@@ -4,7 +4,6 @@ import { toast, ToastContainer } from 'react-toastify';
 import io from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import axios from 'axios';
-import { getMarketWebSocketService } from './src/services/market-ws.service';
 import './src/index.css';
 import { 
 Shield, Play, Square, Activity, Settings, Wallet, Key, Link, Crosshair,
@@ -24,8 +23,7 @@ import { TraderProfile, CashoutRecord, BuilderVolumeData } from './src/domain/al
 import { UserStats } from './src/domain/user.types';
 import { ArbitrageOpportunity } from './src/adapters/interfaces';
 import ProTerminal from './src/proTerminal';
-import FomoRunner from './src/FomoRunner';
-import { FlashMove, ActiveSnipe } from './src/types/fomo.types';
+import { FlashMoveDashboard } from './src/FlashMoveDashboard';
 import { Contract, BrowserProvider, JsonRpcProvider, formatUnits } from 'ethers';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -46,6 +44,157 @@ const CHAIN_NAMES: Record<number, string> = {
     42161: "Arbitrum One",
     56: "BNB Chain",
     1151111081099710: "Solana"
+};
+
+
+// --- Sub-Component: Service Status Display ---
+/**
+ * Real-time service status display for the Vault page
+ * Shows live running state of all bot services
+ */
+const ServiceStatusDisplay = ({ userId }: { userId: string }) => {
+    const [status, setStatus] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const fetchStatus = useCallback(async () => {
+        try {
+            const response = await fetch(`/api/bot/services/status?userId=${userId}`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    setStatus(data.status);
+                    setError(null);
+                } else {
+                    setError(data.error || 'Failed to fetch status');
+                }
+            } else {
+                setError('Bot not running');
+            }
+        } catch (err) {
+            setError('Failed to fetch service status');
+        } finally {
+            setLoading(false);
+        }
+    }, [userId]);
+
+    useEffect(() => {
+        if (userId) {
+            fetchStatus();
+            // Refresh status every 10 seconds
+            const interval = setInterval(fetchStatus, 10000);
+            return () => clearInterval(interval);
+        }
+    }, [userId, fetchStatus]);
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center py-8">
+                <Loader2 className="animate-spin text-blue-500 mr-3" />
+                <span className="text-gray-400 text-sm">Loading service status...</span>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="flex items-center justify-center py-8">
+                <AlertTriangle className="text-red-500 mr-3" />
+                <span className="text-red-400 text-sm">{error}</span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Copy Trading Status */}
+            <div className={`p-4 rounded-xl border transition-all ${
+                status.copyTrading.running 
+                    ? 'bg-purple-600/10 border-purple-500/40' 
+                    : 'bg-white/5 border-white/5 opacity-50'
+            }`}>
+                <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                        <Users size={18} className={status.copyTrading.running ? 'text-purple-400' : 'text-gray-500'} />
+                        <span className="text-sm font-bold text-white">Alpha Mirror</span>
+                    </div>
+                    <div className={`w-2 h-2 rounded-full ${
+                        status.copyTrading.running ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
+                    }`} />
+                </div>
+                <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Status:</span>
+                        <span className={`font-mono ${status.copyTrading.running ? 'text-green-400' : 'text-gray-500'}`}>
+                            {status.copyTrading.running ? 'ACTIVE' : 'STOPPED'}
+                        </span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Targets:</span>
+                        <span className="font-mono text-purple-400">{status.copyTrading.targets}</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Money Markets Status */}
+            <div className={`p-4 rounded-xl border transition-all ${
+                status.moneyMarkets.running 
+                    ? 'bg-blue-600/10 border-blue-500/40' 
+                    : 'bg-white/5 border-white/5 opacity-50'
+            }`}>
+                <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                        <Recycle size={18} className={status.moneyMarkets.running ? 'text-blue-400' : 'text-gray-500'} />
+                        <span className="text-sm font-bold text-white">Liquidity Engine</span>
+                    </div>
+                    <div className={`w-2 h-2 rounded-full ${
+                        status.moneyMarkets.running ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
+                    }`} />
+                </div>
+                <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Status:</span>
+                        <span className={`font-mono ${status.moneyMarkets.running ? 'text-green-400' : 'text-gray-500'}`}>
+                            {status.moneyMarkets.running ? 'SCANNING' : 'STOPPED'}
+                        </span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Mode:</span>
+                        <span className="font-mono text-blue-400">MM</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Flash Moves Status */}
+            <div className={`p-4 rounded-xl border transition-all ${
+                status.flashMoves.running 
+                    ? 'bg-amber-600/10 border-amber-500/40' 
+                    : 'bg-white/5 border-white/5 opacity-50'
+            }`}>
+                <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                        <Zap size={18} className={status.flashMoves.running ? 'text-amber-400' : 'text-gray-500'} />
+                        <span className="text-sm font-bold text-white">Flash Moves</span>
+                    </div>
+                    <div className={`w-2 h-2 rounded-full ${
+                        status.flashMoves.running ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
+                    }`} />
+                </div>
+                <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Status:</span>
+                        <span className={`font-mono ${status.flashMoves.running ? 'text-green-400' : 'text-gray-500'}`}>
+                            {status.flashMoves.running ? 'HUNTING' : 'STOPPED'}
+                        </span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Active:</span>
+                        <span className="font-mono text-amber-400">{status.flashMoves.activePositions}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 
@@ -261,7 +410,6 @@ enableSounds: boolean;
 enableAutoArb: boolean;
 enableCopyTrading: boolean;
 enableMoneyMarkets: boolean;
-enableFomoRunner: boolean;
 }
 
 interface WalletBalances {
@@ -1888,16 +2036,15 @@ const [proxyWalletBal, setProxyWalletBal] = useState<WalletBalances>({ native: '
 const [signerWalletBal, setSignerWalletBal] = useState<WalletBalances>({ native: '0.00', usdc: '0.00', usdcNative: '0.00', usdcBridged: '0.00' });
 
 // --- STATE: UI & Data ---
-type TabId = 'dashboard' | 'money-market' | 'fomo' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'revenue' | 'system' | 'help';
+type TabId = 'dashboard' | 'money-market' | 'flash-moves' | 'marketplace' | 'history' | 'vault' | 'bridge' | 'revenue' | 'system' | 'help';
 const [activeTab, setActiveTab] = useState<TabId>('dashboard');
 const [isRunning, setIsRunning] = useState(false);
 const [logs, setLogs] = useState<Log[]>([]);
 const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
 const [activePositions, setActivePositions] = useState<ActivePosition[]>([]); 
 const [moneyMarketOpps, setMoneyMarketOpps] = useState<ArbitrageOpportunity[]>([]);
-const [fomoMoves, setFomoMoves] = useState<FlashMove[]>([]);
-const [isLoadingFomo, setIsLoadingFomo] = useState(true);
-const [activeSnipes, setActiveSnipes] = useState<ActiveSnipe[]>([]);
+const [flashMoves, setFlashMoves] = useState<any[]>([]);
+const [isLoadingFlashMoves, setIsLoadingFlashMoves] = useState(true);
 const [stats, setStats] = useState<UserStats | null>(null);
 const [registry, setRegistry] = useState<TraderProfile[]>([]);
 const [systemStats, setSystemStats] = useState<GlobalStatsResponse | null>(null);
@@ -1933,13 +2080,13 @@ const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync po
 // --- CONFIGURATION ---
 const [config, setConfig] = useState<AppConfig>({
     targets: [],
-    rpcUrl: 'https://polygon-rpc.com',
+    rpcUrl: '',
     geminiApiKey: '',
-    multiplier: 1,
+    multiplier: 1.0,
     riskProfile: 'balanced',
     minLiquidityFilter: 'MEDIUM',
-    autoTp: 0,
-    enableNotifications: true,
+    autoTp: 0.20,
+    enableNotifications: false,
     userPhoneNumber: '',
     enableAutoCashout: false,
     maxRetentionAmount: 1000,
@@ -1948,8 +2095,7 @@ const [config, setConfig] = useState<AppConfig>({
     enableSounds: true,
     enableAutoArb: false,
     enableCopyTrading: true,
-    enableMoneyMarkets: false,
-    enableFomoRunner: true
+    enableMoneyMarkets: false
 });
 
 const socketRef = useRef<any>(null); // Fixed type error (Socket as value vs type)
@@ -1971,17 +2117,17 @@ useEffect(() => {
         setActivePositions(pos);
     });
 
-    // Load FOMO history when connected
-    const hydrateFomo = async () => {
+    // Load Flash Move history when connected
+    const hydrateFlashMoves = async () => {
         try {
-            setIsLoadingFomo(true);
-            // Load persistent alpha from server DB to avoid empty list on refresh
-            const res = await axios.get('/api/fomo/history');
+            setIsLoadingFlashMoves(true);
+            // Load persistent flash moves from server DB to avoid empty list on refresh
+            const res = await axios.get('/api/flash-moves/history');
             const newMoves = (Array.isArray(res.data) ? res.data : []).map(m => ({
                 ...m,
                 timestamp: new Date(m.timestamp).getTime()
             }));
-            setFomoMoves(prevMoves => {
+            setFlashMoves(prevMoves => {
                 const combined = [...newMoves, ...prevMoves];
                 return combined.filter((move, index, self) => 
                     index === self.findIndex(m => 
@@ -1991,15 +2137,15 @@ useEffect(() => {
                 ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
             });
         } catch (e) {
-            console.error("Failed to hydrate FOMO moves", e);
-            toast.error('Failed to load FOMO history');
+            console.error("Failed to hydrate Flash Moves", e);
+            toast.error('Failed to load Flash Move history');
         } finally {
-            setIsLoadingFomo(false);
+            setIsLoadingFlashMoves(false);
         }
     };
     
     if (isConnected) {
-        hydrateFomo();
+        hydrateFlashMoves();
     }
     
     s.on('STATS_UPDATE', (st: any) => {
@@ -2010,58 +2156,33 @@ useEffect(() => {
         setLogs((prev: any[]) => [log, ...prev].slice(0, 100));
     });
     
-    // Import the types from the shared types file at the top of the file
-    // (This should be moved to the top with other imports)
-    // import { FlashMove, ActiveSnipe } from './src/types/fomo.types';
-
-    // Updates fomoMoves which is passed as 'flashMoves' to the FomoRunner component
-    s.on('FOMO_VELOCITY_UPDATE', (moves: any[]) => {
-        // Ensure we have the correct type and normalized timestamps
-        const typedMoves = Array.isArray(moves) ? moves.map(move => ({
-            tokenId: move.tokenId,
-            conditionId: move.conditionId || '',
-            oldPrice: move.oldPrice || 0,
-            newPrice: move.newPrice || 0,
-            velocity: move.velocity || 0,
-            timestamp: new Date(move.timestamp || Date.now()).getTime(), // Normalize
-            question: move.question,
-            image: move.image,
-            marketSlug: move.marketSlug
-        })) : [];
-
-        setFomoMoves(prevMoves => {
-            const combined = [...typedMoves, ...prevMoves];
-            return combined.filter((move, index, self) => 
-                index === self.findIndex(m => 
-                    m.tokenId === move.tokenId && 
-                    new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
-                )
-            ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
-        });
-    });
-
-    s.on('FOMO_SNIPES_UPDATE', (snipes: any[]) => {
-        // Ensure we have the correct type and normalized timestamps
-        const typedSnipes = Array.isArray(snipes) ? snipes.map(snipe => ({
-            tokenId: snipe.tokenId,
-            conditionId: snipe.conditionId || '',
-            entryPrice: snipe.entryPrice || 0,
-            currentPrice: snipe.currentPrice || 0,
-            targetPrice: snipe.targetPrice,
-            shares: snipe.shares || 0,
-            timestamp: new Date(snipe.timestamp || Date.now()).getTime(), // Normalize
-            question: snipe.question
-        })) : [];
-
-        setActiveSnipes(prevSnipes => {
-            const combined = [...typedSnipes, ...prevSnipes];
-            return combined.filter((snipe, index, self) => 
-                index === self.findIndex(s => 
-                    s.tokenId === snipe.tokenId &&
-                    new Date(s.timestamp).getTime() === new Date(snipe.timestamp).getTime()
-                )
-            ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
-        });
+    // Updates flashMoves which is passed as 'flashMoves' to FlashMoveDashboard component
+    s.on('flash_move_detected', (data: any) => {
+        const { event } = data;
+        if (event) {
+            const typedMoves = [{
+                tokenId: event.tokenId,
+                conditionId: event.conditionId,
+                oldPrice: event.oldPrice,
+                newPrice: event.newPrice,
+                velocity: event.velocity,
+                timestamp: event.timestamp,
+                question: event.question,
+                image: event.image,
+                marketSlug: event.marketSlug,
+                confidence: event.confidence,
+                strategy: event.strategy
+            }];
+            setFlashMoves(prevMoves => {
+                const combined = [...typedMoves, ...prevMoves];
+                return combined.filter((move, index, self) => 
+                    index === self.findIndex(m => 
+                        m.tokenId === move.tokenId && 
+                        new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
+                    )
+                ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
+            });
+        }
     });
 
     // Cleanup: Decouple instance from browser lifecycle
@@ -2115,7 +2236,7 @@ const updateConfig = (updates: Partial<AppConfig>) => {
             const { 
                 targets, multiplier, riskProfile, minLiquidityFilter, 
                 autoTp, maxTradeAmount, enableAutoCashout, maxRetentionAmount,
-                coldWalletAddress, enableNotifications, userPhoneNumber, enableAutoArb, enableFomoRunner
+                coldWalletAddress, enableNotifications, userPhoneNumber, enableAutoArb
             } = newConfig;
             
             // Fire and forget the server update
@@ -2128,7 +2249,6 @@ const updateConfig = (updates: Partial<AppConfig>) => {
                 autoTp,
                 maxTradeAmount,
                 enableAutoArb,
-                enableFomoRunner,
                 autoCashout: {
                     enabled: enableAutoCashout,
                     maxAmount: maxRetentionAmount,
@@ -2276,44 +2396,6 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
             setStats(res.data.stats);
         }
         
-        // Handle FOMO data from API response with normalization
-        if (res.data.fomoMoves) {
-            setFomoMoves(prevMoves => {
-                const fomoMovesArray = (Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : []).map((m: FlashMove) => ({
-                    ...m,
-                    timestamp: new Date(m.timestamp || Date.now()).getTime()
-                }));
-                const updatedMoves = [...fomoMovesArray, ...prevMoves]
-                    .filter((move, index, self) => 
-                        index === self.findIndex(m => 
-                            m.tokenId === move.tokenId && 
-                            new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
-                        )
-                    )
-                    .sort((a, b) => b.timestamp - a.timestamp)
-                    .slice(0, 50);
-                return updatedMoves;
-            });
-        }
-        
-        if (res.data.fomoSnipes) {
-            setActiveSnipes(prevSnipes => {
-                const snipesArray = (Array.isArray(res.data.fomoSnipes) ? res.data.fomoSnipes : []).map((s: ActiveSnipe) => ({
-                    ...s,
-                    timestamp: new Date(s.timestamp || Date.now()).getTime()
-                }));
-                const updatedSnipes = [...snipesArray, ...prevSnipes]
-                    .filter((snipe, index, self) => 
-                        index === self.findIndex(s => 
-                            s.tokenId === snipe.tokenId &&
-                            new Date(s.timestamp).getTime() === new Date(snipe.timestamp).getTime()
-                        )
-                    )
-                    .sort((a, b) => b.timestamp - a.timestamp);
-                return updatedSnipes;
-            });
-        }
-        
         if (res.data.mmOpportunities) {
             setMoneyMarketOpps(res.data.mmOpportunities);
         }
@@ -2372,7 +2454,7 @@ const fetchBotStatus = useCallback(async (force: boolean = false) => {
                 enableAutoCashout: serverConfig.autoCashout?.enabled,
                 maxRetentionAmount: serverConfig.autoCashout?.maxAmount,
                 coldWalletAddress: serverConfig.autoCashout?.destinationAddress,
-                enableFomoRunner: serverConfig.enableFomoRunner ?? prev.enableFomoRunner
+                enableAutoArb: serverConfig.enableAutoArb ?? prev.enableAutoArb
             }));
         }
 
@@ -2842,7 +2924,7 @@ const handleStart = async () => {
         maxTradeAmount: config.maxTradeAmount,
         enableMoneyMarkets: config.enableMoneyMarkets,
         enableCopyTrading: config.enableCopyTrading,
-        enableFomoRunner: config.enableFomoRunner,
+        enableAutoArb: config.enableAutoArb,
         notifications: {
             enabled: config.enableNotifications,
             phoneNumber: config.userPhoneNumber
@@ -3009,8 +3091,8 @@ const fetchStatus = async () => {
         setActivePositions(res.data.positions || []);
         setStats(res.data.stats);
         setMoneyMarketOpps(res.data.mmOpportunities || []);
-        setFomoMoves(Array.isArray(res.data.fomoMoves) ? res.data.fomoMoves : []);
-        setActiveSnipes(res.data.fomoSnipes || []);
+        setActivePositions(res.data.positions || []);
+        setStats(res.data.stats);
     } catch (e) {}
 };
 
@@ -3065,7 +3147,7 @@ return (
                 {[
                 { id: 'dashboard', icon: Activity, label: 'Dashboard' },
                 { id: 'money-market', icon: Scale, label: 'M.Market' },
-                { id: 'fomo', icon: Flame, label: 'FOMO Runner' },
+                { id: 'flash-moves', icon: Flame, label: 'Flash Moves' },
                 { id: 'system', icon: Gauge, label: 'System' },
                 { id: 'bridge', icon: Globe, label: 'Bridge' },
                 { id: 'marketplace', icon: Users, label: 'Alpha' },
@@ -3153,7 +3235,7 @@ return (
                     { id: 'dashboard', icon: Activity, label: 'Dashboard' },
                     { id: 'system', icon: Gauge, label: 'System' },
                     { id: 'money-market', icon: Scale, label: 'Money Market' },
-                    { id: 'fomo', icon: Flame, label: 'FOMO Runner' },
+                    { id: 'flash-moves', icon: Flame, label: 'Flash Moves' },
                     { id: 'bridge', icon: Globe, label: 'Bridge' },
                     { id: 'marketplace', icon: Users, label: 'Marketplace' },
                     { id: 'history', icon: History, label: 'History' },
@@ -3625,18 +3707,15 @@ return (
             />
         )}
 
-        {activeTab === 'fomo' && (
+        {activeTab === 'flash-moves' && (
             <div className="relative min-h-[300px]">
-                {isLoadingFomo ? (
+                {isLoadingFlashMoves ? (
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-10 flex items-center justify-center rounded-xl">
                         <Loader2 className="animate-spin text-blue-500" size={32} />
-                        <span className="ml-2 text-white">Loading FOMO data...</span>
+                        <span className="ml-2 text-white">Loading Flash Move data...</span>
                     </div>
                 ) : (
-                    <FomoRunner
-                    flashMoves={Array.isArray(fomoMoves) ? fomoMoves : []}
-                    activeSnipes={Array.isArray(activeSnipes) ? activeSnipes : []}
-                    />
+                    <FlashMoveDashboard />
                 )}
             </div>
         )}
@@ -4191,7 +4270,42 @@ return (
                             <div className="flex justify-between items-start mb-6">
                                 <div className="p-3 bg-purple-600 rounded-xl text-white shadow-lg"><Users size={22} /></div>
                                 <label className="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" checked={config.enableCopyTrading} onChange={(e) => updateConfig({ enableCopyTrading: e.target.checked })} className="sr-only peer" />
+                                    <input 
+                                        type="checkbox" 
+                                        checked={config.enableCopyTrading} 
+                                        onChange={async (e) => {
+                                            const enabled = e.target.checked;
+                                            // Update local config immediately for UI responsiveness
+                                            updateConfig({ enableCopyTrading: enabled });
+                                            
+                                            // Call runtime API
+                                            try {
+                                                const response = await fetch('/api/bot/services/toggle', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({
+                                                        userId: userAddress,
+                                                        service: 'copytrading',
+                                                        enabled
+                                                    })
+                                                });
+                                                
+                                                const result = await response.json();
+                                                if (result.success) {
+                                                    toast.success(`Copy Trading ${enabled ? 'enabled' : 'disabled'}`);
+                                                } else {
+                                                    toast.error(`Failed to toggle Copy Trading: ${result.message}`);
+                                                    // Revert local state on failure
+                                                    updateConfig({ enableCopyTrading: !enabled });
+                                                }
+                                            } catch (error) {
+                                                toast.error('Failed to toggle Copy Trading service');
+                                                // Revert local state on failure
+                                                updateConfig({ enableCopyTrading: !enabled });
+                                            }
+                                        }} 
+                                        className="sr-only peer" 
+                                    />
                                     <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                                 </label>
                             </div>
@@ -4203,7 +4317,42 @@ return (
                             <div className="flex justify-between items-start mb-6">
                                 <div className="p-3 bg-blue-600 rounded-xl text-white shadow-lg"><Recycle size={22} /></div>
                                 <label className="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" checked={config.enableMoneyMarkets} onChange={(e) => updateConfig({ enableMoneyMarkets: e.target.checked })} className="sr-only peer" />
+                                    <input 
+                                        type="checkbox" 
+                                        checked={config.enableMoneyMarkets} 
+                                        onChange={async (e) => {
+                                            const enabled = e.target.checked;
+                                            // Update local config immediately for UI responsiveness
+                                            updateConfig({ enableMoneyMarkets: enabled });
+                                            
+                                            // Call runtime API
+                                            try {
+                                                const response = await fetch('/api/bot/services/toggle', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({
+                                                        userId: userAddress,
+                                                        service: 'moneymarkets',
+                                                        enabled
+                                                    })
+                                                });
+                                                
+                                                const result = await response.json();
+                                                if (result.success) {
+                                                    toast.success(`Money Markets ${enabled ? 'enabled' : 'disabled'}`);
+                                                } else {
+                                                    toast.error(`Failed to toggle Money Markets: ${result.message}`);
+                                                    // Revert local state on failure
+                                                    updateConfig({ enableMoneyMarkets: !enabled });
+                                                }
+                                            } catch (error) {
+                                                toast.error('Failed to toggle Money Markets service');
+                                                // Revert local state on failure
+                                                updateConfig({ enableMoneyMarkets: !enabled });
+                                            }
+                                        }} 
+                                        className="sr-only peer" 
+                                    />
                                     <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                                 </label>
                             </div>
@@ -4211,6 +4360,63 @@ return (
                             <p className="text-[10px] text-gray-500 font-bold leading-relaxed">Autonomous Market Making & Spread capture via GTC maker orders.</p>
                         </div>
 
+                        <div className={`p-6 rounded-[2rem] border transition-all duration-500 ${config.enableFomoRunner ? 'bg-amber-600/10 border-amber-500/40 shadow-[0_0_30px_rgba(245,158,11,0.05)]' : 'bg-white/5 border-white/5 opacity-50'}`}>
+                            <div className="flex justify-between items-start mb-6">
+                                <div className="p-3 bg-amber-600 rounded-xl text-white shadow-lg"><Zap size={22} /></div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={config.enableFomoRunner} 
+                                        onChange={async (e) => {
+                                            const enabled = e.target.checked;
+                                            // Update local config immediately for UI responsiveness
+                                            updateConfig({ enableFomoRunner: enabled });
+                                            
+                                            // Call runtime API
+                                            try {
+                                                const response = await fetch('/api/bot/services/toggle', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({
+                                                        userId: userAddress,
+                                                        service: 'flashmoves',
+                                                        enabled
+                                                    })
+                                                });
+                                                
+                                                const result = await response.json();
+                                                if (result.success) {
+                                                    toast.success(`Flash Moves ${enabled ? 'enabled' : 'disabled'}`);
+                                                } else {
+                                                    toast.error(`Failed to toggle Flash Moves: ${result.message}`);
+                                                    // Revert local state on failure
+                                                    updateConfig({ enableFomoRunner: !enabled });
+                                                }
+                                            } catch (error) {
+                                                toast.error('Failed to toggle Flash Moves service');
+                                                // Revert local state on failure
+                                                updateConfig({ enableFomoRunner: !enabled });
+                                            }
+                                        }} 
+                                        className="sr-only peer" 
+                                    />
+                                    <div className="w-12 h-6 bg-white/10 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-amber-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                </label>
+                            </div>
+                            <h4 className="text-lg font-black text-white uppercase italic mb-1">Flash Moves</h4>
+                            <p className="text-[10px] text-gray-500 font-bold leading-relaxed">High-frequency momentum detection & rapid execution on price spikes.</p>
+                        </div>
+
+                    </div>
+                </section>
+
+                {/* Service Status Display */}
+                <section className="space-y-6">
+                    <h3 className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.4em] flex items-center gap-2">
+                        <Activity size={12} fill="currentColor" /> Live Service Status
+                    </h3>
+                    <div className="glass-panel p-6 rounded-[2rem] border-white/5">
+                        <ServiceStatusDisplay userId={userAddress} />
                     </div>
                 </section>
 

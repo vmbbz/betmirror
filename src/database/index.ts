@@ -133,6 +133,29 @@ export interface IMoneyMarketOpportunity extends Document {
   capacityUsd: number;
 }
 
+export interface IMarketMetadata extends Document {
+    conditionId: string;
+    question: string;
+    image: string;
+    marketSlug: string;
+    eventSlug: string;
+    acceptingOrders: boolean;
+    closed: boolean;
+    rewards: {
+        max_spread: number;
+        min_size: number;
+        rates: any;
+    };
+    tags: any[];
+    minimum_order_size: number;
+    minimum_tick_size: number;
+    lastPrice?: number;
+    volume24h?: number;
+    liquidity?: number;
+    updatedAt: Date;
+    createdAt: Date;
+}
+
 /**
  * Sports Mapping Persistence
  */
@@ -147,6 +170,29 @@ export interface ISportsMatch extends Document {
     status: string;
     updatedAt: Date;
 }
+
+const MarketMetadataSchema = new Schema({
+    conditionId: { type: String, required: true, unique: true, index: true },
+    question: { type: String, required: true },
+    image: String,
+    marketSlug: String,
+    eventSlug: String,
+    acceptingOrders: { type: Boolean, default: true },
+    closed: { type: Boolean, default: false },
+    rewards: {
+        max_spread: { type: Number, default: 15 },
+        min_size: { type: Number, default: 10 },
+        rates: Schema.Types.Mixed
+    },
+    tags: [Schema.Types.Mixed],
+    minimum_order_size: { type: Number, default: 5 },
+    minimum_tick_size: { type: Number, default: 0.01 },
+    lastPrice: Number,
+    volume24h: Number,
+    liquidity: Number,
+    updatedAt: { type: Date, default: Date.now },
+    createdAt: { type: Date, default: Date.now }
+});
 
 const SportsMatchSchema = new Schema({
     matchId: { type: String, required: true, unique: true },
@@ -379,6 +425,7 @@ export const DepositLog = mongoose.model<IDepositLog>('DepositLog', DepositLogSc
 export const BotLog = mongoose.model<IBotLog>('BotLog', BotLogSchema);
 export const FlashMove = mongoose.model<IFlashMove>('FlashMove', FlashMoveSchema);
 export const MoneyMarketOpportunity = mongoose.model<IMoneyMarketOpportunity>('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
+export const MarketMetadata = mongoose.model<IMarketMetadata>('MarketMetadata', MarketMetadataSchema);
 export const SportsMatch = mongoose.model<ISportsMatch>('SportsMatch', SportsMatchSchema);
 
 // --- Connection ---

@@ -3,10 +3,10 @@ import type { Logger } from '../utils/logger.util.js';
 import type { TradeSignal, ActivePosition } from '../domain/trade.types.js';
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { httpGet } from '../utils/http.js';
-import { TOKENS, WS_URLS } from '../config/env.js'; // Added WS_URLS
+import { TOKENS } from '../config/env.js';
 import { IExchangeAdapter, LiquidityHealth, OrderParams, OrderResult } from '../adapters/interfaces.js';
+import { WebSocketManager } from './websocket-manager.service.js';
 import axios from 'axios';
-import WebSocket from 'ws'; // Added WebSocket
 
 // Import from arbitrage scanner
 import type { MarketOpportunity as BaseMarketOpportunity } from './arbitrage-scanner.js';
@@ -21,6 +21,7 @@ export type TradeExecutorDeps = {
   env: RuntimeEnv;
   logger: Logger;
   proxyWallet: string;
+  wsManager: WebSocketManager;
 };
 
 interface Position {
@@ -83,12 +84,8 @@ export class TradeExecutorService {
   private pendingSpend = 0;
   private pendingOrders: Map<string, { amount: number; timestamp: number }> = new Map();
 
-  // WebSocket fill state
-  // Fix: Changed type to any to resolve TypeScript errors with 'on' method in hybrid environments
-  private userWs?: any;
+  // WebSocket fill state - using centralized manager
   private isWsRunning = false;
-  
-  private pingInterval?: NodeJS.Timeout;
   private inventory = new Map<string, number>();
 
   /**
@@ -175,7 +172,8 @@ export class TradeExecutorService {
   constructor(deps: TradeExecutorDeps, mmConfig?: Partial<MarketMakingConfig>) {
     this.deps = deps;
     if (mmConfig) this.mmConfig = { ...this.mmConfig, ...mmConfig };
-    //Start fill minitor
+    
+    // Start fill monitor using centralized WebSocket manager
     this.connectUserChannel();
     this.initializeInventory().catch(e => this.deps.logger.error("Inventory Sync Failed", e));
   }
@@ -190,40 +188,18 @@ export class TradeExecutorService {
   }
 
   /**
-   * FIX: Added authenticated headers to the private User Channel connection.
-   * This ensures the connection is accepted by Polymarket's CLOB.
+   * Connect to user channel using centralized WebSocket manager
+   * This ensures we use the centralized architecture
    */
   private connectUserChannel() {
     this.isWsRunning = true;
-    const wsUrl = `${WS_URLS.CLOB}/ws/user`;
     
-    // Fetch auth headers (Key, Passphrase) from the adapter
-    const headers = (this.deps.adapter as any).getAuthHeaders?.() || {};
+    // Setup fill event listener from centralized manager
+    this.deps.wsManager.on('fill', (fill: any) => {
+      this.handleLiveFill(fill);
+    });
     
-    this.userWs = new WebSocket(wsUrl, { headers }) as any;
-
-    (this.userWs as any).on('open', () => {
-        this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
-        if (this.pingInterval) clearInterval(this.pingInterval);
-        this.pingInterval = setInterval(() => {
-            if ((this.userWs as any)?.readyState === 1) (this.userWs as any).send('PING');
-        }, 10000);
-    });
-
-    (this.userWs as any).on('message', (data: any) => {
-        try {
-            const msg = JSON.parse(data.toString());
-            // Now calling centralized handleLiveFill to ensure all state is updated correctly
-            if (msg.event_type === 'order_filled') {
-                this.handleLiveFill(msg);
-            }
-        } catch (e) {}
-    });
-
-    (this.userWs as any).on('close', () => {
-        if (this.pingInterval) clearInterval(this.pingInterval);
-        if (this.isWsRunning) setTimeout(() => this.connectUserChannel(), 5000);
-    });
+    this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
   }
 
   /**

@@ -23,9 +23,6 @@ export class BotEngine {
     portfolioTracker;
     positionMonitor;
     fundWatcher;
-    uiHeartbeatLoop = null;
-    backgroundSyncLoop = null;
-    heartbeatLoop = null;
     heartbeatInterval;
     activePositions = [];
     stats = {
@@ -41,7 +38,8 @@ export class BotEngine {
         cashBalance: 0
     };
     lastPositionSync = 0;
-    POSITION_SYNC_INTERVAL = 30000;
+    lastKnownBalance = 0;
+    POSITION_SYNC_INTERVAL = 300000; // 5 minute standard cycle
     marketMetadataCache = new Map();
     MARKET_METADATA_CACHE_TTL = 24 * 60 * 60 * 1000;
     constructor(config, intelligence, registryService, callbacks) {
@@ -237,21 +235,32 @@ export class BotEngine {
             }
         }
     }
+    /**
+     * SYNC POSITIONS: High-performance pipeline.
+     * Only executes RPC getPositions if timer expires OR if balance has changed significantly.
+     */
     async syncPositions(forceChainSync = false) {
         if (!this.exchange)
             return;
         const now = Date.now();
-        if (!forceChainSync && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
+        const funder = this.exchange.getFunderAddress();
+        // 1. Fetch current balance (light call)
+        const currentBalance = await this.exchange.fetchBalance(funder);
+        const hasBalanceChanged = Math.abs(currentBalance - this.lastKnownBalance) > 0.05;
+        this.lastKnownBalance = currentBalance;
+        // 2. Throttling Check
+        if (!forceChainSync && !hasBalanceChanged && (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL)) {
             return;
         }
         this.lastPositionSync = now;
         try {
-            const funder = this.exchange.getFunderAddress();
             const positions = await this.exchange.getPositions(funder);
             const enriched = [];
             for (const p of positions) {
                 const pos = await this.enrichPosition(p);
                 await this.updateMarketState(pos);
+                // Flag if managed by current MM strategy
+                pos.managedByMM = this.arbScanner?.hasActiveQuotes(pos.tokenId) || false;
                 enriched.push(pos);
             }
             this.activePositions = enriched;
@@ -316,13 +325,13 @@ export class BotEngine {
         });
         if (this.callbacks?.onStatsUpdate) {
             await this.callbacks.onStatsUpdate({
-                totalPnl: 0, // Calculated by server.ts from DB
-                totalVolume: 0,
-                totalFeesPaid: 0,
-                winRate: 0,
-                tradesCount: 0,
-                winCount: 0,
-                lossCount: 0,
+                totalPnl: this.stats.totalPnl,
+                totalVolume: this.stats.totalVolume,
+                totalFeesPaid: this.stats.totalFeesPaid,
+                winRate: this.stats.winRate,
+                tradesCount: this.stats.tradesCount,
+                winCount: this.stats.winCount,
+                lossCount: this.stats.lossCount,
                 allowanceApproved: true,
                 portfolioValue: cashBalance + positionValue,
                 cashBalance: cashBalance
@@ -401,6 +410,7 @@ export class BotEngine {
             success: (m) => this.addLog('success', m)
         };
         try {
+            // Use existing Intelligence singleton, do NOT overwrite
             if (!this.intelligence.isRunning) {
                 await this.intelligence.start();
             }
@@ -433,6 +443,15 @@ export class BotEngine {
             this.isRunning = false;
             throw e;
         }
+    }
+    /**
+     * Orchestrated Tick: Called by Master Heartbeat to sync state.
+     * Uses the throttled syncPositions instead of raw RPC calls.
+     */
+    async performTick() {
+        if (!this.isRunning || !this.exchange)
+            return;
+        await this.syncPositions(false);
     }
     initializeCoreModules(logger) {
         if (!this.exchange || !this.executor)
@@ -484,7 +503,7 @@ export class BotEngine {
                             price: result.priceFilled,
                             status: 'FILLED'
                         });
-                        await this.syncPositions();
+                        await this.syncPositions(true); // Force sync after trade
                     }
                 }
             });
@@ -502,12 +521,24 @@ export class BotEngine {
                 const snipes = this.fomoRunner.getActiveSnipes();
                 this.callbacks?.onFomoSnipes?.(snipes);
             }
-            // 2. Global FOMO moves are now handled by server.ts via real-time push events
-            // We no longer need to poll intelligence.getLatestMoves() here for the UI.
-            // 3. User-specific Position & Stats sync
+            // 2. Market Making Opportunities for UI
+            if (this.arbScanner) {
+                const opps = this.arbScanner.getOpportunities();
+                this.callbacks?.onArbUpdate?.(opps);
+                // AUTOMATED LIQUIDITY PROVISION:
+                if (opps.length > 0 && this.executor) {
+                    const topOpp = opps[0];
+                    const ageSeconds = (Date.now() - topOpp.timestamp) / 1000;
+                    const isRewardScoring = topOpp.spreadCents <= (topOpp.rewardsMaxSpread || 10);
+                    if (ageSeconds < 30 && isRewardScoring && topOpp.acceptingOrders) {
+                        this.executor.executeMarketMakingQuotes(topOpp).catch(() => { });
+                    }
+                }
+            }
+            // 3. User-specific Position & Stats sync (Handles throttling internally)
             await this.syncPositions();
             await this.syncStats();
-        }, 5000);
+        }, 2000);
     }
     stop() {
         this.isRunning = false;
@@ -517,14 +548,10 @@ export class BotEngine {
             this.monitor.stop();
         if (this.portfolioService)
             this.portfolioService.stopSnapshotService();
-        if (this.fundWatcher) {
-            clearInterval(this.fundWatcher);
-            this.fundWatcher = undefined;
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = undefined;
         }
-        if (this.uiHeartbeatLoop)
-            clearInterval(this.uiHeartbeatLoop);
-        if (this.backgroundSyncLoop)
-            clearInterval(this.backgroundSyncLoop);
         this.addLog('warn', 'Engine Stopped.');
     }
     async dispatchManualMM(marketId) {
@@ -548,20 +575,6 @@ export class BotEngine {
         catch (e) {
             return false;
         }
-    }
-    startFundWatcher() {
-        if (this.fundWatcher)
-            clearInterval(this.fundWatcher);
-        this.fundWatcher = setInterval(async () => {
-            if (!this.isRunning)
-                return;
-            const funded = await this.checkFunding();
-            if (funded) {
-                clearInterval(this.fundWatcher);
-                this.fundWatcher = undefined;
-                await this.proceedWithPostFundingSetup();
-            }
-        }, 15000);
     }
     async proceedWithPostFundingSetup() {
         const engineLogger = {
@@ -611,7 +624,6 @@ export class BotEngine {
     getCallbacks() { return this.callbacks; }
     async addMarketToMM(conditionId) { return this.arbScanner?.addMarketByConditionId(conditionId) || false; }
     async addMarketBySlug(slug) { return this.arbScanner?.addMarketBySlug(slug) || false; }
-    bookmarkMarket(conditionId) { this.arbScanner?.bookmarkMarket(conditionId); }
-    unbookmarkMarket(conditionId) { this.arbScanner?.unbookmarkMarket(conditionId); }
-    getBookmarkedOpportunities() { return this.arbScanner?.getBookmarkedOpportunities() || []; }
+    bookmarkMarket(marketId) { this.arbScanner?.bookmarkMarket(marketId); }
+    unbookmarkMarket(marketId) { this.arbScanner?.unbookmarkMarket(marketId); }
 }

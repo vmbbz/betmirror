@@ -19,7 +19,7 @@ import { SafeManagerService } from '../services/safe-manager.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
-import { MarketIntelligenceService, FlashMoveEvent } from '../services/market-intelligence.service.js';
+import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -90,8 +90,6 @@ async function startUserBot(userId: string, config: BotConfig) {
     if (ACTIVE_BOTS.has(normId)) ACTIVE_BOTS.get(normId)?.stop();
 
     const engine = new BotEngine(config, globalIntelligence, dbRegistryService, {
-        onFomoSnipes: (snipes) => io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes),
-        
         onPositionsUpdate: async (positions) => {
             await User.updateOne({ address: normId }, { activePositions: positions });
             io.to(normId).emit('POSITIONS_UPDATE', positions);
@@ -509,7 +507,7 @@ app.post('/api/bot/stop', async (req: any, res: any) => {
 
 // Live Update Bot
 app.post('/api/bot/update', async (req: any, res: any) => {
-    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount, enableFomoRunner } = req.body;
+    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount, enableCopyTrading } = req.body;
     
     if (!userId) { res.status(400).json({ error: 'Missing userId' }); return; }
     const normId = userId.toLowerCase();
@@ -527,7 +525,7 @@ app.post('/api/bot/update', async (req: any, res: any) => {
         if (autoTp) cfg.autoTp = autoTp;
         if (autoCashout) cfg.autoCashout = autoCashout;
         if (maxTradeAmount) cfg.maxTradeAmount = maxTradeAmount;
-        if (enableFomoRunner !== undefined) cfg.enableFomoRunner = enableFomoRunner;
+        if (enableCopyTrading !== undefined) cfg.enableCopyTrading = enableCopyTrading;
         if (notifications) {
             cfg.enableNotifications = notifications.enabled;
             cfg.userPhoneNumber = notifications.phoneNumber;
@@ -544,8 +542,12 @@ app.post('/api/bot/update', async (req: any, res: any) => {
                 autoTp: autoTp ? Number(autoTp) : undefined,
                 autoCashout: autoCashout,
                 maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : undefined,
-                enableFomoRunner: enableFomoRunner
+                enableCopyTrading: enableCopyTrading
             });
+            // Update copy trading targets if engine supports it
+            if (engine.updateCopyTradingTargets && targets) {
+                engine.updateCopyTradingTargets(targets);
+            }
         }
 
         res.json({ success: true });
@@ -565,12 +567,18 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
         const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
 
-        let mmOpportunities: ArbitrageOpportunity[] = [];
-        let fomoChases: any[] = [];
+        let mmOpportunities: any[] = [];
+        let flashMoves: any[] = [];
 
         if (engine) {
-            mmOpportunities = engine.getArbOpportunities();
-            fomoChases = engine.getActiveFomoChases();
+            const arbScanner = engine.getArbitrageScanner();
+            if (arbScanner) {
+                mmOpportunities = arbScanner.getOpportunities() || [];
+            }
+            const flashMoveService = engine.getFlashMoveService();
+            if (flashMoveService) {
+                flashMoves = Array.from(flashMoveService.getActivePositions().values());
+            }
         }
 
         let livePositions: ActivePosition[] = [];
@@ -592,8 +600,7 @@ app.get('/api/bot/status/:userId', async (req: any, res: any) => {
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
             mmOpportunities,
-            fomoMoves: engine?.getActiveFomoMoves() || [],
-            fomoSnipes: engine?.getActiveSnipes() || []
+            flashMoves: flashMoves
         });
     } catch (e) { res.status(500).json({ error: 'DB Error' }); }
 });
@@ -799,7 +806,7 @@ app.post('/api/trade/sync', async (req: any, res: any) => {
     
     try {
         if (engine) {
-            await engine.syncPositions(force === true);
+            await engine.getPortfolioTracker().syncPositions(force === true);
             res.json({ success: true });
         } else {
             // If bot not running, at least fetch from API once for UI
@@ -813,6 +820,49 @@ app.post('/api/trade/sync', async (req: any, res: any) => {
         }
     } catch (e: any) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// Runtime Service Toggle APIs
+app.post('/api/bot/services/toggle', async (req: any, res: any) => {
+    const { userId, service, enabled } = req.body;
+    if (!userId || !service || enabled === undefined) {
+        return res.status(400).json({ error: 'Missing required fields: userId, service, enabled' });
+    }
+    
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    
+    if (!engine) {
+        return res.status(404).json({ error: 'Bot not running' });
+    }
+    
+    try {
+        const result = await engine.toggleService(service, enabled);
+        res.json({ success: true, result });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/bot/services/status', async (req: any, res: any) => {
+    const { userId } = req.query;
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID required' });
+    }
+    
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    
+    if (!engine) {
+        return res.status(404).json({ error: 'Bot not running' });
+    }
+    
+    try {
+        const status = engine.getServicesStatus();
+        res.json({ success: true, status });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
     }
 });
 

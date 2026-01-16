@@ -49,13 +49,23 @@ app.use(express.json({ limit: '10mb' }));
 // --- STATIC FILES (For Production) ---
 const distPath = path.join(__dirname, '../../dist');
 app.use(express.static(distPath));
-// --- GLOBAL ALPHA BROADCAST ---
-// Listen to the intelligence hub and emit to ALL connected users
-globalIntelligence.on('flash_move', async (event) => {
-    // FIX: Emit the array directly instead of a nested object to match client-side expected signature
+// --- MASTER HEARTBEAT ORCHESTRATOR ---
+let currentTickIndex = 0;
+setInterval(async () => {
+    const bots = Array.from(ACTIVE_BOTS.values());
+    if (bots.length === 0)
+        return;
+    // Tick exactly ONE bot every 500ms to stagger outbound traffic
+    const engine = bots[currentTickIndex % bots.length];
+    if (engine && engine.isRunning) {
+        engine.performTick().catch(() => { });
+    }
+    // Broadcast global heat
     const moves = await globalIntelligence.getLatestMoves();
-    io.emit('FOMO_VELOCITY_UPDATE', moves);
-});
+    if (moves.length > 0)
+        io.emit('FOMO_VELOCITY_UPDATE', moves);
+    currentTickIndex++;
+}, 500);
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId, config) {
     const normId = userId.toLowerCase();

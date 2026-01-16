@@ -20,8 +20,6 @@ import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
-import { WebSocketManager } from '../services/websocket-manager.service.js';
-import { PolymarketAdapter } from '../adapters/polymarket/polymarket.adapter.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -56,21 +54,8 @@ const ENV = loadEnv();
 const dbRegistryService = new DbRegistryService();
 const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
 
-// Create WebSocket manager for global intelligence
-const globalAdapterConfig = {
-    rpcUrl: ENV.rpcUrl,
-    walletConfig: {} as TradingWalletConfig, // Empty config for global manager
-    userId: 'global-intelligence',
-    mongoEncryptionKey: ENV.mongoEncryptionKey
-};
-const globalAdapter = new PolymarketAdapter(globalAdapterConfig, serverLogger);
-const globalWsManager = new WebSocketManager(serverLogger, globalAdapter);
-const globalIntelligence = new MarketIntelligenceService(serverLogger, globalWsManager);
-
-// Start global WebSocket manager
-globalWsManager.start().catch(error => {
-    serverLogger.error(`Failed to start global WebSocket manager: ${error}`);
-});
+// Create global intelligence service without WebSocket manager (uses market data only)
+const globalIntelligence = new MarketIntelligenceService(serverLogger);
 
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map<string, BotEngine>();

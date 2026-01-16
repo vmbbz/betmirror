@@ -387,7 +387,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
     }
 
     async getSamplingMarkets(): Promise<PaginationPayload<Market>> {
-        if (!this.client) throw new Error("Not authenticated");
+        if (!this.client) {
+            console.warn('[ADAPTER] Client not authenticated for sampling markets');
+            return { data: [], limit: 0, count: 0 };
+        }
         
         try {
             const response = await this.client.getSamplingMarkets();

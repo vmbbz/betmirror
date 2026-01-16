@@ -1076,7 +1076,21 @@ async function bootstrap() {
     const runningUsers = await User.find({ isBotRunning: true }).select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
     serverLogger.info(`Restoring ${runningUsers.length} active bot instances...`);
 
+    // Group by wallet address to prevent duplicate instances
+    const walletGroups = new Map<string, any>();
     for (const u of runningUsers) {
+        if (!u.tradingWallet?.address) continue;
+        const walletAddr = u.tradingWallet.address.toLowerCase();
+        if (!walletGroups.has(walletAddr)) {
+            walletGroups.set(walletAddr, u);
+        } else {
+            serverLogger.warn(`[DUPLICATE] Skipping duplicate bot instance for wallet ${walletAddr} (user: ${u.address})`);
+            // Mark duplicate as stopped
+            await User.updateOne({ address: u.address }, { isBotRunning: false });
+        }
+    }
+
+    for (const u of walletGroups.values()) {
         if (!u.activeBotConfig || !u.tradingWallet) continue;
         try {
             await startUserBot(u.address, {

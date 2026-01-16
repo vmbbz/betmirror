@@ -365,7 +365,14 @@ export class TradeExecutorService {
     if (availableForBid < bidSize * prices.bidPrice) {
       const oldBidSize = bidSize;
       bidSize = availableForBid / prices.bidPrice;
-      this.deps.logger.warn(`[MM] Reduced bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} due to insufficient balance`);
+      
+      // Skip market making if balance is critically low
+      if (bidSize < minSize || availableForBid < 10) { // $10 minimum threshold
+        this.deps.logger.warn(`[MM] Insufficient balance ($${availableForBid.toFixed(2)}) for market making on ${tokenId}`);
+        bidSize = 0;
+      } else {
+        this.deps.logger.info(`[MM] Adjusted bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} for ${tokenId}`);
+      }
     }
     
     // Ensure minimum size requirements

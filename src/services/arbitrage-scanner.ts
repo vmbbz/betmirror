@@ -648,7 +648,7 @@ export class MarketMakingScanner extends EventEmitter {
      */
     private handleTickSizeChange(event: any): void {
         const { tokenId, oldTickSize, newTickSize } = event;
-
+ 
         this.tickSizes.set(tokenId, {
             tokenId,
             tickSize: newTickSize,
@@ -663,7 +663,7 @@ export class MarketMakingScanner extends EventEmitter {
             newTickSize
         });
     }
-
+ 
     /**
      * Handle last trade price events - delegate to FlashMoveService
      */
@@ -675,12 +675,12 @@ export class MarketMakingScanner extends EventEmitter {
             this.logger.debug(`Delegating flash move detection to FlashMoveService for token ${event.asset_id}`);
         }
     }
-
+ 
     // ============================================================
     // DISCOVERY - SAMPLING MARKETS (PRIMARY)
     // Per docs: getSamplingMarkets returns full Market objects with rewards
     // ============================================================
-
+ 
     private async discoverFromSamplingMarkets(): Promise<boolean> {
         try {
             const sampling = await this.adapter.getSamplingMarkets?.();
@@ -688,28 +688,28 @@ export class MarketMakingScanner extends EventEmitter {
                 this.logger.warn('No sampling markets available from adapter');
                 return false;
             }
-
+ 
             this.logger.info(`🎯 Processing ${sampling.length} sampling markets`);
             const tokenIds: string[] = [];
-
+ 
             for (const market of sampling) {
                 if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
-
+ 
                 // Per docs: Market object has condition_id, tokens[], rewards{max_spread, min_size}
                 const tokens = market.tokens || [];
                 const conditionId = market.condition_id;
-
+ 
                 if (!conditionId || tokens.length !== 2) continue;
-
+ 
                 for (let i = 0; i < tokens.length; i++) {
                     const token = tokens[i];
                     const tokenId = token.token_id;
-
+ 
                     if (!tokenId || this.trackedMarkets.has(tokenId)) continue;
-
+ 
                     const price = token.price || 0.5;
                     const isYesToken = token.outcome?.toLowerCase() === 'yes' || i === 0;
-
+ 
                     this.trackedMarkets.set(tokenId, {
                         conditionId,
                         tokenId,
@@ -734,13 +734,13 @@ export class MarketMakingScanner extends EventEmitter {
                         category: market.tags?.[0],
                         featured: market.featured
                     });
-
+ 
                     tokenIds.push(tokenId);
                     // Use centralized subscription method
                     this.subscribeToTokens([tokenId]);
                 }
             }
-
+ 
             this.logger.success(`✅ Loaded ${tokenIds.length} tokens from sampling markets`);
             return tokenIds.length > 0;
         } catch (error) {
@@ -748,7 +748,7 @@ export class MarketMakingScanner extends EventEmitter {
             return false;
         }
     }
-
+ 
     // ============================================================
     // DISCOVERY - CATEGORIES (FALLBACK)
     // ============================================================
@@ -799,31 +799,31 @@ export class MarketMakingScanner extends EventEmitter {
             }
         }
     }
-
+ 
     private async fetchTagIds(): Promise<Record<string, number>> {
         const tagMap: Record<string, number> = {};
-
+ 
         try {
             const response = await this.rateLimiter.limit(() =>
                 fetch('https://gamma-api.polymarket.com/tags?limit=300')
             );
-
+ 
             if (!response.ok) {
                 this.logger.warn('Failed to fetch tags');
                 return tagMap;
             }
-
+ 
             const tags = await response.json();
-
+ 
             for (const tag of tags) {
                 const slug = (tag.slug || '').toLowerCase();
                 const id = parseInt(tag.id);
-
+ 
                 if (slug && id && !isNaN(id)) {
                     tagMap[slug] = id;
                 }
             }
-
+ 
             this.logger.info(`📋 Loaded ${Object.keys(tagMap).length} tags`);
             return tagMap;
         } catch (error) {
@@ -831,7 +831,7 @@ export class MarketMakingScanner extends EventEmitter {
             return tagMap;
         }
     }
-
+ 
     private processMarketData(
         market: any,
         event: any,
@@ -844,7 +844,12 @@ export class MarketMakingScanner extends EventEmitter {
 
         // Structural filters only
         if (market.closed === true) return result;
-        if (market.acceptingOrders === false) return result;
+        // Handle acceptingOrders with fallback logic
+        const acceptingOrders = market.acceptingOrders ?? market.accepting_orders ?? true;
+        if (acceptingOrders === false) {
+            this.logger.debug(`[SCANNER] Skipping market ${conditionId} - not accepting orders`);
+            return result;
+        }
         if (market.active === false) return result;
         if (market.archived === true) return result;
 
@@ -939,43 +944,43 @@ export class MarketMakingScanner extends EventEmitter {
         }
         this.updateOpportunities();
     }
-
+ 
     // ============================================================
     // FLASH MOVE TRADE EXECUTION - DELEGATED TO FLASH MOVE SERVICE
     // Per docs: FAK (Fill-And-Kill) for partial fills
     // ============================================================
     // Flash move execution is now handled by FlashMoveService
     // This removes duplicate logic and uses unified detection/execution system
-
+ 
     // ============================================================
     // OPPORTUNITY EVALUATION
     // ============================================================
-
+ 
     private evaluateOpportunity(market: TrackedMarket): void {
         // Price validation
         if (market.bestBid <= 0 || market.bestAsk <= 0 || market.bestAsk <= market.bestBid) {
             return;
         }
-
+ 
         // Status validation
         if (market.status !== 'active' || !market.acceptingOrders) {
             return;
         }
-
+ 
         // Calculate metrics
         const spread = market.spread;
         const midpoint = (market.bestBid + market.bestAsk) / 2;
         const spreadCents = spread * 100;
         const spreadPct = midpoint > 0 ? (spread / midpoint) * 100 : 0;
-
+ 
         // Spread filters
         if (spreadCents < this.config.minSpreadCents) return;
         if (spreadCents > this.config.maxSpreadCents) return;
-
+ 
         // Check if still "new"
         const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
         const isStillNew = market.isNewMarket && ageMinutes < this.config.newMarketAgeMinutes;
-
+ 
         // Build opportunity
         const opportunity: MarketOpportunity = {
             marketId: market.conditionId,
@@ -1010,26 +1015,26 @@ export class MarketMakingScanner extends EventEmitter {
             lastPriceMovePct: (market as any).lastPriceMovePct,
             isVolatile: (market as any).isVolatile
         };
-
+ 
         // Always update monitored list
         this.monitoredMarkets.set(market.tokenId, opportunity);
-
+ 
         // Apply volume/liquidity filters for actionable opportunities
         const effectiveMinVolume = isStillNew
             ? Math.max(100, this.config.minVolume * 0.1)
             : this.config.minVolume;
-
+ 
         const effectiveMinLiquidity = isStillNew
             ? Math.max(50, this.config.minLiquidity * 0.1)
             : this.config.minLiquidity;
-
+ 
         if (market.volume < effectiveMinVolume) return;
         if (market.liquidity < effectiveMinLiquidity) return;
-
+ 
         // Update opportunities list
         this.updateOpportunitiesInternal(opportunity);
     }
-
+ 
     private updateOpportunitiesInternal(opp: MarketOpportunity): void {
         const existingIdx = this.opportunities.findIndex(o => o.tokenId === opp.tokenId);
         if (existingIdx !== -1) {
@@ -1037,10 +1042,10 @@ export class MarketMakingScanner extends EventEmitter {
         } else {
             this.opportunities.push(opp);
         }
-
+ 
         // Queue for batch DB write
         this.queueDbWrite(opp);
-
+ 
         // Sort: new markets first, then by spread
         this.opportunities.sort((a, b) => {
             if (a.isNewMarket !== b.isNewMarket) return a.isNewMarket ? -1 : 1;
@@ -1146,7 +1151,11 @@ export class MarketMakingScanner extends EventEmitter {
     private computeMarketStatus(market: any): 'active' | 'closed' | 'resolved' | 'paused' {
         if (market.closed === true) return 'closed';
         if (market.umaResolutionStatus === 'resolved') return 'resolved';
-        if (market.acceptingOrders === false) return 'paused';
+        
+        // Use fallback logic for acceptingOrders
+        const acceptingOrders = market.acceptingOrders ?? market.accepting_orders ?? true;
+        if (acceptingOrders === false) return 'paused';
+        
         return 'active';
     }
 

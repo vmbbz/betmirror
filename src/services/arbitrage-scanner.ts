@@ -677,48 +677,50 @@ export class MarketMakingScanner extends EventEmitter {
     }
  
     // ============================================================
-    // DISCOVERY - SAMPLING MARKETS (PRIMARY)
-    // Per docs: getSamplingMarkets returns full Market objects with rewards
+    // DISCOVERY - SAMPLING MARKETS (PRIMARY - CLOB API)
+    // Returns markets with active liquidity rewards
     // ============================================================
- 
+
+    // ============================================================
+    // DISCOVERY - SAMPLING MARKETS (PRIMARY - CLOB API)
+    // Returns markets with ACTIVE LIQUIDITY REWARDS
+    // ============================================================
+
     private async discoverFromSamplingMarkets(): Promise<boolean> {
         try {
             const sampling = await this.adapter.getSamplingMarkets?.();
             
-            // Validate response structure
             if (!sampling?.data || !Array.isArray(sampling.data) || sampling.data.length === 0) {
                 this.logger.warn('No sampling markets available from adapter');
                 return false;
             }
 
-            this.logger.info(`🎯 Processing ${sampling.data.length} sampling markets`);
+            this.logger.info(`🎯 Processing ${sampling.data.length} sampling markets (reward-eligible)`);
             const tokenIds: string[] = [];
 
             for (const market of sampling.data) {
                 if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
 
-                // Skip invalid/inactive markets early
-                if (!market.condition_id || 
-                    !market.tokens || 
-                    market.tokens.length < 2 ||
-                    market.closed ||
-                    market.archived ||
-                    !market.active ||
-                    !market.accepting_orders) {
-                    continue;
-                }
-
+                // Per docs: Market interface from CLOB
                 const conditionId = market.condition_id;
-                const tokens = market.tokens;
+                const tokens = market.tokens || [];
+
+                // Skip invalid markets
+                if (!conditionId || tokens.length < 2) continue;
+                if (market.closed === true) continue;
+                if (market.archived === true) continue;
+                if (market.accepting_orders === false) continue;
+
+                // All sampling markets have rewards - that's why they're in this endpoint
+                const hasRewards = !!(market.rewards?.max_spread && market.rewards?.min_size);
 
                 for (let i = 0; i < tokens.length; i++) {
                     const token = tokens[i];
+                    // Per docs: MarketToken { token_id, outcome, price, winner }
                     const tokenId = token.token_id;
 
-                    // Skip if no token_id or already tracked
                     if (!tokenId || this.trackedMarkets.has(tokenId)) continue;
 
-                    // Per docs: token has outcome, price, token_id, winner
                     const price = typeof token.price === 'number' ? token.price : 0.5;
                     const isYesToken = token.outcome?.toLowerCase() === 'yes' || i === 0;
                     const pairedToken = tokens[i === 0 ? 1 : 0];
@@ -732,8 +734,8 @@ export class MarketMakingScanner extends EventEmitter {
                         bestBid: Math.max(0.01, price - 0.01),
                         bestAsk: Math.min(0.99, price + 0.01),
                         spread: 0.02,
-                        volume: 0, // Not in Market interface - fetch separately if needed
-                        liquidity: 0, // Not in Market interface - fetch separately if needed
+                        volume: 0, // Fetch from Gamma if needed
+                        liquidity: 0, // Fetch from Gamma if needed
                         isNewMarket: false,
                         discoveredAt: Date.now(),
                         // Per docs: rewards { max_spread, min_size, rates }
@@ -741,34 +743,35 @@ export class MarketMakingScanner extends EventEmitter {
                         rewardsMinSize: market.rewards?.min_size,
                         isYesToken,
                         pairedTokenId: pairedToken?.token_id,
-                        status: market.closed ? 'closed' : (market.active ? 'active' : 'paused'),
+                        status: market.closed ? 'closed' : 'active',
                         acceptingOrders: market.accepting_orders === true,
                         // Per docs: minimum_order_size, minimum_tick_size
                         orderMinSize: market.minimum_order_size,
                         orderPriceMinTickSize: market.minimum_tick_size,
                         category: market.tags?.[0] || '',
-                        featured: true, // Not in Market interface
+                        // Sampling markets = reward-eligible = "featured" for MM purposes
+                        featured: hasRewards
                     });
 
                     tokenIds.push(tokenId);
                 }
             }
 
-            // Batch subscribe to all tokens at once (more efficient)
             if (tokenIds.length > 0) {
                 this.subscribeToTokens(tokenIds);
             }
 
-            this.logger.success(`✅ Loaded ${tokenIds.length} tokens from ${sampling.data.length} sampling markets`);
+            this.logger.success(`✅ Loaded ${tokenIds.length} reward-eligible tokens from ${sampling.data.length} sampling markets`);
             return tokenIds.length > 0;
         } catch (error) {
             this.logger.warn(`Sampling markets failed: ${error}`);
             return false;
         }
     }
- 
+
     // ============================================================
-    // DISCOVERY - CATEGORIES (FALLBACK)
+    // DISCOVERY - GAMMA API (FALLBACK - Has volume/liquidity/featured)
+    // Use pagination to get up to 1000 markets
     // ============================================================
 
     private async discoverFromCategories(): Promise<void> {
@@ -780,68 +783,98 @@ export class MarketMakingScanner extends EventEmitter {
             'entertainment', 'science', 'world', 'earnings'
         ];
 
-        const categoryEndpoint = (tagId: number, limit = 1000) =>
-            `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&related_tags=true&limit=${limit}&order=volume&ascending=false`;
-
-        const endpoints = [
-            'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=500&order=volume&ascending=false',
-            'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=500&order=id&ascending=false',
-            ...priorityCategories
-                .filter(cat => tagIds[cat])
-                .map(cat => categoryEndpoint(tagIds[cat]))
-        ];
-
         const seenConditionIds = new Set<string>();
+        
+        // Per docs: Gamma /events limit 500 req/10s, use pagination
+        const BATCH_SIZE = 100;
+        const MAX_PAGES = 10; // 100 * 10 = 1000 markets max
 
-        for (const url of endpoints) {
+        // Strategy 1: Paginated fetch of all active events
+        for (let page = 0; page < MAX_PAGES && this.trackedMarkets.size < this.MAX_TRACKED_MARKETS; page++) {
+            try {
+                const offset = page * BATCH_SIZE;
+                const url = `https://gamma-api.polymarket.com/events?active=true&closed=false&limit=${BATCH_SIZE}&offset=${offset}&order=volume&ascending=false`;
+                
+                const response = await this.rateLimiter.limit(() => fetch(url));
+                if (!response.ok) break;
+                
+                const events = await response.json();
+                if (!events || events.length === 0) break;
+
+                for (const event of events) {
+                    for (const market of (event.markets || [])) {
+                        if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
+                        const result = this.processMarketData(market, event, seenConditionIds);
+                        if (result.added && result.tokenIds.length > 0) {
+                            this.subscribeToTokens(result.tokenIds);
+                        }
+                    }
+                }
+                
+                this.logger.debug(`[GAMMA] Page ${page + 1}: processed ${events.length} events, tracking ${this.trackedMarkets.size} tokens`);
+            } catch (error) {
+                this.logger.warn(`Events fetch failed at page ${page}: ${error}`);
+                break;
+            }
+        }
+
+        // Strategy 2: Category-based discovery for diversity
+        for (const category of priorityCategories) {
             if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
+            
+            const tagId = tagIds[category];
+            if (!tagId) continue;
 
             try {
+                // Per docs: use tag_id and related_tags parameters
+                const url = `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&related_tags=true&limit=100&order=volume&ascending=false`;
                 const response = await this.rateLimiter.limit(() => fetch(url));
+                
                 if (!response.ok) continue;
-
+                
                 const events = await response.json();
                 for (const event of events) {
                     for (const market of (event.markets || [])) {
                         if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
-
                         const result = this.processMarketData(market, event, seenConditionIds);
-                        if (result.added) {
-                            // Use centralized subscription method
+                        if (result.added && result.tokenIds.length > 0) {
                             this.subscribeToTokens(result.tokenIds);
                         }
                     }
                 }
             } catch (error) {
-                this.logger.warn(`Category fetch failed: ${error}`);
+                this.logger.warn(`Category ${category} fetch failed: ${error}`);
             }
         }
+        
+        this.logger.info(`📊 Category discovery complete. Tracking ${this.trackedMarkets.size} tokens`);
     }
- 
+
     private async fetchTagIds(): Promise<Record<string, number>> {
         const tagMap: Record<string, number> = {};
- 
+
         try {
+            // Per docs: /tags endpoint, limit 200
             const response = await this.rateLimiter.limit(() =>
-                fetch('https://gamma-api.polymarket.com/tags?limit=300')
+                fetch('https://gamma-api.polymarket.com/tags?limit=200')
             );
- 
+
             if (!response.ok) {
                 this.logger.warn('Failed to fetch tags');
                 return tagMap;
             }
- 
+
             const tags = await response.json();
- 
+
             for (const tag of tags) {
                 const slug = (tag.slug || '').toLowerCase();
                 const id = parseInt(tag.id);
- 
+
                 if (slug && id && !isNaN(id)) {
                     tagMap[slug] = id;
                 }
             }
- 
+
             this.logger.info(`📋 Loaded ${Object.keys(tagMap).length} tags`);
             return tagMap;
         } catch (error) {
@@ -849,7 +882,7 @@ export class MarketMakingScanner extends EventEmitter {
             return tagMap;
         }
     }
- 
+
     private processMarketData(
         market: any,
         event: any,
@@ -857,47 +890,53 @@ export class MarketMakingScanner extends EventEmitter {
     ): { added: boolean; tokenIds: string[] } {
         const result = { added: false, tokenIds: [] as string[] };
 
+        // Gamma uses camelCase: conditionId
         const conditionId = market.conditionId || market.condition_id;
         if (!conditionId || seenConditionIds.has(conditionId)) return result;
 
-        // Structural filters only
+        // Skip closed/inactive
         if (market.closed === true) return result;
-        // Handle acceptingOrders with fallback logic
-        const acceptingOrders = market.acceptingOrders ?? market.accepting_orders ?? true;
-        if (acceptingOrders === false) {
-            this.logger.debug(`[SCANNER] Skipping market ${conditionId} - not accepting orders`);
-            return result;
-        }
         if (market.active === false) return result;
         if (market.archived === true) return result;
+        
+        // Per docs: acceptingOrders field
+        const acceptingOrders = market.acceptingOrders ?? market.accepting_orders ?? true;
+        if (acceptingOrders === false) return result;
 
+        // Gamma uses clobTokenIds (JSON string or array)
         const rawTokenIds = market.clobTokenIds || market.clob_token_ids;
         const tokenIds = this.parseJsonArray(rawTokenIds);
 
-        if (tokenIds.length !== 2) return result;
+        if (tokenIds.length < 2) return result;
 
         seenConditionIds.add(conditionId);
 
+        // Gamma has volume, liquidity, featured
         const volume = this.parseNumber(market.volumeNum || market.volume || 0);
         const liquidity = this.parseNumber(market.liquidityNum || market.liquidity || 0);
         const outcomes = this.parseJsonArray(market.outcomes) || ['Yes', 'No'];
         const outcomePrices = this.parseJsonArray(market.outcomePrices);
-        const status = this.computeMarketStatus(market);
         const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
         const category = this.extractCategory(event, market);
+        
+        // Check for rewards (Gamma uses rewardsMaxSpread/rewardsMinSize)
+        const hasRewards = !!(market.rewardsMaxSpread && market.rewardsMinSize);
+        // Featured from event or market level
+        const isFeatured = market.featured === true || event.featured === true || hasRewards;
 
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];
 
+            // Update existing if already tracked
             if (this.trackedMarkets.has(tokenId)) {
                 const existing = this.trackedMarkets.get(tokenId)!;
                 existing.volume = volume;
                 existing.liquidity = liquidity;
-                existing.status = status;
-                existing.acceptingOrders = market.acceptingOrders !== false;
+                existing.acceptingOrders = acceptingOrders;
                 existing.volume24hr = volume24hr;
+                existing.featured = existing.featured || isFeatured;
 
-                if (outcomePrices && outcomePrices[i]) {
+                if (outcomePrices?.[i]) {
                     const price = this.parseNumber(outcomePrices[i]);
                     if (price > 0 && price < 1) {
                         existing.bestBid = Math.max(0.01, price - 0.01);
@@ -911,9 +950,9 @@ export class MarketMakingScanner extends EventEmitter {
             const isYesToken = (outcomes[i]?.toLowerCase() === 'yes') || (i === 0);
             const pairedTokenId = tokenIds[i === 0 ? 1 : 0];
 
-            let initialBid = 0;
-            let initialAsk = 0;
-            if (outcomePrices && outcomePrices[i]) {
+            let initialBid = 0.49;
+            let initialAsk = 0.51;
+            if (outcomePrices?.[i]) {
                 const price = this.parseNumber(outcomePrices[i]);
                 if (price > 0 && price < 1) {
                     initialBid = Math.max(0.01, price - 0.01);
@@ -926,7 +965,7 @@ export class MarketMakingScanner extends EventEmitter {
                 tokenId,
                 question: market.question || event.title || 'Unknown',
                 image: market.image || market.icon || event.image || event.icon || '',
-                marketSlug: market.slug || '',
+                marketSlug: market.slug || market.market_slug || '',
                 bestBid: initialBid,
                 bestAsk: initialAsk,
                 spread: initialAsk - initialBid,
@@ -934,18 +973,17 @@ export class MarketMakingScanner extends EventEmitter {
                 liquidity,
                 isNewMarket: market.new === true || this.isRecentlyCreated(market.createdAt),
                 discoveredAt: Date.now(),
-                rewardsMaxSpread: market.rewardsMaxSpread,
-                rewardsMinSize: market.rewardsMinSize,
+                rewardsMaxSpread: market.rewardsMaxSpread || market.rewards_max_spread,
+                rewardsMinSize: market.rewardsMinSize || market.rewards_min_size,
                 isYesToken,
                 pairedTokenId,
-                status,
-                acceptingOrders: market.acceptingOrders !== false,
+                status: market.closed ? 'closed' : 'active',
+                acceptingOrders,
                 volume24hr,
                 orderMinSize: this.parseNumber(market.orderMinSize || market.minimum_order_size || 5),
                 orderPriceMinTickSize: this.parseNumber(market.orderPriceMinTickSize || market.minimum_tick_size || 0.01),
                 category,
-                featured: market.featured === true || event.featured === true,
-                competitive: market.competitive
+                featured: isFeatured
             });
 
             result.tokenIds.push(tokenId);
@@ -955,6 +993,7 @@ export class MarketMakingScanner extends EventEmitter {
         return result;
     }
 
+    
     private async refreshMarkets(): Promise<void> {
         const usedSampling = await this.discoverFromSamplingMarkets();
         if (!usedSampling || this.trackedMarkets.size < 50) {
@@ -1039,13 +1078,13 @@ export class MarketMakingScanner extends EventEmitter {
  
         // Apply volume/liquidity filters for actionable opportunities
         const effectiveMinVolume = isStillNew
-            ? Math.max(100, this.config.minVolume * 0.1)
-            : this.config.minVolume;
- 
+            ? Math.max(10, this.config.minVolume * 0.01)  
+            : this.config.minVolume || 10;  
+        
         const effectiveMinLiquidity = isStillNew
-            ? Math.max(50, this.config.minLiquidity * 0.1)
-            : this.config.minLiquidity;
- 
+            ? Math.max(5, this.config.minLiquidity * 0.01)  
+            : this.config.minLiquidity || 5;  
+        
         if (market.volume < effectiveMinVolume) return;
         if (market.liquidity < effectiveMinLiquidity) return;
  

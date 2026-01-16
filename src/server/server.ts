@@ -210,6 +210,25 @@ io.on('connection', (socket: Socket) => {
                     });
                 });
             }
+            
+            // Forward whale trade events to client
+            const tradeMonitor = engine.getTradeMonitor();
+            if (tradeMonitor) {
+                // Listen for whale trade events and forward to client
+                (tradeMonitor as any).on('whale_detected', (whaleEvent: any) => {
+                    socket.emit('WHALE_DETECTED', {
+                        trader: whaleEvent.trader,
+                        tokenId: whaleEvent.tokenId,
+                        side: whaleEvent.side,
+                        price: whaleEvent.price,
+                        size: whaleEvent.size,
+                        timestamp: whaleEvent.timestamp,
+                        question: whaleEvent.question || 'Unknown Market'
+                    });
+                    
+                    serverLogger.info(` [WHALE UI] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+                });
+            }
         }
     });
 });

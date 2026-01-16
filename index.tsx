@@ -2128,31 +2128,30 @@ useEffect(() => {
             }));
             setFlashMoves(prevMoves => {
                 const combined = [...newMoves, ...prevMoves];
-                return combined.filter((move, index, self) => 
-                    index === self.findIndex(m => 
-                        m.tokenId === move.tokenId && 
-                        new Date(m.timestamp).getTime() === new Date(move.timestamp).getTime()
-                    )
-                ).sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
-            });
-        } catch (e) {
-            console.error("Failed to hydrate Flash Moves", e);
-            toast.error('Failed to load Flash Move history');
-        } finally {
-            setIsLoadingFlashMoves(false);
-        }
-    };
-    
-    if (isConnected) {
-        hydrateFlashMoves();
-    }
-    
     s.on('STATS_UPDATE', (st: any) => {
+        console.log('📊 UI Sync: Stats Updated');
         setStats(st);
     });
     
     s.on('BOT_LOG', (log: any) => {
+        console.log('🤖 Bot Log:', log);
         setLogs((prev: any[]) => [log, ...prev].slice(0, 100));
+    });
+
+    s.on('WHALE_DETECTED', (whaleEvent: any) => {
+        console.log('🚨 [WHALE UI] Whale trade detected:', whaleEvent);
+        setLogs((prev: any[]) => [{
+            type: 'whale_trade',
+            message: `${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ $${whaleEvent.price}`,
+            timestamp: whaleEvent.timestamp,
+            data: whaleEvent
+        }, ...prev].slice(0, 100));
+        
+        // Show toast notification for whale trades
+        toast.info(`🐋 Whale Trade: ${whaleEvent.side} $${whaleEvent.size} @ $${whaleEvent.price}`, {
+            position: 'top-right',
+            autoClose: 3000
+        });
     });
     
     // Updates flashMoves which is passed as 'flashMoves' to FlashMoveDashboard component

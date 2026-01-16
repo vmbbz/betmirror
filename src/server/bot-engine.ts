@@ -151,7 +151,7 @@ export class BotEngine extends EventEmitter {
             intelligence: intelligence,
             env: {} as any,
             logger: this.logger,
-            userAddresses: config.targets || [],
+            userAddresses: config.userAddresses || [],  // Fixed: use userAddresses instead of targets
             onDetectedTrade: async (signal) => {
                 // Handle copy trading signals here
                 this.logger.info(`🔄 Copy Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
@@ -180,8 +180,8 @@ export class BotEngine extends EventEmitter {
         }
         
         // Initialize copy trading targets
-        if (config.targets) {
-            this.monitor.updateTargets(config.targets);
+        if (config.userAddresses) {
+            this.monitor.updateTargets(config.userAddresses);
         }
         
         this.logger.info('🚀 Bot Engine initialized with unified Flash Move architecture');

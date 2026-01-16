@@ -684,64 +684,82 @@ export class MarketMakingScanner extends EventEmitter {
     private async discoverFromSamplingMarkets(): Promise<boolean> {
         try {
             const sampling = await this.adapter.getSamplingMarkets?.();
-            if (!sampling || !Array.isArray(sampling) || sampling.length === 0) {
+            
+            // Validate response structure
+            if (!sampling?.data || !Array.isArray(sampling.data) || sampling.data.length === 0) {
                 this.logger.warn('No sampling markets available from adapter');
                 return false;
             }
- 
-            this.logger.info(`🎯 Processing ${sampling.length} sampling markets`);
+
+            this.logger.info(`🎯 Processing ${sampling.data.length} sampling markets`);
             const tokenIds: string[] = [];
- 
-            for (const market of sampling) {
+
+            for (const market of sampling.data) {
                 if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
- 
-                // Per docs: Market object has condition_id, tokens[], rewards{max_spread, min_size}
-                const tokens = market.tokens || [];
+
+                // Skip invalid/inactive markets early
+                if (!market.condition_id || 
+                    !market.tokens || 
+                    market.tokens.length < 2 ||
+                    market.closed ||
+                    market.archived ||
+                    !market.active ||
+                    !market.accepting_orders) {
+                    continue;
+                }
+
                 const conditionId = market.condition_id;
- 
-                if (!conditionId || tokens.length !== 2) continue;
- 
+                const tokens = market.tokens;
+
                 for (let i = 0; i < tokens.length; i++) {
                     const token = tokens[i];
                     const tokenId = token.token_id;
- 
+
+                    // Skip if no token_id or already tracked
                     if (!tokenId || this.trackedMarkets.has(tokenId)) continue;
- 
-                    const price = token.price || 0.5;
+
+                    // Per docs: token has outcome, price, token_id, winner
+                    const price = typeof token.price === 'number' ? token.price : 0.5;
                     const isYesToken = token.outcome?.toLowerCase() === 'yes' || i === 0;
- 
+                    const pairedToken = tokens[i === 0 ? 1 : 0];
+
                     this.trackedMarkets.set(tokenId, {
                         conditionId,
                         tokenId,
                         question: market.question || market.description || 'Unknown',
-                        image: market.image || market.icon,
-                        marketSlug: market.market_slug,
+                        image: market.image || market.icon || '',
+                        marketSlug: market.market_slug || '',
                         bestBid: Math.max(0.01, price - 0.01),
                         bestAsk: Math.min(0.99, price + 0.01),
                         spread: 0.02,
-                        volume: market.volume || 0,
-                        liquidity: market.liquidity || 0,
+                        volume: 0, // Not in Market interface - fetch separately if needed
+                        liquidity: 0, // Not in Market interface - fetch separately if needed
                         isNewMarket: false,
                         discoveredAt: Date.now(),
+                        // Per docs: rewards { max_spread, min_size, rates }
                         rewardsMaxSpread: market.rewards?.max_spread,
                         rewardsMinSize: market.rewards?.min_size,
                         isYesToken,
-                        pairedTokenId: tokens[i === 0 ? 1 : 0]?.token_id,
-                        status: market.closed ? 'closed' : 'active',
-                        acceptingOrders: market.accepting_orders !== false,
+                        pairedTokenId: pairedToken?.token_id,
+                        status: market.closed ? 'closed' : (market.active ? 'active' : 'paused'),
+                        acceptingOrders: market.accepting_orders === true,
+                        // Per docs: minimum_order_size, minimum_tick_size
                         orderMinSize: market.minimum_order_size,
                         orderPriceMinTickSize: market.minimum_tick_size,
-                        category: market.tags?.[0],
-                        featured: market.featured
+                        category: market.tags?.[0] || '',
+                        featured: true, // Not in Market interface
                     });
- 
+
                     tokenIds.push(tokenId);
-                    // Use centralized subscription method
-                    this.subscribeToTokens([tokenId]);
                 }
             }
- 
-            this.logger.success(`✅ Loaded ${tokenIds.length} tokens from sampling markets`);
+
+            // Batch subscribe to all tokens at once (more efficient)
+            if (tokenIds.length > 0) {
+                this.subscribeToTokens(tokenIds);
+            }
+
+            this.logger.success(`✅ Loaded ${tokenIds.length} tokens from ${sampling.data.length} sampling markets`);
             return tokenIds.length > 0;
         } catch (error) {
             this.logger.warn(`Sampling markets failed: ${error}`);
@@ -762,12 +780,12 @@ export class MarketMakingScanner extends EventEmitter {
             'entertainment', 'science', 'world', 'earnings'
         ];
 
-        const categoryEndpoint = (tagId: number, limit = 100) =>
+        const categoryEndpoint = (tagId: number, limit = 1000) =>
             `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&related_tags=true&limit=${limit}&order=volume&ascending=false`;
 
         const endpoints = [
-            'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100&order=volume&ascending=false',
-            'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&order=id&ascending=false',
+            'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=500&order=volume&ascending=false',
+            'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=500&order=id&ascending=false',
             ...priorityCategories
                 .filter(cat => tagIds[cat])
                 .map(cat => categoryEndpoint(tagIds[cat]))

@@ -56,6 +56,11 @@ export class MarketIntelligenceService extends EventEmitter {
     public updateWatchlist(addresses: string[]): void {
         addresses.forEach(addr => this.globalWatchlist.add(addr.toLowerCase()));
         this.logger.debug(`[Intelligence] Global hub watchlist updated: ${this.globalWatchlist.size} whales total.`);
+        
+        // Also update WebSocketManager's whale watchlist
+        if (this.wsManager) {
+            (this.wsManager as any).updateWhaleWatchlist(addresses);
+        }
     }
 
     /**

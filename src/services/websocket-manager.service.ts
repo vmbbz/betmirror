@@ -36,6 +36,15 @@ export interface TradeEvent {
     timestamp: number;
 }
 
+export interface WhaleTradeEvent {
+    trader: string;
+    tokenId: string;
+    side: 'BUY' | 'SELL';
+    price: number;
+    size: number;
+    timestamp: number;
+}
+
 /**
  * Centralized WebSocket Manager for Polymarket CLOB
  * 
@@ -66,6 +75,9 @@ export class WebSocketManager extends EventEmitter {
     private connectionAttempts = 0;
     private readonly maxConnectionAttempts = 5;
     private readonly baseReconnectDelay = 1000;
+    
+    // Whale detection
+    private whaleWatchlist: Set<string> = new Set();
 
     constructor(
         private logger: Logger,
@@ -349,6 +361,9 @@ export class WebSocketManager extends EventEmitter {
                     timestamp: Date.now()
                 };
                 this.emit('trade', tradeEvent);
+                
+                // Check if this is a whale trade and emit whale_trade event
+                this.checkAndEmitWhaleTrade(tradeEvent);
                 break;
 
             case 'best_bid_ask':
@@ -688,5 +703,39 @@ export class WebSocketManager extends EventEmitter {
                 });
             }
         }, delay);
+    }
+
+    /**
+     * Update whale watchlist
+     */
+    public updateWhaleWatchlist(addresses: string[]): void {
+        this.whaleWatchlist = new Set(addresses.map(addr => addr.toLowerCase()));
+        this.logger.debug(`[WebSocketManager] Whale watchlist updated: ${this.whaleWatchlist.size} whales`);
+    }
+
+    /**
+     * Check if trade involves whale and emit whale_trade event
+     */
+    private checkAndEmitWhaleTrade(tradeEvent: TradeEvent): void {
+        const maker = tradeEvent.maker_address?.toLowerCase();
+        const taker = tradeEvent.taker_address?.toLowerCase();
+        
+        // Check if either maker or taker is a whale
+        if (this.whaleWatchlist.has(maker) || this.whaleWatchlist.has(taker)) {
+            const whaleTrader = this.whaleWatchlist.has(maker) ? maker : taker;
+            const side = tradeEvent.side as 'BUY' | 'SELL';
+            
+            const whaleEvent: WhaleTradeEvent = {
+                trader: whaleTrader,
+                tokenId: tradeEvent.asset_id,
+                side: side,
+                price: tradeEvent.price,
+                size: tradeEvent.size,
+                timestamp: tradeEvent.timestamp
+            };
+            
+            this.emit('whale_trade', whaleEvent);
+            this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${side} ${tradeEvent.size} @ ${tradeEvent.price}`);
+        }
     }
 }

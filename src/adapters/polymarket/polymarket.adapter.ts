@@ -419,7 +419,10 @@ export class PolymarketAdapter implements IExchangeAdapter {
     const client = this.getPublicClient();
     
     try {
+        this.logger.info(`[DEBUG] Attempting getSamplingMarkets with public client...`);
         const response = await client.getSamplingMarkets();
+        this.logger.info(`[DEBUG] getSamplingMarkets response: ${JSON.stringify(response?.data?.length || 0)} markets`);
+        
         const markets = response?.data || [];
         
         const transformedMarkets: Market[] = markets.map((market: any) => ({
@@ -444,9 +447,11 @@ export class PolymarketAdapter implements IExchangeAdapter {
             tokens: market.tokens || []
         }));
         
+        this.logger.info(`[DEBUG] Transformed ${transformedMarkets.length} markets successfully`);
         return { limit: response?.limit || transformedMarkets.length, count: response?.count || transformedMarkets.length, data: transformedMarkets };
     } catch (e: any) {
-        this.logger.warn(`getSamplingMarkets failed: ${e}`);
+        this.logger.warn(`getSamplingMarkets failed: ${e.message}`);
+        this.logger.warn(`[DEBUG] Error details: ${JSON.stringify(e?.response?.data || e)}`);
         return { limit: 0, count: 0, data: [] };
     }
 }

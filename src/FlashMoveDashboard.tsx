@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { io, Socket } from 'socket.io-client';
 import { 
     Activity, 
     Sword, 
@@ -160,39 +162,121 @@ export const FlashMoveDashboard = () => {
     const [selectedStrategy, setSelectedStrategy] = useState<'default' | 'conservative' | 'aggressive'>('default');
 
     useEffect(() => {
-        // Simulate real-time updates
-        const interval = setInterval(() => {
-            // This would connect to the actual WebSocket events
-            // For demo, we'll simulate some data
-            const mockMove: FlashMoveData = {
-                tokenId: '0x1234567890abcdef',
-                conditionId: '0xabcdef1234567890',
-                oldPrice: 0.45,
-                newPrice: 0.52,
-                velocity: 0.156,
-                confidence: 0.85,
-                timestamp: Date.now(),
-                question: 'Will Bitcoin reach $100k by end of year?',
-                image: '',
-                marketSlug: 'btc-price-prediction',
-                riskScore: 42,
-                strategy: 'momentum'
+        const fetchFlashMoves = async () => {
+            try {
+                // Get current user ID from localStorage or auth context
+                const userId = localStorage.getItem('userAddress') || '0x0000000000000000000000000000000000000000';
+                
+                const response = await axios.get(`/api/flash-moves?userId=${userId}`);
+                const { moves, activePositions, status } = response.data;
+                
+                // Transform database moves to FlashMoveData format
+                const transformedMoves: FlashMoveData[] = moves.map((move: any) => ({
+                    tokenId: move.tokenId,
+                    conditionId: move.conditionId,
+                    oldPrice: move.oldPrice,
+                    newPrice: move.newPrice,
+                    velocity: move.velocity,
+                    confidence: move.confidence,
+                    timestamp: new Date(move.timestamp).getTime(),
+                    question: move.question,
+                    image: move.image,
+                    marketSlug: move.marketSlug,
+                    riskScore: move.riskScore || 0,
+                    strategy: move.strategy || 'momentum'
+                }));
+                
+                setFlashMoves(transformedMoves);
+                
+                // Set real service status
+                if (status) {
+                    setServiceStatus({
+                        isEnabled: status.isEnabled,
+                        activePositions: status.activePositions,
+                        totalExecuted: status.totalExecuted,
+                        successRate: status.successRate,
+                        lastDetection: status.lastDetection ? new Date(status.lastDetection) : null,
+                        portfolioRisk: status.portfolioRisk || { totalExposure: 0 }
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to fetch flash moves:', error);
+                // Fallback to empty state on error
+                setFlashMoves([]);
+                setServiceStatus({
+                    isEnabled: false,
+                    activePositions: 0,
+                    totalExecuted: 0,
+                    successRate: 0,
+                    lastDetection: null,
+                    portfolioRisk: { totalExposure: 0 }
+                });
+            }
+        };
+        
+        // Socket.io connection for real-time updates
+        const socket = io();
+        
+        socket.on('connect', () => {
+            console.log('Flash Moves Socket.io connected');
+            
+            // Subscribe to flash move events
+            const userId = localStorage.getItem('userAddress') || '0x0000000000000000000000000000000000000000';
+            socket.emit('subscribe_flash_moves', userId);
+        });
+        
+        socket.on('flash_move_detected', (data: any) => {
+            console.log('Flash move detected:', data);
+            
+            const newMove: FlashMoveData = {
+                tokenId: data.tokenId,
+                conditionId: data.conditionId,
+                oldPrice: data.oldPrice,
+                newPrice: data.newPrice,
+                velocity: data.velocity,
+                confidence: data.confidence,
+                timestamp: data.timestamp,
+                question: data.question,
+                image: data.image,
+                marketSlug: data.marketSlug,
+                riskScore: data.riskScore || 0,
+                strategy: data.strategy || 'momentum'
             };
             
-            setFlashMoves(prev => [mockMove, ...prev.slice(0, 9)]);
+            // Add new move to the top of the list
+            setFlashMoves(prev => [newMove, ...prev.slice(0, 19)]);
             
-            // Mock service status
-            setServiceStatus({
-                isEnabled: true,
-                activePositions: 3,
-                totalExecuted: 127,
-                successRate: 0.73,
-                lastDetection: new Date(),
-                portfolioRisk: { totalExposure: 2500 }
-            });
-        }, 2000);
-
-        return () => clearInterval(interval);
+            // Update service status if provided
+            if (data.serviceStatus) {
+                setServiceStatus({
+                    isEnabled: data.serviceStatus.isEnabled,
+                    activePositions: data.serviceStatus.activePositions,
+                    totalExecuted: data.serviceStatus.totalExecuted,
+                    successRate: data.serviceStatus.successRate,
+                    lastDetection: data.serviceStatus.lastDetection ? new Date(data.serviceStatus.lastDetection) : null,
+                    portfolioRisk: data.serviceStatus.portfolioRisk || { totalExposure: 0 }
+                });
+            }
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('Flash Moves Socket.io disconnected');
+        });
+        
+        socket.on('connect_error', (error) => {
+            console.error('Flash Moves Socket.io connection error:', error);
+        });
+        
+        // Initial fetch
+        fetchFlashMoves();
+        
+        // Set up periodic refresh as fallback
+        const interval = setInterval(fetchFlashMoves, 10000);
+        
+        return () => {
+            clearInterval(interval);
+            socket.disconnect();
+        };
     }, []);
 
     return (

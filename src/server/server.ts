@@ -183,6 +183,28 @@ io.on('connection', (socket: Socket) => {
         socket.join(normId);
         serverLogger.info(`Socket ${socket.id} joined room: ${normId}`);
     });
+    
+    // Flash Moves WebSocket subscriptions
+    socket.on('subscribe_flash_moves', (userId: string) => {
+        const normId = userId.toLowerCase();
+        socket.join(`flash_moves_${normId}`);
+        serverLogger.info(`Socket ${socket.id} subscribed to flash moves for: ${normId}`);
+        
+        // Forward flash move events to this socket
+        const engine = ACTIVE_BOTS.get(normId);
+        if (engine) {
+            const flashMoveService = engine.getFlashMoveService();
+            if (flashMoveService) {
+                // Listen for flash move events and forward to client
+                flashMoveService.on('flash_move_detected', (event: any) => {
+                    socket.emit('flash_move_detected', {
+                        ...event,
+                        serviceStatus: flashMoveService.getStatus()
+                    });
+                });
+            }
+        }
+    });
 });
 
 // 0. Health Check

@@ -39,7 +39,7 @@ export class MarketIntelligenceService extends EventEmitter {
     // Performance Parameters
     private readonly JANITOR_INTERVAL_MS = 60 * 1000; // Aggressive: Check every minute
 
-    constructor(public logger: Logger, private wsManager?: WebSocketManager, private flashMoveService?: FlashMoveService) {
+    constructor(public logger: Logger, public wsManager?: WebSocketManager, private flashMoveService?: FlashMoveService) {
         super();
         this.setMaxListeners(100); 
         this.startJanitor();
@@ -121,20 +121,20 @@ export class MarketIntelligenceService extends EventEmitter {
     private connect() {
         this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
         
-        // Use centralized WebSocket manager instead of direct connection
+        // Use centralized WebSocket manager
         if (this.wsManager) {
             this.logger.success('✅ [GLOBAL HUB] Using centralized WebSocket manager');
             this.isRunning = true;
-            return;
-        }
-        
-        // Fallback to direct connection if no manager available
-        try {
-            // Note: Centralized manager handles WebSocket connections
-            this.logger.warn('⚠️ [GLOBAL HUB] No WebSocket manager provided - skipping direct connection');
-            return;
-        } catch (error) {
-            this.logger.error(`❌ [GLOBAL HUB] Failed to initialize: ${error}`);
+            // DON'T RETURN EARLY - let the service actually connect and use the WebSocket manager!
+        } else {
+            // Fallback to direct connection if no manager available
+            try {
+                // Note: Centralized manager handles WebSocket connections
+                this.logger.warn('⚠️ [GLOBAL HUB] No WebSocket manager provided - skipping direct connection');
+                return;
+            } catch (error) {
+                this.logger.error(`❌ [GLOBAL HUB] Failed to initialize: ${error}`);
+            }
         }
     }
 

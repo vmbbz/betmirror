@@ -184,17 +184,10 @@ export class BotEngine extends EventEmitter {
             this.monitor.updateTargets(config.userAddresses);
         }
         
-        // Start all services immediately
-        this.startServices();
-        
         this.logger.info('🚀 Bot Engine initialized with unified Flash Move architecture');
-    }
-
-    private async startServices(): Promise<void> {
-        await this.intelligence.start();
-        await this.monitor.start();
-        this.flashMoveService.setEnabled(true);
-        await this.arbScanner.start();
+        
+        // CRITICAL: Update global intelligence service with this bot's WebSocket manager
+        this.intelligence.wsManager = this.wsManager;
     }
 
     public async start(): Promise<void> {
@@ -484,10 +477,10 @@ export class BotEngine extends EventEmitter {
         }
 
         public getTradeMonitor(): TradeMonitorService {
-            return this.monitor;
-        }
+        return this.monitor;
+    }
 
-        public getArbOpportunities(): any[] {
+    public getArbOpportunities(): any[] {
             return this.arbScanner?.getOpportunities() || [];
         }
 

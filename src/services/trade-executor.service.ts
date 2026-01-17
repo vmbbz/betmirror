@@ -173,9 +173,26 @@ export class TradeExecutorService {
     this.deps = deps;
     if (mmConfig) this.mmConfig = { ...this.mmConfig, ...mmConfig };
     
+    // Initialize inventory sync
+    this.initializeInventory().catch(e => this.deps.logger.error("Inventory Sync Failed", e));
+  }
+
+  /**
+   * Start the executor and connect to WebSocket fills
+   * This should be called after the WebSocket manager is started
+   */
+  public async start(): Promise<void> {
     // Start fill monitor using centralized WebSocket manager
     this.connectUserChannel();
-    this.initializeInventory().catch(e => this.deps.logger.error("Inventory Sync Failed", e));
+    this.deps.logger.success('✅ Trade Executor started');
+  }
+
+  /**
+   * Stop the executor and clean up WebSocket connections
+   */
+  public async stop(): Promise<void> {
+    this.isWsRunning = false;
+    this.deps.logger.info('🛑 Trade Executor stopped');
   }
 
   private async initializeInventory() {

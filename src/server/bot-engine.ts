@@ -85,7 +85,7 @@ export class BotEngine extends EventEmitter {
     
     // Flash Move Integration
     private flashMoveService: FlashMoveService;
-    private wsManager: WebSocketManager;
+    private privateWsManager: WebSocketManager; // Private WS for fills only
     private marketMetadataService: MarketMetadataService;
     private logger: Logger;
 
@@ -98,10 +98,13 @@ export class BotEngine extends EventEmitter {
         this.logger = intelligence.logger; // Use the intelligence service's logger
         
         // Initialize services with unified architecture
-        this.exchange = new PolymarketAdapter(config, this.logger);
+        this.exchange = new PolymarketAdapter({
+            ...config,
+            rpcUrl: config.rpcUrl || 'https://polygon-rpc.com'
+        }, this.logger);
         
-        // Initialize WebSocket Manager
-        this.wsManager = new WebSocketManager(this.logger, this.exchange);
+        // PRIVATE WebSocket for this user (Fills only)
+        this.privateWsManager = new WebSocketManager(this.logger, this.exchange);
         
         // Initialize Market Metadata Service
         this.marketMetadataService = new MarketMetadataService(
@@ -109,20 +112,20 @@ export class BotEngine extends EventEmitter {
             this.logger
         );
         
-        // Initialize Trade Executor first
+        // Initialize Trade Executor with Private WS for real-time fill accounting
         this.executor = new TradeExecutorService({
             adapter: this.exchange,
             env: {} as any,
             logger: this.logger,
-            proxyWallet: '',
-            wsManager: this.wsManager
+            proxyWallet: config.walletConfig?.address || '',
+            wsManager: this.privateWsManager
         });
         
-        // Initialize Flash Move Service with executor
+        // Initialize Flash Move Service with GLOBAL intelligence WebSocket
         this.flashMoveService = new FlashMoveService(
-            this.wsManager,
+            this.intelligence.wsManager!, // GLOBAL Price Feed
             DEFAULT_FLASH_MOVE_CONFIG,
-            this.executor, // Pass trade executor as dependency
+            this.executor,
             this.logger
         );
         
@@ -133,44 +136,52 @@ export class BotEngine extends EventEmitter {
             { checkInterval: 30000, priceCheckInterval: 10000 },
             this.logger,
             async (position, reason) => {
-                this.logger.info(`Auto cashout triggered: ${position.marketId} - ${reason}`);
+                this.logger.info(`[Bot] Auto-cashout triggered: ${position.marketId} - ${reason}`);
             }
         );
+        
         this.portfolioTracker = new PortfolioTrackerService(
             this.exchange,
             config.userId || '',
             10000,
             this.logger,
             this.positionMonitor,
-            this.marketMetadataService
+            this.marketMetadataService,
+            async (positions) => {
+                this.activePositions = positions;
+                if (this.callbacks.onPositionsUpdate) await this.callbacks.onPositionsUpdate(positions);
+            }
         );
         
         // Initialize TradeMonitorService with proper dependencies
         this.monitor = new TradeMonitorService({
             adapter: this.exchange,
-            intelligence: intelligence,
+            intelligence: this.intelligence, // Use GLOBAL intelligence
             env: {} as any,
             logger: this.logger,
-            userAddresses: config.userAddresses || [],  // Fixed: use userAddresses instead of targets
+            userAddresses: config.userAddresses || [],
             onDetectedTrade: async (signal) => {
-                // Handle copy trading signals here
-                this.logger.info(`🔄 Copy Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
-                // Execute trade through executor
-                try {
-                    await this.executor.copyTrade(signal);
-                } catch (error) {
-                    this.logger.error(`❌ Copy trade failed: ${error}`);
+                if (this.isRunning && this.config.enableCopyTrading) {
+                    this.logger.info(`🔄 Copy Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
+                    try {
+                        const res = await this.executor.copyTrade(signal);
+                        if (res.status === 'FILLED' && this.callbacks.onTradeComplete) {
+                            await this.callbacks.onTradeComplete({ ...signal, id: res.txHash, status: 'OPEN' });
+                        }
+                    } catch (error) {
+                        this.logger.error(`❌ Copy trade failed: ${error}`);
+                    }
                 }
             }
         });
         
-        // Initialize ArbitrageScanner with FlashMoveService integration
+        // Initialize ArbitrageScanner with GLOBAL intelligence WebSocket
         this.arbScanner = new MarketMakingScanner(
-            intelligence,
+            this.intelligence, // Use GLOBAL intelligence
             this.exchange,
             this.logger,
             this.executor,
-            this.wsManager,
+            this.intelligence.wsManager!, // GLOBAL Orderbook Feed
             this.flashMoveService
         );
         
@@ -187,7 +198,6 @@ export class BotEngine extends EventEmitter {
         this.logger.info('🚀 Bot Engine initialized with unified Flash Move architecture');
         
         // CRITICAL: Update global intelligence service with this bot's WebSocket manager
-        this.intelligence.wsManager = this.wsManager;
     }
 
     public async start(): Promise<void> {
@@ -199,21 +209,32 @@ export class BotEngine extends EventEmitter {
         this.isRunning = true;
         
         try {
-            // Start core services
-            await this.intelligence.start();
-            await this.monitor.start();
+            this.addLog('info', 'Authenticating vault and initializing services...');
             
-            // Start unified flash move service
-            this.flashMoveService.setEnabled(true);
+            await this.exchange.initialize();
+            await this.exchange.authenticate();
             
-            // Start arbitrage scanner
-            await this.arbScanner.start();
+            // Start private fill monitor
+            await this.privateWsManager.start();
             
-            this.intelligence.logger.success('✅ Bot engine started successfully');
+            // Start trade executor after WebSocket is ready
+            await this.executor.start();
+            
+            // Sync initial state
+            await this.portfolioTracker.syncPositions(true);
+            
+            // Start strategy modules based on config
+            if (this.config.enableCopyTrading) await this.monitor.start();
+            if (this.config.enableMoneyMarkets) await this.arbScanner.start();
+            if (this.config.enableFomoRunner) this.flashMoveService.setEnabled(true);
+
+            this.logger.success(`✅ Bot online for user ${this.config.userId}`);
+            this.addLog('success', 'Execution engine online. Monitoring signals...');
             this.emit('started');
             
         } catch (error) {
-            this.intelligence.logger.error(`❌ Failed to start bot engine: ${error}`);
+            this.logger.error(`❌ Failed to start bot engine: ${error}`);
+            this.addLog('error', `Startup failed: ${error}`);
             this.isRunning = false;
             throw error;
         }
@@ -221,35 +242,25 @@ export class BotEngine extends EventEmitter {
 
     public async stop(): Promise<void> {
         if (!this.isRunning) {
-            this.intelligence.logger.warn('⚠️ Bot engine already stopped');
+            this.logger.warn('⚠️ Bot engine already stopped');
             return;
         }
 
         this.isRunning = false;
         
         try {
-            // Stop flash move service
+            // Stop strategy modules
+            await this.monitor.stop();
+            await this.arbScanner.stop();
+            await this.executor.stop();
+            await this.privateWsManager.stop();
             this.flashMoveService.setEnabled(false);
             
-            // Close all active positions
-            await this.closeAllPositions();
-            
-            // Stop all services
-            await this.arbScanner.stop();
-            await this.monitor.stop();
-            await this.intelligence.stop();
-            
-            // Clear heartbeat
-            if (this.heartbeatInterval) {
-                clearInterval(this.heartbeatInterval);
-                this.heartbeatInterval = null;
-            }
-            
-            this.intelligence.logger.success('✅ Bot engine stopped successfully');
+            this.logger.warn(`🛑 Bot stopped for ${this.config.userId}`);
             this.emit('stopped');
             
         } catch (error) {
-            this.intelligence.logger.error(`❌ Failed to stop bot engine: ${error}`);
+            this.logger.error(`❌ Failed to stop bot engine: ${error}`);
             throw error;
         }
     }
@@ -275,12 +286,12 @@ export class BotEngine extends EventEmitter {
 
     private async syncStats(): Promise<void> {
         try {
-            const address = this.exchange.getFunderAddress ? this.exchange.getFunderAddress() : this.config.userId || '';
-            const cashBalance = await this.exchange.fetchBalance(address);
-            let positionValue = 0;
-            this.activePositions.forEach(p => {
-                positionValue += (p.shares * (p.currentPrice || p.entryPrice));
-            });
+            const cash = await this.exchange.fetchBalance(this.exchange.getFunderAddress());
+            const posValue = this.activePositions.reduce((s, p) => s + (p.valueUsd || 0), 0);
+            
+            this.stats.portfolioValue = cash + posValue;
+            this.stats.cashBalance = cash;
+            
             if (this.callbacks?.onStatsUpdate) {
                 await this.callbacks.onStatsUpdate({
                     totalPnl: this.stats.totalPnl,
@@ -291,12 +302,12 @@ export class BotEngine extends EventEmitter {
                     winCount: this.stats.winCount,
                     lossCount: this.stats.lossCount,
                     allowanceApproved: true,
-                    portfolioValue: cashBalance + positionValue,
-                    cashBalance: cashBalance
+                    portfolioValue: this.stats.portfolioValue,
+                    cashBalance: this.stats.cashBalance
                 });
             }
         } catch (error) {
-            this.intelligence.logger.error(`❌ Failed to sync stats: ${error}`);
+            this.logger.error(`❌ Failed to sync stats: ${error}`);
         }
     }
 
@@ -304,7 +315,7 @@ export class BotEngine extends EventEmitter {
         if (this.callbacks?.onLog) {
             this.callbacks.onLog({
                 id: crypto.randomUUID(),
-                timestamp: new Date().toISOString(),
+                time: new Date().toLocaleTimeString(),
                 type,
                 message
             });

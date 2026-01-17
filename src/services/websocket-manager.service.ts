@@ -1,5 +1,6 @@
+
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
+import { WebSocket } from 'ws';
 import { Logger } from '../utils/logger.util.js';
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { WS_URLS } from '../config/env.js';
@@ -72,8 +73,6 @@ export class WebSocketManager extends EventEmitter {
     private marketSubscriptions = new Set<string>();
     private userSubscriptions = new Map<string, Set<(data: any) => void>>();
     
-    private connectionAttempts = 0;
-    private readonly maxConnectionAttempts = 5;
     private readonly baseReconnectDelay = 1000;
     
     // Whale detection
@@ -81,7 +80,7 @@ export class WebSocketManager extends EventEmitter {
 
     constructor(
         private logger: Logger,
-        private adapter: IExchangeAdapter
+        private adapter: IExchangeAdapter | null = null
     ) {
         super();
         this.setMaxListeners(100);
@@ -118,17 +117,11 @@ export class WebSocketManager extends EventEmitter {
         this.logger.info('🛑 Stopping WebSocketManager...');
         this.isRunning = false;
 
-        if (this.marketPingInterval) {
-            clearInterval(this.marketPingInterval);
-            this.marketPingInterval = undefined;
-        }
-
-        if (this.userPingInterval) {
-            clearInterval(this.userPingInterval);
-            this.userPingInterval = undefined;
-        }
+        this.stopMarketPing();
+        this.stopUserPing();
 
         if (this.marketWs) {
+            // FIX: removeAllListeners is available on Node.js WebSocket implementation from 'ws'
             this.marketWs.removeAllListeners();
             if (this.marketWs.readyState === WebSocket.OPEN) {
                 this.marketWs.close();
@@ -137,6 +130,7 @@ export class WebSocketManager extends EventEmitter {
         }
 
         if (this.userWs) {
+            // FIX: removeAllListeners is available on Node.js WebSocket implementation from 'ws'
             this.userWs.removeAllListeners();
             if (this.userWs.readyState === WebSocket.OPEN) {
                 this.userWs.close();
@@ -224,6 +218,7 @@ export class WebSocketManager extends EventEmitter {
 
             this.marketWs = new WebSocket(wsUrl);
 
+            // FIX: Use .on instead of browser property handlers for Node.js WebSocket
             this.marketWs.on('open', () => {
                 this.isMarketConnected = true;
                 this.marketReconnectAttempts = 0;
@@ -240,7 +235,8 @@ export class WebSocketManager extends EventEmitter {
                 resolve();
             });
 
-            this.marketWs.on('message', (data: WebSocket.Data) => {
+            // FIX: Use any for data to avoid Namespace 'ws' has no exported member 'Data'
+            this.marketWs.on('message', (data: any) => {
                 try {
                     const message = data.toString();
                     if (message === 'PONG' || message === 'pong') return;
@@ -263,7 +259,7 @@ export class WebSocketManager extends EventEmitter {
             });
 
             this.marketWs.on('error', (error: Error) => {
-                this.logger.error(`❌ Market Channel error: ${error.message}`, error);
+                this.logger.error(`❌ Market Channel error: ${error.message}`);
                 reject(error);
             });
         });
@@ -273,15 +269,18 @@ export class WebSocketManager extends EventEmitter {
      * Connect to the user channel (authenticated)
      */
     private async connectUserChannel(): Promise<void> {
+        if (!this.adapter) return;
+
         return new Promise((resolve, reject) => {
             const wsUrl = `${WS_URLS.CLOB}/ws/user`;
             this.logger.info(`🔌 Connecting to User Channel: ${wsUrl}`);
 
-            // Get auth headers from adapter (same pattern as TradeExecutorService)
+            // Get auth headers from adapter
             const headers = (this.adapter as any).getAuthHeaders?.() || {};
             
             this.userWs = new WebSocket(wsUrl, { headers });
 
+            // FIX: Use .on for Node.js WebSocket
             this.userWs.on('open', () => {
                 this.isUserConnected = true;
                 this.userReconnectAttempts = 0;
@@ -290,7 +289,8 @@ export class WebSocketManager extends EventEmitter {
                 resolve();
             });
 
-            this.userWs.on('message', (data: WebSocket.Data) => {
+            // FIX: Use any for data
+            this.userWs.on('message', (data: any) => {
                 try {
                     const message = data.toString();
                     if (message === 'PONG' || message === 'pong') return;
@@ -313,7 +313,7 @@ export class WebSocketManager extends EventEmitter {
             });
 
             this.userWs.on('error', (error: Error) => {
-                this.logger.error(`❌ User Channel error: ${error.message}`, error);
+                this.logger.error(`❌ User Channel error: ${error.message}`);
                 reject(error);
             });
         });
@@ -324,6 +324,9 @@ export class WebSocketManager extends EventEmitter {
      */
     private handleMarketMessage(msg: any): void {
         if (!msg) return;
+
+        // Propagate all market events to the bus
+        this.emit('market_message', msg);
 
         // Handle initial orderbook dump
         if (msg.type === 'initial_dump' && Array.isArray(msg.data)) {
@@ -361,8 +364,6 @@ export class WebSocketManager extends EventEmitter {
                     timestamp: Date.now()
                 };
                 this.emit('trade', tradeEvent);
-                
-                // Check if this is a whale trade and emit whale_trade event
                 this.checkAndEmitWhaleTrade(tradeEvent);
                 break;
 
@@ -408,7 +409,6 @@ export class WebSocketManager extends EventEmitter {
 
         const bestBid = parseFloat(msg.best_bid || '0');
         const bestAsk = parseFloat(msg.best_ask || '1');
-        const spread = msg.spread !== undefined ? parseFloat(msg.spread) : (bestAsk - bestBid);
 
         if (bestBid > 0 && bestAsk > 0 && bestAsk > bestBid) {
             const priceEvent: PriceEvent = {
@@ -605,7 +605,7 @@ export class WebSocketManager extends EventEmitter {
         });
         
         if (this.marketSubscriptions.size > 0) {
-            this.logger.info(`🔁 Resubscribed to ${this.marketSubscriptions.size} tokens`);
+            this.logger.info(`膨 Resubscribed to ${this.marketSubscriptions.size} tokens`);
         }
     }
 
@@ -613,6 +613,7 @@ export class WebSocketManager extends EventEmitter {
      * Start ping interval for market connection
      */
     private startMarketPing(): void {
+        this.stopMarketPing();
         this.marketPingInterval = setInterval(() => {
             if (this.marketWs?.readyState === WebSocket.OPEN) {
                 this.marketWs.send('PING');
@@ -624,6 +625,7 @@ export class WebSocketManager extends EventEmitter {
      * Start ping interval for user connection
      */
     private startUserPing(): void {
+        this.stopUserPing();
         this.userPingInterval = setInterval(() => {
             if (this.userWs?.readyState === WebSocket.OPEN) {
                 this.userWs.send('PING');
@@ -666,7 +668,7 @@ export class WebSocketManager extends EventEmitter {
             this.maxReconnectDelay
         );
 
-        this.logger.info(`Attempting to reconnect market channel in ${delay}ms (attempt ${this.marketReconnectAttempts}/${this.maxReconnectAttempts})`);
+        this.logger.info(`Attempting to reconnect market channel in ${delay}ms`);
         
         setTimeout(() => {
             if (this.isRunning) {
@@ -693,14 +695,11 @@ export class WebSocketManager extends EventEmitter {
             this.maxReconnectDelay
         );
 
-        this.logger.info(`Attempting to reconnect user channel in ${delay}ms (attempt ${this.userReconnectAttempts}/${this.maxReconnectAttempts})`);
+        this.logger.info(`Attempting to reconnect user channel in ${delay}ms`);
         
         setTimeout(() => {
             if (this.isRunning) {
-                this.connectUserChannel().catch((error) => {
-                    const err = error instanceof Error ? error : new Error(String(error));
-                    this.logger.error(`User reconnection failed: ${err.message}`, err);
-                });
+                this.connectUserChannel().catch(() => {});
             }
         }, delay);
     }
@@ -720,22 +719,20 @@ export class WebSocketManager extends EventEmitter {
         const maker = tradeEvent.maker_address?.toLowerCase();
         const taker = tradeEvent.taker_address?.toLowerCase();
         
-        // Check if either maker or taker is a whale
         if (this.whaleWatchlist.has(maker) || this.whaleWatchlist.has(taker)) {
             const whaleTrader = this.whaleWatchlist.has(maker) ? maker : taker;
-            const side = tradeEvent.side as 'BUY' | 'SELL';
             
             const whaleEvent: WhaleTradeEvent = {
                 trader: whaleTrader,
                 tokenId: tradeEvent.asset_id,
-                side: side,
+                side: tradeEvent.side,
                 price: tradeEvent.price,
                 size: tradeEvent.size,
                 timestamp: tradeEvent.timestamp
             };
             
             this.emit('whale_trade', whaleEvent);
-            this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${side} ${tradeEvent.size} @ ${tradeEvent.price}`);
+            this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${tradeEvent.side} ${tradeEvent.size} @ ${tradeEvent.price}`);
         }
     }
 }

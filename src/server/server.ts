@@ -56,10 +56,10 @@ const ENV = loadEnv();
 const dbRegistryService = new DbRegistryService();
 const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
 
-// Create WebSocket manager for global intelligence (requires adapter parameter)
-const wsManager = new WebSocketManager(serverLogger, null as any);
+// Create WebSocket manager for global intelligence (market-only connection)
+const wsManager = new WebSocketManager(serverLogger, null);
 
-// Create global intelligence service WITH WebSocket manager (flashMoveService will be initialized by BotEngine)
+// Create global intelligence service WITH WebSocket manager
 const globalIntelligence = new MarketIntelligenceService(serverLogger, wsManager);
 
 // In-Memory Bot Instances (Runtime State)
@@ -84,9 +84,29 @@ setInterval(async () => {
         engine.performTick().catch(() => {});
     }
 
-    // Broadcast global heat
+    // Broadcast global heat and whale signals
     const moves = await globalIntelligence.getLatestMoves();
     if (moves.length > 0) io.emit('FOMO_VELOCITY_UPDATE', moves);
+    
+    // Broadcast whale trades from global intelligence
+    globalIntelligence.on('whale_trade', (whaleEvent) => {
+        io.emit('WHALE_DETECTED', {
+            trader: whaleEvent.trader,
+            tokenId: whaleEvent.tokenId,
+            side: whaleEvent.side,
+            price: whaleEvent.price,
+            size: whaleEvent.size,
+            timestamp: whaleEvent.timestamp,
+            question: 'Whale Trade Detected'
+        });
+        serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+    });
+    
+    // Broadcast flash moves from global intelligence
+    globalIntelligence.on('flash_move', (flashEvent) => {
+        io.emit('FLASH_MOVE_DETECTED', flashEvent);
+        serverLogger.info(`[GLOBAL FLASH] ${flashEvent.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.question?.slice(0, 30)}...`);
+    });
 
     currentTickIndex++;
 }, 500);

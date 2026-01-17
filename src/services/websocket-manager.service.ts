@@ -83,7 +83,7 @@ export class WebSocketManager extends EventEmitter {
         private adapter: IExchangeAdapter | null = null
     ) {
         super();
-        this.setMaxListeners(100);
+        this.setMaxListeners(300); // Increased to handle multiple bot instances and prevent memory leak warnings
     }
 
     /**

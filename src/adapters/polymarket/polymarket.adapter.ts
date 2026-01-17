@@ -188,7 +188,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
         await this.safeManager.deploySafe();
         await this.safeManager.enableApprovals();
         let apiCreds = this.config.l2ApiCredentials;
-        if (!apiCreds || !apiCreds.key) {
+        if (!apiCreds || !apiCreds.key || !apiCreds.secret) {
             await this.deriveAndSaveKeys();
             apiCreds = this.config.l2ApiCredentials; 
         }
@@ -231,7 +231,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
 
     private async deriveAndSaveKeys() {
         try {
-            const tempClient = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5 as any, undefined, SignatureType.EOA, undefined);
+            // Use POLY_GNOSIS_SAFE signature type to match trading signature
+            const tempClient = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5 as any, undefined, SignatureType.POLY_GNOSIS_SAFE, this.safeAddress);
             const rawCreds = await tempClient.createOrDeriveApiKey();
             if (!rawCreds || !rawCreds.key) throw new Error("Empty keys returned");
             const apiCreds = { key: rawCreds.key, secret: rawCreds.secret, passphrase: rawCreds.passphrase };

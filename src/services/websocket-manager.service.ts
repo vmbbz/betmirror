@@ -168,9 +168,8 @@ export class WebSocketManager extends EventEmitter {
             
             if (this.isMarketConnected && this.marketWs?.readyState === WebSocket.OPEN) {
                 this.marketWs.send(JSON.stringify({
-                    type: "unsubscribe",
-                    topic: "last_trade_price",
-                    asset_id: tokenId
+                    assets_ids: [tokenId],
+                    operation: "unsubscribe"
                 }));
             }
         }
@@ -225,7 +224,7 @@ export class WebSocketManager extends EventEmitter {
                 this.logger.success('✅ Market Channel Connected');
 
                 // Subscribe to general topics
-                this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "last_trade_price" }));
+                this.marketWs?.send(JSON.stringify({ type: "market", assets_ids: [] }));
                 this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
 
                 // Resubscribe to all tokens
@@ -275,19 +274,28 @@ export class WebSocketManager extends EventEmitter {
             const wsUrl = `${WS_URLS.CLOB}/ws/user`;
             this.logger.info(`🔌 Connecting to User Channel: ${wsUrl}`);
 
-            // Get auth headers from adapter
-            const headers = this.adapter && typeof (this.adapter as any).getAuthHeaders === 'function'
-                ? (this.adapter as any).getAuthHeaders()
-                : {};
-            
-            this.logger.debug(`Auth headers for user channel: ${JSON.stringify(headers)}`);
-            this.userWs = new WebSocket(wsUrl, { headers });
+            // Connect without auth headers first, then send auth in subscription message
+            this.userWs = new WebSocket(wsUrl);
 
             // FIX: Use .on for Node.js WebSocket
             this.userWs.on('open', () => {
                 this.isUserConnected = true;
                 this.userReconnectAttempts = 0;
                 this.logger.success('✅ User Channel Connected (Authenticated)');
+                
+                // Send authentication message after connection as per docs
+                const authHeaders = this.adapter && typeof (this.adapter as any).getAuthHeaders === 'function'
+                    ? (this.adapter as any).getAuthHeaders()
+                    : {};
+                    
+                this.logger.debug(`Sending auth message: ${JSON.stringify(authHeaders)}`);
+                
+                this.userWs?.send(JSON.stringify({
+                    type: "user",
+                    auth: authHeaders,
+                    markets: [] // Optional: filter to specific condition IDs
+                }));
+                
                 this.startUserPing();
                 resolve();
             });
@@ -347,15 +355,6 @@ export class WebSocketManager extends EventEmitter {
         if (!msg.event_type) return;
 
         switch (msg.event_type) {
-            case 'last_trade_price':
-                const priceEvent: PriceEvent = {
-                    asset_id: msg.asset_id,
-                    price: parseFloat(msg.price),
-                    timestamp: Date.now()
-                };
-                this.emit('price_update', priceEvent);
-                break;
-
             case 'trades':
                 const tradeEvent: TradeEvent = {
                     asset_id: msg.asset_id,
@@ -388,10 +387,6 @@ export class WebSocketManager extends EventEmitter {
 
             case 'market_resolved':
                 this.handleMarketResolved(msg);
-                break;
-
-            case 'last_trade_price':
-                this.handleLastTradePrice(msg);
                 break;
 
             case 'tick_size_change':
@@ -566,13 +561,14 @@ export class WebSocketManager extends EventEmitter {
      * Handle messages from the user channel
      */
     private handleUserMessage(msg: any): void {
-        if (msg.event_type === 'order_filled') {
+        if (msg.event_type === 'trade') {
+            // Handle fills - status can be "MATCHED", "MINED", "CONFIRMED", etc.
             const event: FillEvent = {
                 asset_id: msg.asset_id,
                 price: parseFloat(msg.price),
                 size: parseFloat(msg.size),
                 side: msg.side.toUpperCase(),
-                order_id: msg.order_id,
+                order_id: msg.taker_order_id,
                 timestamp: Date.now()
             };
             
@@ -583,6 +579,10 @@ export class WebSocketManager extends EventEmitter {
             if (callbacks) {
                 callbacks.forEach(callback => callback(event));
             }
+        } else if (msg.event_type === 'order') {
+            // Handle order placement/update/cancellation
+            // msg.type will be "PLACEMENT", "UPDATE", or "CANCELLATION"
+            this.logger.debug(`Order event: ${msg.type} for order ${msg.order_id}`);
         }
     }
 
@@ -592,9 +592,8 @@ export class WebSocketManager extends EventEmitter {
     private sendMarketSubscription(tokenId: string): void {
         if (this.marketWs?.readyState === WebSocket.OPEN) {
             this.marketWs.send(JSON.stringify({
-                type: "subscribe",
-                topic: "last_trade_price",
-                asset_id: tokenId
+                type: "market",
+                assets_ids: [tokenId]
             }));
         }
     }

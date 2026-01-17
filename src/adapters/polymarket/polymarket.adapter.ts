@@ -223,8 +223,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
     public getAuthHeaders(): any {
         if (!this.config.l2ApiCredentials) return {};
         return {
-            'POLY_API_KEY': this.config.l2ApiCredentials.key,
-            'POLY_PASSPHRASE': this.config.l2ApiCredentials.passphrase
+            'apiKey': this.config.l2ApiCredentials.key,
+            'secret': this.config.l2ApiCredentials.secret,
+            'passphrase': this.config.l2ApiCredentials.passphrase
         };
     }
 

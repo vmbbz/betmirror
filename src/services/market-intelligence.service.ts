@@ -38,6 +38,13 @@ export class MarketIntelligenceService extends EventEmitter {
         // Initialize Flash Move Service
         this.flashMoveService = flashMoveService;
         
+        // CRITICAL: Forward whale_trade events from WebSocketManager
+        if (this.wsManager) {
+            this.wsManager.on('whale_trade', (event) => {
+                this.emit('whale_trade', event);
+            });
+        }
+        
         this.logger.info('🔌 Initializing Master Intelligence Pipeline...');
     }
 

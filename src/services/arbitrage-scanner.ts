@@ -152,6 +152,7 @@ export class MarketMakingScanner extends EventEmitter {
     private readonly maxReconnectAttempts = 10;
     private readonly maxReconnectDelay = 30000;
     private rateLimiter = new RateLimiter(1500); // 1.5 seconds between requests
+    private externalWsManager?: any; // Store external WebSocket manager
 
     // Risk management state
     private readonly MAX_TRACKED_MARKETS = 1000;
@@ -194,6 +195,43 @@ export class MarketMakingScanner extends EventEmitter {
      */
     public getIsScanning(): boolean {
         return this.isScanning;
+    }
+
+    /**
+     * Set external WebSocket manager to prevent multiple connections
+     */
+    public setWebSocketManager(wsManager: any): void {
+        // Remove existing WebSocket if any
+        if (this.ws) {
+            const wsAny = this.ws as any;
+            wsAny.removeAllListeners();
+            if (this.ws.readyState === 1) {
+                wsAny.terminate();
+            }
+            this.ws = undefined;
+        }
+        
+        // Store and use the provided WebSocket manager
+        this.externalWsManager = wsManager;
+        this.logger.info('🔌 Using global WebSocket manager for market data');
+    }
+
+    /**
+     * Override connect method to use external WebSocket manager
+     */
+    private connect() {
+        if (!this.isScanning) return;
+        if (!this.externalWsManager) {
+            this.logger.warn('⚠️ No external WebSocket manager provided');
+            return;
+        }
+
+        // Use external WebSocket manager instead of creating own
+        this.logger.info('🔌 Using external WebSocket manager for market data');
+        this.isConnected = true;
+        this.reconnectAttempts = 0;
+        this.subscribeToAllTrackedTokens();
+        this.startPing();
     }
 
     async start() {
@@ -844,51 +882,6 @@ export class MarketMakingScanner extends EventEmitter {
         return this.bookmarkedMarkets.has(conditionId);
     }
 
-    private connect() {
-        if (!this.isScanning) return;
-
-        const wsUrl = `${WS_URLS.CLOB}/ws/market`;
-        this.logger.info(`🔌 Connecting to ${wsUrl}`);
-        // Use named imports for WebSocket to resolve constructor error in TS
-        this.ws = new WebSocket(wsUrl);
-
-        const wsAny = this.ws as any;
-
-        wsAny.on('open', () => {
-            this.isConnected = true;
-            this.reconnectAttempts = 0;
-            this.logger.success('✅ WebSocket connected');
-            this.subscribeToAllTrackedTokens();
-            this.startPing();
-        });
-
-        wsAny.on('message', (data: any) => {
-            try {
-                const msg = data.toString();
-                if (msg === 'PONG') return;
-                
-                const parsed = JSON.parse(msg);
-                if (Array.isArray(parsed)) {
-                    parsed.forEach(m => this.processMessage(m));
-                } else {
-                    this.processMessage(parsed);
-                }
-            } catch (error) {
-            }
-        });
-
-        wsAny.on('close', (code: number, reason: string) => {
-            this.isConnected = false;
-            this.logger.warn(`📡 WebSocket closed: ${code}`);
-            this.stopPing();
-            if (this.isScanning) this.handleReconnect();
-        });
-
-        wsAny.on('error', (error: Error) => {
-            this.logger.error(`❌ WebSocket error: ${error.message}`);
-        });
-    }
-
     /**
      * HFT UPGRADE: Connect to the private User Channel
      * Listen for ORDER_FILLED events to trigger immediate re-quotes.
@@ -929,7 +922,7 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     private subscribeToAllTrackedTokens() {
-        if (!this.ws || this.ws.readyState !== 1) return;
+        if (!this.externalWsManager) return;
 
         const assetIds = Array.from(this.trackedMarkets.keys());
         if (assetIds.length === 0) return;
@@ -941,18 +934,14 @@ export class MarketMakingScanner extends EventEmitter {
             initial_dump: true  // Request initial orderbook state
         };
 
-        this.ws.send(JSON.stringify(subscribeMsg));
+        this.externalWsManager.subscribeToTokens(assetIds);
         this.logger.info(`📡 Subscribed to ${assetIds.length} tokens with initial orderbook dump`);
     }
 
     private subscribeToTokens(tokenIds: string[]) {
-        if (!this.ws || this.ws.readyState !== 1 || tokenIds.length === 0) return;
+        if (!this.externalWsManager || tokenIds.length === 0) return;
 
-        this.ws.send(JSON.stringify({
-            assets_ids: tokenIds,
-            operation: 'subscribe'
-        }));
-        
+        this.externalWsManager.subscribeToTokens(tokenIds);
         this.logger.debug(`📡 Subscribed to ${tokenIds.length} additional tokens`);
     }
 
@@ -1315,18 +1304,14 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     private startPing() {
-        this.pingInterval = setInterval(() => {
-            if (this.ws?.readyState === 1) {
-                this.ws.send('PING');
-            }
-        }, 10000);
+        if (!this.externalWsManager) return;
+        // Use external WebSocket manager's ping functionality
+        this.logger.debug('Using external WebSocket manager for ping');
     }
 
     private stopPing() {
-        if (this.pingInterval) {
-            clearInterval(this.pingInterval);
-            this.pingInterval = undefined;
-        }
+        // External WebSocket manager handles its own ping
+        this.logger.debug('Stopping ping (handled by external manager)');
     }
 
     private handleReconnect() {
@@ -1356,14 +1341,8 @@ export class MarketMakingScanner extends EventEmitter {
             this.refreshInterval = undefined;
         }
 
-        if (this.ws) {
-            const wsAny = this.ws as any;
-            wsAny.removeAllListeners();
-            if (this.ws.readyState === 1) {
-                wsAny.terminate();
-            }
-            this.ws = undefined;
-        }
+        // External WebSocket manager handles cleanup
+        this.logger.debug('WebSocket cleanup handled by external manager');
 
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);

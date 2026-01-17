@@ -45,18 +45,10 @@ export class TradeMonitorService {
     this.deps = deps;
     this.updateTargets(deps.userAddresses);
     
-    // Listen to whale events from WebSocketManager
-    if (deps.intelligence) {
-        const wsManager = (deps.intelligence as any).wsManager;
-        if (wsManager) {
-            wsManager.on('whale_trade', (event: any) => {
-                this.handleWhaleSignal(event);
-            });
-        }
-    }
-    
-    // Initialize the listener bound to this instance context
-    this.boundHandler = (event: WhaleTradeEvent) => this.handleWhaleSignal(event);
+    // Store bound handler reference to allow clean removal of event listeners
+    this.boundHandler = (event: WhaleTradeEvent) => {
+        this.handleWhaleSignal(event);
+    };
   }
 
   /**

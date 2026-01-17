@@ -195,6 +195,9 @@ export class BotEngine extends EventEmitter {
             }
         );
         
+        // CRITICAL: Give scanner access to global WebSocket manager
+        this.arbScanner.setWebSocketManager(this.intelligence.wsManager!);
+        
         // Set active positions from config if provided
         if (config.activePositions) {
             this.activePositions = config.activePositions;

@@ -73,6 +73,9 @@ export class WebSocketManager extends EventEmitter {
     private marketSubscriptions = new Set<string>();
     private userSubscriptions = new Map<string, Set<(data: any) => void>>();
     
+    // Track cleanup functions to prevent memory leaks
+    private fillUnsubscribers: (() => void)[] = [];
+    
     private readonly baseReconnectDelay = 1000;
     
     // Whale detection
@@ -142,6 +145,10 @@ export class WebSocketManager extends EventEmitter {
         this.isUserConnected = false;
         this.marketSubscriptions.clear();
         this.userSubscriptions.clear();
+
+        // Clean up all fill unsubscribers to prevent memory leaks
+        this.fillUnsubscribers.forEach(unsub => unsub());
+        this.fillUnsubscribers = [];
 
         this.logger.info('✅ WebSocketManager stopped');
     }
@@ -394,6 +401,10 @@ export class WebSocketManager extends EventEmitter {
 
             case 'market_resolved':
                 this.handleMarketResolved(msg);
+                break;
+
+            case 'last_trade_price':
+                this.handleLastTradePrice(msg);
                 break;
 
             case 'tick_size_change':

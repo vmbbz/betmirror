@@ -1,5 +1,5 @@
-
 import { EventEmitter } from 'events';
+// FIX: Use named import for WebSocket class. The Node.js 'ws' package exports it this way.
 import { WebSocket } from 'ws';
 import { Logger } from '../utils/logger.util.js';
 import { IExchangeAdapter } from '../adapters/interfaces.js';
@@ -126,8 +126,9 @@ export class WebSocketManager extends EventEmitter {
 
         if (this.marketWs) {
             // FIX: removeAllListeners is available on Node.js WebSocket implementation from 'ws'
-            this.marketWs.removeAllListeners();
-            if (this.marketWs.readyState === WebSocket.OPEN) {
+            (this.marketWs as any).removeAllListeners();
+            // FIX: Use explicit 1 (OPEN) for readyState check
+            if (this.marketWs.readyState === 1) {
                 this.marketWs.close();
             }
             this.marketWs = undefined;
@@ -135,8 +136,9 @@ export class WebSocketManager extends EventEmitter {
 
         if (this.userWs) {
             // FIX: removeAllListeners is available on Node.js WebSocket implementation from 'ws'
-            this.userWs.removeAllListeners();
-            if (this.userWs.readyState === WebSocket.OPEN) {
+            (this.userWs as any).removeAllListeners();
+            // FIX: Use explicit 1 (OPEN) for readyState check
+            if (this.userWs.readyState === 1) {
                 this.userWs.close();
             }
             this.userWs = undefined;
@@ -161,7 +163,8 @@ export class WebSocketManager extends EventEmitter {
         if (!this.marketSubscriptions.has(tokenId)) {
             this.marketSubscriptions.add(tokenId);
             
-            if (this.isMarketConnected && this.marketWs?.readyState === WebSocket.OPEN) {
+            // FIX: Use explicit 1 (OPEN) for readyState check
+            if (this.isMarketConnected && this.marketWs?.readyState === 1) {
                 this.sendMarketSubscription(tokenId);
             }
         }
@@ -174,7 +177,8 @@ export class WebSocketManager extends EventEmitter {
         if (this.marketSubscriptions.has(tokenId)) {
             this.marketSubscriptions.delete(tokenId);
             
-            if (this.isMarketConnected && this.marketWs?.readyState === WebSocket.OPEN) {
+            // FIX: Use explicit 1 (OPEN) for readyState check
+            if (this.isMarketConnected && this.marketWs?.readyState === 1) {
                 this.marketWs.send(JSON.stringify({
                     assets_ids: [tokenId],
                     operation: "unsubscribe"
@@ -209,9 +213,10 @@ export class WebSocketManager extends EventEmitter {
      * Get connection status
      */
     public getConnectionStatus(): { market: boolean; user: boolean } {
+        // FIX: Use explicit 1 (OPEN) for readyState check
         return {
-            market: this.isMarketConnected && this.marketWs?.readyState === WebSocket.OPEN,
-            user: this.isUserConnected && this.userWs?.readyState === WebSocket.OPEN
+            market: this.isMarketConnected && this.marketWs?.readyState === 1,
+            user: this.isUserConnected && this.userWs?.readyState === 1
         };
     }
 
@@ -224,9 +229,10 @@ export class WebSocketManager extends EventEmitter {
             this.logger.info(`🔌 Connecting to Market Channel: ${wsUrl}`);
 
             this.marketWs = new WebSocket(wsUrl);
+            const wsAny = this.marketWs as any;
 
             // FIX: Use .on instead of browser property handlers for Node.js WebSocket
-            this.marketWs.on('open', () => {
+            wsAny.on('open', () => {
                 this.isMarketConnected = true;
                 this.marketReconnectAttempts = 0;
                 this.logger.success('✅ Market Channel Connected');
@@ -242,8 +248,8 @@ export class WebSocketManager extends EventEmitter {
                 resolve();
             });
 
-            // FIX: Use any for data to avoid Namespace 'ws' has no exported member 'Data'
-            this.marketWs.on('message', (data: any) => {
+            // FIX: Use RawData/any for message handling
+            wsAny.on('message', (data: any) => {
                 try {
                     const message = data.toString();
                     if (message === 'PONG' || message === 'pong') return;
@@ -255,7 +261,7 @@ export class WebSocketManager extends EventEmitter {
                 }
             });
 
-            this.marketWs.on('close', (code: number) => {
+            wsAny.on('close', (code: number) => {
                 this.isMarketConnected = false;
                 this.logger.warn(`📡 Market Channel closed: ${code}`);
                 this.stopMarketPing();
@@ -265,7 +271,7 @@ export class WebSocketManager extends EventEmitter {
                 }
             });
 
-            this.marketWs.on('error', (error: Error) => {
+            wsAny.on('error', (error: Error) => {
                 this.logger.error(`❌ Market Channel error: ${error.message}`);
                 reject(error);
             });
@@ -284,9 +290,10 @@ export class WebSocketManager extends EventEmitter {
 
             // Connect without auth headers first, then send auth in subscription message
             this.userWs = new WebSocket(wsUrl);
+            const wsAny = this.userWs as any;
 
             // FIX: Use .on for Node.js WebSocket
-            this.userWs.on('open', () => {
+            wsAny.on('open', () => {
                 this.isUserConnected = true;
                 this.userReconnectAttempts = 0;
                 this.logger.success('✅ User Channel Connected (Authenticated)');
@@ -315,8 +322,8 @@ export class WebSocketManager extends EventEmitter {
                 resolve();
             });
 
-            // FIX: Use any for data
-            this.userWs.on('message', (data: any) => {
+            // FIX: Use any for message data
+            wsAny.on('message', (data: any) => {
                 try {
                     const message = data.toString();
                     if (message === 'PONG' || message === 'pong') return;
@@ -328,7 +335,7 @@ export class WebSocketManager extends EventEmitter {
                 }
             });
 
-            this.userWs.on('close', (code: number) => {
+            wsAny.on('close', (code: number) => {
                 this.isUserConnected = false;
                 this.logger.warn(`📡 User Channel closed: ${code}`);
                 this.stopUserPing();
@@ -338,7 +345,7 @@ export class WebSocketManager extends EventEmitter {
                 }
             });
 
-            this.userWs.on('error', (error: Error) => {
+            wsAny.on('error', (error: Error) => {
                 this.logger.error(`❌ User Channel error: ${error.message}`);
                 reject(error);
             });
@@ -604,7 +611,8 @@ export class WebSocketManager extends EventEmitter {
      * Send subscription message for a specific token
      */
     private sendMarketSubscription(tokenId: string): void {
-        if (this.marketWs?.readyState === WebSocket.OPEN) {
+        // FIX: Use explicit 1 (OPEN) for readyState check
+        if (this.marketWs?.readyState === 1) {
             this.marketWs.send(JSON.stringify({
                 type: "market",
                 assets_ids: [tokenId]
@@ -621,7 +629,7 @@ export class WebSocketManager extends EventEmitter {
         });
         
         if (this.marketSubscriptions.size > 0) {
-            this.logger.info(`膨 Resubscribed to ${this.marketSubscriptions.size} tokens`);
+            this.logger.info(`🔌 Resubscribed to ${this.marketSubscriptions.size} tokens`);
         }
     }
 
@@ -631,7 +639,8 @@ export class WebSocketManager extends EventEmitter {
     private startMarketPing(): void {
         this.stopMarketPing();
         this.marketPingInterval = setInterval(() => {
-            if (this.marketWs?.readyState === WebSocket.OPEN) {
+            // FIX: Use explicit 1 (OPEN) for readyState check
+            if (this.marketWs?.readyState === 1) {
                 this.marketWs.send('PING');
             }
         }, 10000);
@@ -643,7 +652,8 @@ export class WebSocketManager extends EventEmitter {
     private startUserPing(): void {
         this.stopUserPing();
         this.userPingInterval = setInterval(() => {
-            if (this.userWs?.readyState === WebSocket.OPEN) {
+            // FIX: Use explicit 1 (OPEN) for readyState check
+            if (this.userWs?.readyState === 1) {
                 this.userWs.send('PING');
             }
         }, 10000);

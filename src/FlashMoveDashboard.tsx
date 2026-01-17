@@ -1,25 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
 import { 
-    Activity, 
-    Sword, 
-    Zap, 
-    ShieldCheck, 
-    ExternalLink, 
-    TrendingUp, 
-    Clock, 
-    Target, 
-    Loader2, 
-    Radar, 
-    Flame, 
-    Info,
-    TrendingDown, 
-    Timer, 
-    BarChart3, 
-    ChevronRight,
-    Settings
+    Activity, Zap, TrendingUp, Radar, Flame, 
+    Target, Loader2, ShieldAlert, Cpu, 
+    ArrowRight, History, BarChart3, Info, 
+    Sword, AlertCircle, Timer, ShieldCheck, X
 } from 'lucide-react';
+import { toast } from 'react-toastify';
 
 interface FlashMoveData {
     tokenId: string;
@@ -31,125 +19,63 @@ interface FlashMoveData {
     timestamp: number;
     question?: string;
     image?: string;
-    marketSlug?: string;
-    riskScore: number;
     strategy: string;
 }
 
-interface FlashMoveServiceStatus {
-    isEnabled: boolean;
-    activePositions: number;
-    totalExecuted: number;
-    successRate: number;
-    lastDetection: Date | null;
-    portfolioRisk: any;
-}
-
-const FlashMoveCard = ({ move }: { move: FlashMoveData }) => {
-    const isUp = move.velocity > 0;
-    const velocityPct = Math.abs(move.velocity * 100).toFixed(1);
-    const confidencePct = Math.abs(move.confidence * 100).toFixed(0);
-
+const SignalHeatBar = ({ value }: { value: number }) => {
+    const intensity = Math.min(Math.abs(value * 100), 100);
     return (
-        <div className="relative group animate-in fade-in slide-in-from-bottom-2 duration-500 w-full">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-rose-500 to-orange-500 rounded-[1.5rem] blur opacity-20 group-hover:opacity-40 transition-opacity"></div>
-            <div className="glass-panel rounded-[1.5rem] border-white/5 bg-slate-900/90 overflow-hidden relative flex flex-col h-full shadow-xl">
-                <div className="p-4 flex items-center justify-between border-b border-white/5 bg-white/[0.02]">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-500">
-                            <Zap size={14} fill="currentColor" />
-                        </div>
-                        <div className="min-w-0">
-                            <p className="text-[9px] font-black text-rose-400 uppercase tracking-widest leading-none">Flash Move</p>
-                            <p className="text-[8px] text-slate-500 font-mono mt-0.5">{(new Date(move.timestamp)).toLocaleTimeString()}</p>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-rose-500/10 rounded-full border border-rose-500/20">
-                        <TrendingUp size={10} className="text-rose-400"/>
-                        <span className="text-[10px] font-black text-rose-400">{velocityPct}%</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <div className="text-xs text-slate-500 uppercase">Confidence</div>
-                        <div className="text-xs font-mono text-slate-400">{confidencePct}%</div>
-                    </div>
-                </div>
-                
-                <div className="p-5 flex-1">
-                    <h4 className="text-sm font-bold text-white mb-4 line-clamp-2 leading-snug h-10">{move.question || 'Unknown Market'}</h4>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-black/30 p-3 rounded-xl border border-white/5">
-                            <p className="text-[8px] font-bold text-slate-500 uppercase mb-1">Baseline</p>
-                            <p className="text-lg font-mono font-bold text-slate-400">${move.oldPrice.toFixed(3)}</p>
-                        </div>
-                        <div className="bg-rose-500/10 p-3 rounded-xl border border-rose-500/20">
-                            <p className="text-[8px] font-bold text-rose-500 uppercase mb-1">Spike</p>
-                            <p className="text-lg font-mono font-bold text-white">${move.newPrice.toFixed(3)}</p>
-                        </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
-                            <div className="text-slate-500 uppercase">Strategy</div>
-                            <div className="text-white font-mono">{move.strategy}</div>
-                        </div>
-                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
-                            <div className="text-slate-500 uppercase">Risk Score</div>
-                            <div className="text-white font-mono">{move.riskScore.toFixed(0)}</div>
-                        </div>
-                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
-                            <div className="text-slate-500 uppercase">Token ID</div>
-                            <div className="text-white font-mono text-xs">{move.tokenId.slice(0, 8)}...</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+            <div 
+                className={`h-full transition-all duration-1000 ${intensity > 15 ? 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]' : 'bg-orange-400'}`}
+                style={{ width: `${intensity}%` }}
+            />
         </div>
     );
 };
 
-const FlashMoveServiceStatusCard = ({ status }: { status: FlashMoveServiceStatus }) => {
+const TacticalSignalCard = ({ move }: { move: FlashMoveData }) => {
+    const velocityPct = (move.velocity * 100).toFixed(1);
+    const timeAgo = Math.floor((Date.now() - move.timestamp) / 1000);
+
     return (
-        <div className="glass-panel rounded-[1.5rem] border-white/5 bg-slate-900/90 p-6">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Radar className="w-5 h-5" />
-                    Flash Move Service Status
-                </h3>
-                <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                    status.isEnabled 
-                        ? 'bg-green-500 text-white' 
-                        : 'bg-red-500 text-white'
-                }`}>
-                    {status.isEnabled ? 'ACTIVE' : 'INACTIVE'}
-                </div>
-            </div>
-            
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="text-center">
-                    <div className="text-2xl font-bold text-white mb-1">{status.activePositions}</div>
-                    <div className="text-xs text-slate-500 uppercase">Active Positions</div>
-                </div>
-                
-                <div className="text-center">
-                    <div className="text-2xl font-bold text-white mb-1">{status.totalExecuted}</div>
-                    <div className="text-xs text-slate-500 uppercase">Total Executed</div>
-                </div>
-                
-                <div className="text-center">
-                    <div className="text-2xl font-bold text-white mb-1">{(status.successRate * 100).toFixed(1)}%</div>
-                    <div className="text-xs text-slate-500 uppercase">Success Rate</div>
-                </div>
-                
-                <div className="text-center">
-                    <div className="text-2xl font-bold text-white mb-1">{status.portfolioRisk?.totalExposure || 0}</div>
-                    <div className="text-xs text-slate-500 uppercase">Portfolio Risk</div>
-                </div>
-                
-                <div className="text-center">
-                    <div className="text-sm font-semibold text-white mb-1">
-                        {status.lastDetection ? (new Date(status.lastDetection)).toLocaleTimeString() : 'Never'}
+        <div className="relative group animate-in fade-in zoom-in-95 duration-500">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-rose-600 to-amber-500 rounded-2xl blur opacity-10 group-hover:opacity-30 transition-opacity"></div>
+            <div className="relative glass-panel bg-slate-900/80 border-white/5 rounded-2xl p-4 overflow-hidden">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500">
+                            <Zap size={20} fill="currentColor" className="animate-pulse" />
+                        </div>
+                        <div>
+                            <div className="text-[10px] font-black text-rose-400 uppercase tracking-widest leading-none mb-1">High Velocity Detected</div>
+                            <h4 className="text-sm font-bold text-white leading-tight line-clamp-1">{move.question || 'New Spike'}</h4>
+                        </div>
                     </div>
-                    <div className="text-xs text-slate-500 uppercase">Last Detection</div>
+                    <div className="text-right">
+                        <div className={`text-lg font-black font-mono ${move.velocity > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {move.velocity > 0 ? '+' : ''}{velocityPct}%
+                        </div>
+                        <div className="text-[8px] text-slate-500 font-bold uppercase tracking-tighter">{timeAgo}s Ago</div>
+                    </div>
+                </div>
+
+                <div className="space-y-3">
+                    <SignalHeatBar value={move.velocity} />
+                    <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-black/40 p-2 rounded-lg border border-white/5">
+                            <div className="text-[8px] text-slate-500 uppercase font-black mb-0.5">Entry</div>
+                            <div className="text-xs font-mono text-white">${move.oldPrice.toFixed(2)}</div>
+                        </div>
+                        <div className="bg-black/40 p-2 rounded-lg border border-white/5">
+                            <div className="text-[8px] text-slate-500 uppercase font-black mb-0.5">Peak</div>
+                            <div className="text-xs font-mono text-white">${move.newPrice.toFixed(2)}</div>
+                        </div>
+                        <div className="bg-black/40 p-2 rounded-lg border border-white/5">
+                            <div className="text-[8px] text-slate-500 uppercase font-black mb-0.5">Conf.</div>
+                            <div className="text-xs font-mono text-emerald-400">{(move.confidence * 100).toFixed(0)}%</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -157,182 +83,163 @@ const FlashMoveServiceStatusCard = ({ status }: { status: FlashMoveServiceStatus
 };
 
 export const FlashMoveDashboard = () => {
-    const [flashMoves, setFlashMoves] = useState<FlashMoveData[]>([]);
-    const [serviceStatus, setServiceStatus] = useState<FlashMoveServiceStatus | null>(null);
-    const [selectedStrategy, setSelectedStrategy] = useState<'default' | 'conservative' | 'aggressive'>('default');
+    const [signals, setSignals] = useState<FlashMoveData[]>([]);
+    const [activeChases, setActiveChases] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [stats, setStats] = useState({ totalChased: 0, winRate: 0, totalProfit: 0 });
 
     useEffect(() => {
-        const fetchFlashMoves = async () => {
-            try {
-                // Get current user ID from localStorage or auth context
-                const userId = localStorage.getItem('userAddress') || '0x0000000000000000000000000000000000000000';
-                
-                const response = await axios.get(`/api/flash-moves?userId=${userId}`);
-                const { moves, activePositions, status } = response.data;
-                
-                // Transform database moves to FlashMoveData format
-                const transformedMoves: FlashMoveData[] = moves.map((move: any) => ({
-                    tokenId: move.tokenId,
-                    conditionId: move.conditionId,
-                    oldPrice: move.oldPrice,
-                    newPrice: move.newPrice,
-                    velocity: move.velocity,
-                    confidence: move.confidence,
-                    timestamp: new Date(move.timestamp).getTime(),
-                    question: move.question,
-                    image: move.image,
-                    marketSlug: move.marketSlug,
-                    riskScore: move.riskScore || 0,
-                    strategy: move.strategy || 'momentum'
-                }));
-                
-                setFlashMoves(transformedMoves);
-                
-                // Set real service status
-                if (status) {
-                    setServiceStatus({
-                        isEnabled: status.isEnabled,
-                        activePositions: status.activePositions,
-                        totalExecuted: status.totalExecuted,
-                        successRate: status.successRate,
-                        lastDetection: status.lastDetection ? new Date(status.lastDetection) : null,
-                        portfolioRisk: status.portfolioRisk || { totalExposure: 0 }
-                    });
-                }
-            } catch (error) {
-                console.error('Failed to fetch flash moves:', error);
-                // Fallback to empty state on error
-                setFlashMoves([]);
-                setServiceStatus({
-                    isEnabled: false,
-                    activePositions: 0,
-                    totalExecuted: 0,
-                    successRate: 0,
-                    lastDetection: null,
-                    portfolioRisk: { totalExposure: 0 }
-                });
-            }
-        };
-        
-        // Socket.io connection for real-time updates
+        const userId = localStorage.getItem('userAddress') || '';
         const socket = io();
-        
-        socket.on('connect', () => {
-            console.log('Flash Moves Socket.io connected');
-            
-            // Subscribe to flash move events
-            const userId = localStorage.getItem('userAddress') || '0x0000000000000000000000000000000000000000';
-            socket.emit('subscribe_flash_moves', userId);
-        });
-        
-        socket.on('flash_move_detected', (data: any) => {
-            console.log('Flash move detected:', data);
-            
-            const newMove: FlashMoveData = {
-                tokenId: data.tokenId,
-                conditionId: data.conditionId,
-                oldPrice: data.oldPrice,
-                newPrice: data.newPrice,
-                velocity: data.velocity,
-                confidence: data.confidence,
-                timestamp: data.timestamp,
-                question: data.question,
-                image: data.image,
-                marketSlug: data.marketSlug,
-                riskScore: data.riskScore || 0,
-                strategy: data.strategy || 'momentum'
-            };
-            
-            // Add new move to the top of the list
-            setFlashMoves(prev => [newMove, ...prev.slice(0, 19)]);
-            
-            // Update service status if provided
-            if (data.serviceStatus) {
-                setServiceStatus({
-                    isEnabled: data.serviceStatus.isEnabled,
-                    activePositions: data.serviceStatus.activePositions,
-                    totalExecuted: data.serviceStatus.totalExecuted,
-                    successRate: data.serviceStatus.successRate,
-                    lastDetection: data.serviceStatus.lastDetection ? new Date(data.serviceStatus.lastDetection) : null,
-                    portfolioRisk: data.serviceStatus.portfolioRisk || { totalExposure: 0 }
-                });
-            }
-        });
-        
-        socket.on('disconnect', () => {
-            console.log('Flash Moves Socket.io disconnected');
-        });
-        
-        socket.on('connect_error', (error) => {
-            console.error('Flash Moves Socket.io connection error:', error);
-        });
-        
-        // Initial fetch
-        fetchFlashMoves();
-        
-        // Set up periodic refresh as fallback
-        const interval = setInterval(fetchFlashMoves, 10000);
-        
-        return () => {
-            clearInterval(interval);
-            socket.disconnect();
+
+        const fetchData = async () => {
+            try {
+                const res = await axios.get(`/api/bot/status/${userId}`);
+                setSignals(res.data.flashMoves || []);
+                // Filter active positions for FOMO origin
+                const chases = (res.data.positions || []).filter((p: any) => p.serviceOrigin === 'FOMO');
+                setActiveChases(chases);
+            } catch (e) { console.error(e); }
+            finally { setLoading(false); }
         };
+
+        fetchData();
+        const poll = setInterval(fetchData, 5000);
+
+        socket.on('flash_move_detected', (data) => {
+            setSignals(prev => [data.event, ...prev].slice(0, 20));
+            if (data.event.confidence > 0.8) toast.info(`🔥 High Conf Spike: ${data.event.question}`);
+        });
+
+        return () => { clearInterval(poll); socket.disconnect(); };
     }, []);
 
+    const handleAbort = async (marketId: string) => {
+        const userId = localStorage.getItem('userAddress') || '';
+        try {
+            await axios.post('/api/trade/exit', { userId, marketId, outcome: 'YES' });
+            toast.success("Chase Aborted. Market Order Sent.");
+        } catch (e) { toast.error("Abort Failed"); }
+    };
+
+    if (loading) return (
+        <div className="flex flex-col items-center justify-center py-40 gap-4">
+            <Loader2 className="animate-spin text-blue-500" size={40} />
+            <p className="text-xs font-black uppercase tracking-[0.4em] text-slate-500">Initializing Radar HUD...</p>
+        </div>
+    );
+
     return (
-        <div className="min-h-screen bg-slate-950 p-6">
-            <div className="max-w-7xl mx-auto">
-                <div className="flex items-center justify-between mb-6">
-                    <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-                        <Flame className="w-8 h-8 text-orange-500" />
-                        Flash Move Dashboard
-                    </h1>
-                    
-                    <div className="flex items-center gap-4">
-                        <div className="relative">
-                            <select 
-                                value={selectedStrategy}
-                                onChange={(e) => setSelectedStrategy(e.target.value as any)}
-                                className="bg-slate-800 text-white border border-slate-700 rounded-lg px-4 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-orange-500 appearance-none"
-                            >
-                                <option value="default">Default Strategy</option>
-                                <option value="conservative">Conservative</option>
-                                <option value="aggressive">Aggressive</option>
-                            </select>
-                            <Settings className="absolute right-3 top-3 w-4 h-4 text-slate-400" />
+        <div className="max-w-7xl mx-auto space-y-8 pb-20 p-4">
+            {/* TACTICAL HEADER */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 bg-gradient-to-br from-rose-600 to-orange-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-rose-900/20">
+                        <Radar size={32} />
+                    </div>
+                    <div>
+                        <h2 className="text-3xl font-black text-white uppercase tracking-tighter italic">Fomo Runner HUD</h2>
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.3em] flex items-center gap-2">
+                            <Activity size={12} className="text-rose-500" /> Real-Time Momentum Pulse • Cloud Execution v3
+                        </p>
+                    </div>
+                </div>
+                <div className="flex gap-4">
+                    <div className="glass-panel px-6 py-3 rounded-2xl border-emerald-500/20 bg-emerald-500/5">
+                        <div className="text-[8px] font-black text-emerald-500 uppercase tracking-widest mb-1">HFT Precision</div>
+                        <div className="text-xl font-black text-white font-mono">0.42s <span className="text-[10px] font-normal text-slate-500">Latency</span></div>
+                    </div>
+                </div>
+            </div>
+
+            {/* LIVE POSITIONS (ACTIVE CHASES) */}
+            <section className="space-y-4">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.4em] flex items-center gap-2">
+                    <Sword size={14} className="text-rose-500" /> Active Chases ({activeChases.length})
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {activeChases.map((chase, idx) => (
+                        <div key={idx} className="glass-panel p-6 rounded-[2rem] border-rose-500/30 bg-rose-500/5 relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Flame size={100} className="text-rose-500"/></div>
+                            <div className="relative z-10 space-y-4">
+                                <h4 className="text-sm font-black text-white uppercase leading-tight">{chase.question}</h4>
+                                <div className="flex justify-between items-end">
+                                    <div>
+                                        <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Live Profit</p>
+                                        <p className={`text-2xl font-black font-mono ${(chase.currentPrice - chase.entryPrice) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                            {((chase.currentPrice - chase.entryPrice) * chase.shares).toFixed(2)} USDC
+                                        </p>
+                                    </div>
+                                    <button 
+                                        onClick={() => handleAbort(chase.marketId)}
+                                        className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-xl text-[10px] uppercase tracking-widest shadow-lg shadow-rose-900/40 active:scale-95 transition-all"
+                                    >
+                                        Abort Chase
+                                    </button>
+                                </div>
+                                <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                                    <div className="h-full bg-rose-500 animate-pulse" style={{ width: '60%' }} />
+                                </div>
+                            </div>
                         </div>
+                    ))}
+                    {activeChases.length === 0 && (
+                        <div className="col-span-full py-12 text-center border-2 border-dashed border-white/5 rounded-[2rem] flex flex-col items-center gap-3 opacity-30">
+                            <Target size={32} />
+                            <p className="text-[10px] font-black uppercase tracking-widest">No Active Combat Sequences</p>
+                        </div>
+                    )}
+                </div>
+            </section>
+
+            {/* RADAR SIGNAL FEED */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+                <div className="lg:col-span-8 space-y-6">
+                    <div className="flex items-center gap-4 mb-4">
+                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.4em] flex items-center gap-2">
+                            <Zap size={14} className="text-amber-500" /> Momentum Radar
+                        </h3>
+                        <span className="text-[10px] font-black text-amber-500 animate-pulse uppercase tracking-widest">Scanning Global Feed...</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {signals.map((sig, i) => <TacticalSignalCard key={i} move={sig} />)}
+                        {signals.length === 0 && (
+                            <div className="col-span-full py-32 flex flex-col items-center gap-4 text-slate-700">
+                                <Radar size={64} className="animate-spin-slow" />
+                                <p className="text-sm font-black uppercase tracking-widest">Waiting for Volatility Spike...</p>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                {serviceStatus && (
-                    <FlashMoveServiceStatusCard status={serviceStatus} />
-                )}
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div className="lg:col-span-2">
-                        <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                            <Activity className="w-6 h-6" />
-                            Recent Flash Moves
-                        </h2>
-                        
+                {/* SIDEBAR INTEL */}
+                <div className="lg:col-span-4 space-y-6">
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-white/5">
+                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
+                            <ShieldCheck size={14} className="text-blue-500"/> Engagement Logic
+                        </h4>
                         <div className="space-y-4">
-                            {flashMoves.length === 0 ? (
-                                <div className="glass-panel rounded-[1.5rem] border-white/5 bg-slate-900/90 p-8 text-center">
-                                    <div className="text-slate-500 mb-4">
-                                        <Radar className="w-12 h-12 mx-auto text-slate-600" />
+                            {[
+                                { label: 'Min Velocity', val: '3%', desc: 'Price move required within 60s' },
+                                { label: 'Confidence Floor', val: '70%', desc: 'Combined signal accuracy threshold' },
+                                { label: 'Max Exposure', val: '500 USDC', desc: 'Total cap per fomo event' }
+                            ].map((item, i) => (
+                                <div key={i} className="p-4 bg-white/5 rounded-2xl border border-white/5 group hover:border-blue-500/20 transition-all">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-[10px] font-black text-white uppercase">{item.label}</span>
+                                        <span className="text-xs font-mono font-black text-blue-400">{item.val}</span>
                                     </div>
-                                    <p className="text-white">No flash moves detected yet</p>
-                                    <p className="text-sm text-slate-400 mt-2">
-                                        Flash moves will appear here when significant price movements are detected.
-                                        The system monitors velocity, momentum, and volume spikes across all markets.
-                                    </p>
+                                    <p className="text-[9px] text-slate-600 font-bold">{item.desc}</p>
                                 </div>
-                            ) : (
-                                flashMoves.map((move, index) => (
-                                    <FlashMoveCard key={`${move.tokenId}-${index}`} move={move} />
-                                ))
-                            )}
+                            ))}
                         </div>
+                    </div>
+
+                    <div className="glass-panel p-8 rounded-[2.5rem] border-rose-500/20 bg-rose-500/[0.02]">
+                        <h4 className="text-[10px] font-black text-rose-500 uppercase tracking-[0.3em] mb-4">Radar Advisory</h4>
+                        <p className="text-[11px] text-slate-400 leading-relaxed font-medium">
+                            Fomo Runner engages markets with rapid price movements. High velocity implies lower liquidity. Always maintain a <strong>Max Trade Size</strong> in the Vault to prevent slippage on low-depth spikes.
+                        </p>
                     </div>
                 </div>
             </div>

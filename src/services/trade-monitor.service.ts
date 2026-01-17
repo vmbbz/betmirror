@@ -1,4 +1,3 @@
-
 import { RuntimeEnv } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 import { TradeSignal } from '../domain/trade.types.js';
@@ -70,7 +69,7 @@ export class TradeMonitorService {
     
     // Notify the Singleton to update the global WebSocket filter
     this.deps.intelligence.updateWatchlist(newTargets);
-    this.deps.logger.info(`🎯 Monitor targets synced. Bot is now following ${this.targetWallets.size} specific whales.`);
+    this.deps.logger.info(`🎯 Monitor targets synced: ${this.targetWallets.size} whales.`);
   }
 
   /**
@@ -80,7 +79,7 @@ export class TradeMonitorService {
     if (this.running) return;
     this.running = true;
     this.deps.intelligence.on('whale_trade', this.boundHandler);
-    this.deps.logger.info(`🔌 Signal Monitor: ONLINE. Tracking ${this.targetWallets.size} targets.`);
+    this.deps.logger.info(`🔌 Signal Monitor: ONLINE.`);
   }
 
   public stop(): void {
@@ -108,19 +107,11 @@ export class TradeMonitorService {
     this.processedTrades.set(tradeKey, Date.now());
     this.pruneCache();
 
-    // FIXED: Added explicit dashboard log for visual feedback
-    this.deps.logger.info(`🚨 [WHALE MATCH] ${event.trader.slice(0, 10)}... traded ${event.side} @ ${event.price}`);
+    this.deps.logger.success(`🚨 [SIGNAL] ${event.trader.slice(0, 10)}... ${event.side} @ ${event.price}`);
 
-    // Emit whale_detected event for server to forward to frontend
-    (this as any).emit('whale_detected', {
-        trader: event.trader,
-        tokenId: event.tokenId,
-        side: event.side,
-        price: event.price,
-        size: event.size,
-        timestamp: event.timestamp,
-        question: event.question || 'Unknown Market'
-    });
+    // CRITICAL: Bridging the Intelligence Gap
+    // Tell the central WS manager to subscribe to this token immediately so we have sub-second book data
+    this.deps.intelligence.subscribeToToken(event.tokenId);
 
     const signal: TradeSignal = {
       trader: event.trader,
@@ -138,7 +129,6 @@ export class TradeMonitorService {
 
   /**
    * Memory Janitor: Cleans up the deduplication cache.
-   * Keeps the server memory footprint low even during high-frequency trading.
    */
   private pruneCache() {
     const now = Date.now();
@@ -152,7 +142,7 @@ export class TradeMonitorService {
       }
     }
   }
-
+  
   /**
    * LEGACY COMPATIBILITY: The following methods are preserved but effectively
    * bypassed by the high-performance WebSocket implementation.

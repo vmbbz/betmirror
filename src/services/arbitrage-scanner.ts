@@ -3,9 +3,8 @@ import { Logger } from '../utils/logger.util.js';
 import { WS_URLS } from '../config/env.js';
 import { MoneyMarketOpportunity } from '../database/index.js';
 import EventEmitter from 'events';
-// Use default import for WebSocket
-import WebSocket from 'ws';
-import type RawData from 'ws';
+// FIX: Use named import for WebSocket to ensure it is constructable as a class in ESM environment
+import { WebSocket } from 'ws';
 
 // Rate limiter utility
 class RateLimiter {
@@ -893,7 +892,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         // This requires standard WebSocket logic with Auth Headers or Token
         // Assuming the adapter has the current valid Auth token
-        // Fix: Use named imports for WebSocket to resolve constructor error in TS
+        // FIX: Use named imports for WebSocket to resolve constructor error in TS
         this.userWs = new WebSocket(userWsUrl);
         const wsAny = this.userWs as any;
 

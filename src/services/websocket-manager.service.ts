@@ -369,7 +369,8 @@ export class WebSocketManager extends EventEmitter {
         if (!msg.event_type) return;
 
         switch (msg.event_type) {
-            case 'trades':
+            case 'trade':
+            case 'trades':  // Handle both singular and plural
                 const tradeEvent: TradeEvent = {
                     asset_id: msg.asset_id,
                     price: parseFloat(msg.price),
@@ -381,6 +382,7 @@ export class WebSocketManager extends EventEmitter {
                 };
                 this.emit('trade', tradeEvent);
                 this.checkAndEmitWhaleTrade(tradeEvent);
+                this.logger.debug(`[WebSocketManager] Trade processed: ${msg.side} ${msg.size} @ ${msg.price} by ${msg.maker_address?.slice(0, 10)}...`);
                 break;
 
             case 'best_bid_ask':

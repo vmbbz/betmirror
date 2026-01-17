@@ -146,6 +146,7 @@ export class MarketMakingScanner extends EventEmitter {
     private opportunities: MarketOpportunity[] = [];
     private pingInterval?: NodeJS.Timeout;
     private refreshInterval?: NodeJS.Timeout;
+    private heartbeatInterval?: NodeJS.Timeout;
     private reconnectAttempts = 0;
     private reconnectTimeout?: NodeJS.Timeout;
     private readonly maxReconnectAttempts = 10;
@@ -256,6 +257,12 @@ export class MarketMakingScanner extends EventEmitter {
             this.connect();
             this.connectUserChannel(); // NEW: Hook into private fill feed
             
+            // Heartbeat for MM Ticking visibility (Ensures logs prove engine is alive)
+            this.heartbeatInterval = setInterval(() => {
+                const activeOpps = this.getOpportunities().length;
+                this.logger.info(`[MM HEARTBEAT] Tracking ${this.trackedMarkets.size} tokens | Active Opps: ${activeOpps} | Status: ${this.killSwitchActive ? 'KILLED' : 'ACTIVE'}`);
+            }, 60000);
+
             this.refreshInterval = setInterval(async () => {
                 try {
                     this.logger.info('🔄 Refreshing markets...');
@@ -1001,6 +1008,9 @@ export class MarketMakingScanner extends EventEmitter {
             market.bestAsk = bestAsk;
             market.spread = spread;
             
+            const midpoint = (bestBid + bestAsk) / 2;
+            this.logger.debug(`[MM TICK] ${market.question.slice(0, 30)}... | Midpoint: ${midpoint.toFixed(4)} | Spread: ${(spread * 100).toFixed(2)}¢`);
+
             // If this is the first price update after discovery, log it
             if (market.discoveredAt && (Date.now() - market.discoveredAt) < 10000) {
                 this.logger.debug(`Initial price for ${market.question?.substring(0, 30)}...: ${bestBid.toFixed(4)} / ${bestAsk.toFixed(4)}`);
@@ -1238,6 +1248,7 @@ export class MarketMakingScanner extends EventEmitter {
             return b.spreadCents - a.spreadCents;
         });
 
+        this.logger.success(`⚡ [MM SIGNAL] Triggering quote for ${opp.question.slice(0, 30)}... (Spread: ${opp.spreadCents.toFixed(1)}¢)`);
         this.emit('opportunity', opp);
     }
 
@@ -1283,6 +1294,11 @@ export class MarketMakingScanner extends EventEmitter {
         if (this.refreshInterval) {
             clearInterval(this.refreshInterval);
             this.refreshInterval = undefined;
+        }
+
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = undefined;
         }
 
         // External WebSocket manager handles cleanup

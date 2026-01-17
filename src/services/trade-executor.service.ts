@@ -82,12 +82,14 @@ export class TradeExecutorService {
   // ACCOUNTING CORE: Tracks capital in transit
   private pendingSpend = 0;
   private pendingOrders: Map<string, { amount: number; timestamp: number }> = new Map();
+  private lastQuoteTime: Map<string, number> = new Map(); 
   private inventory = new Map<string, number>();
   private isListening = false;
   private isWsRunning = false;
   private fillListener?: (fill: any) => void; // Store listener reference
   private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly PENDING_ORDER_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+  private readonly REQUOTE_THROTTLE_MS = 8000; // 8 seconds per token re-quote
   private cleanupInterval?: NodeJS.Timeout; 
 
   /**
@@ -738,6 +740,15 @@ export class TradeExecutorService {
       const { logger, adapter, proxyWallet } = this.deps;
       const { tokenId, conditionId, midpoint, spread, rewardsMaxSpread, rewardsMinSize } = opportunity;
       
+      const now = Date.now();
+      
+      // 1. Re-quote Throttle Check (Crucial for Rate Limits & Stability)
+      const last = this.lastQuoteTime.get(tokenId) || 0;
+      if (now - last < this.REQUOTE_THROTTLE_MS) {
+          return { tokenId, status: 'SKIPPED', reason: 'throttled' };
+      }
+      this.lastQuoteTime.set(tokenId, now);
+
       const vol = (opportunity as any).volatility || 0.05;
       const volume = opportunity.volume || 0;
 
@@ -751,16 +762,18 @@ export class TradeExecutorService {
       });
 
       try {
-          // 1. Check if market is still active
+          this.deps.logger.info(`⚡ [MM Quote] Processing ${opportunity.question.slice(0,25)}... (Mid: ${midpoint.toFixed(2)}, Spread: ${(spread*100).toFixed(1)}¢)`);
+
+          // 2. Check if market is still active
           const market = await this.validateMarketForMM(conditionId);
           if (!market.valid) {
               return failResult(market.reason || 'market_invalid');
           }
 
-          // 2. Cancel existing quotes for this token before placing new ones
+          // 3. Cancel existing quotes for this token before placing new ones
           await this.cancelExistingQuotes(tokenId);
 
-          // 3. Check inventory limits with dynamic position sizing
+          // 4. Check inventory limits with dynamic position sizing
           const currentInventory = await this.getTokenInventory(tokenId);
           const inventoryValueUsd = currentInventory * midpoint;
           
@@ -780,10 +793,10 @@ export class TradeExecutorService {
               return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
           }
 
-          // 4. Calculate dynamic spreads with inventory skew and volatility adjustment
+          // 5. Calculate dynamic spreads with inventory skew and volatility adjustment
           const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, market);
           
-          // 5. Calculate order sizes with inventory management
+          // 6. Calculate order sizes with inventory management
           const optimalSizes = await this.calculateOptimalSizes(
               opportunity, 
               currentInventory, 
@@ -800,7 +813,7 @@ export class TradeExecutorService {
               };
           }
 
-          // 6. Final size adjustments
+          // 7. Final size adjustments
           let finalBidSize = optimalSizes.bidSize;
           let finalAskSize = optimalSizes.askSize;
 
@@ -817,7 +830,7 @@ export class TradeExecutorService {
               finalBidSize = availableForBid / bidPrice;
           }
 
-          // 7. Place orders using GTC
+          // 8. Place orders using GTC
           const result: QuoteResult = {
               tokenId,
               status: 'POSTED',

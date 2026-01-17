@@ -198,6 +198,15 @@ export class BotEngine extends EventEmitter {
         
         // Connect scanner to global intelligence feed
         this.arbScanner.setWebSocketManager(this.intelligence.wsManager!);
+
+                // --- ARBITRAGE / MM EXECUTION LOOP ---
+        this.arbScanner.on('opportunity', async (opp) => {
+            if (this.isRunning && this.config.enableMoneyMarkets) {
+                // Throttle: Don't execute MM quotes if we just placed one for this token in last 5s
+                // (Logic handled inside executor for state persistence)
+                await this.executor.executeMarketMakingQuotes(opp);
+            }
+        });
         
         if (config.activePositions) this.activePositions = config.activePositions;
         if (config.userAddresses) this.monitor.updateTargets(config.userAddresses);

@@ -685,7 +685,7 @@ export class WebSocketManager extends EventEmitter {
         );
 
         this.logger.info(`Attempting to reconnect market channel in ${delay}ms`);
-        
+    
         setTimeout(() => {
             if (this.isRunning) {
                 this.connectMarketChannel().catch((error) => {
@@ -733,39 +733,23 @@ export class WebSocketManager extends EventEmitter {
      */
     private checkAndEmitWhaleTrade(tradeEvent: TradeEvent): void {
         const maker = tradeEvent.maker_address?.toLowerCase();
+        const taker = tradeEvent.taker_address?.toLowerCase();
+            
+        if (this.whaleWatchlist.has(maker) || this.whaleWatchlist.has(taker)) {
+            const whaleTrader = this.whaleWatchlist.has(maker) ? maker : taker;
+                
+            const whaleEvent: WhaleTradeEvent = {
+                trader: whaleTrader,
+                tokenId: tradeEvent.asset_id,
+                side: tradeEvent.side,
+                price: tradeEvent.price,
+                size: tradeEvent.size,
+                timestamp: tradeEvent.timestamp,
+                question: undefined // Will be enriched by TradeMonitorService
+            };
+            
+            this.emit('whale_trade', whaleEvent);
+            this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${tradeEvent.side} ${tradeEvent.size} @ ${tradeEvent.price}`);
         }
-    }, delay);
-}
-
-/**
- * Update whale watchlist
- */
-public updateWhaleWatchlist(addresses: string[]): void {
-    this.whaleWatchlist = new Set(addresses.map(addr => addr.toLowerCase()));
-    this.logger.debug(`[WebSocketManager] Whale watchlist updated: ${this.whaleWatchlist.size} whales`);
-}
-
-/**
- * Check if trade involves whale and emit whale_trade event
- */
-private checkAndEmitWhaleTrade(tradeEvent: TradeEvent): void {
-    const maker = tradeEvent.maker_address?.toLowerCase();
-    const taker = tradeEvent.taker_address?.toLowerCase();
-    
-    if (this.whaleWatchlist.has(maker) || this.whaleWatchlist.has(taker)) {
-        const whaleTrader = this.whaleWatchlist.has(maker) ? maker : taker;
-        
-        const whaleEvent: WhaleTradeEvent = {
-            trader: whaleTrader,
-            tokenId: tradeEvent.asset_id,
-            side: tradeEvent.side,
-            price: tradeEvent.price,
-            size: tradeEvent.size,
-            timestamp: tradeEvent.timestamp,
-            question: undefined // Will be enriched by TradeMonitorService
-        };
-        
-        this.emit('whale_trade', whaleEvent);
-        this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${tradeEvent.side} ${tradeEvent.size} @ ${tradeEvent.price}`);
     }
 }

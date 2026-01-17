@@ -83,7 +83,7 @@ export class WebSocketManager extends EventEmitter {
         private adapter: IExchangeAdapter | null = null
     ) {
         super();
-        this.setMaxListeners(300); // Increased to handle multiple bot instances and prevent memory leak warnings
+        this.setMaxListeners(1500); // Increased to handle multiple bot instances and prevent memory leak warnings
     }
 
     /**
@@ -287,6 +287,13 @@ export class WebSocketManager extends EventEmitter {
                 const authHeaders = this.adapter && typeof (this.adapter as any).getAuthHeaders === 'function'
                     ? (this.adapter as any).getAuthHeaders()
                     : {};
+                    
+                // Verify all 3 fields exist
+                if (!authHeaders.apiKey || !authHeaders.secret || !authHeaders.passphrase) {
+                    this.logger.error('❌ Missing auth credentials for user channel');
+                    this.logger.error(`Missing fields: ${!authHeaders.apiKey ? 'apiKey ' : ''}${!authHeaders.secret ? 'secret ' : ''}${!authHeaders.passphrase ? 'passphrase' : ''}`);
+                    return;
+                }
                     
                 this.logger.debug(`Sending auth message: ${JSON.stringify(authHeaders)}`);
                 

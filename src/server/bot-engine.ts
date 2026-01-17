@@ -177,12 +177,22 @@ export class BotEngine extends EventEmitter {
         
         // Initialize ArbitrageScanner with GLOBAL intelligence WebSocket
         this.arbScanner = new MarketMakingScanner(
-            this.intelligence, // Use GLOBAL intelligence
             this.exchange,
             this.logger,
-            this.executor,
-            this.intelligence.wsManager!, // GLOBAL Orderbook Feed
-            this.flashMoveService
+            {
+                minSpreadCents: 1,
+                maxSpreadCents: 15,
+                minVolume: 5000,
+                minLiquidity: 1000,
+                preferRewardMarkets: true,
+                preferNewMarkets: true,
+                newMarketAgeMinutes: 60,
+                refreshIntervalMs: 300000,
+                priceMoveThresholdPct: 5,
+                maxInventoryPerToken: 500,
+                autoMergeThreshold: 100,
+                enableKillSwitch: true
+            }
         );
         
         // Set active positions from config if provided
@@ -519,7 +529,7 @@ export class BotEngine extends EventEmitter {
             return {
                 moneyMarkets: {
                     enabled: this.config.enableMoneyMarkets,
-                    running: this.arbScanner?.isScanning || false
+                    running: this.arbScanner?.getIsScanning() || false
                 },
                 flashMoves: {
                     enabled: this.config.enableFomoRunner,

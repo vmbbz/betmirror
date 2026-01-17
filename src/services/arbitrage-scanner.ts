@@ -413,7 +413,7 @@ export class MarketMakingScanner extends EventEmitter {
 
             this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new)`);
 
-            if (newTokenIds.length > 0 && this.ws?.readyState === 1) {
+            if (newTokenIds.length > 0 && this.externalWsManager) {
                 this.subscribeToTokens(newTokenIds);
             }
 
@@ -927,21 +927,22 @@ export class MarketMakingScanner extends EventEmitter {
         const assetIds = Array.from(this.trackedMarkets.keys());
         if (assetIds.length === 0) return;
         
-        const subscribeMsg = {
-            type: 'market',
-            assets_ids: assetIds,
-            custom_feature_enabled: true,
-            initial_dump: true  // Request initial orderbook state
-        };
-
-        this.externalWsManager.subscribeToTokens(assetIds);
+        // Subscribe to each token individually using the correct method
+        assetIds.forEach(tokenId => {
+            this.externalWsManager.subscribeToToken(tokenId);
+        });
+        
         this.logger.info(`📡 Subscribed to ${assetIds.length} tokens with initial orderbook dump`);
     }
 
     private subscribeToTokens(tokenIds: string[]) {
         if (!this.externalWsManager || tokenIds.length === 0) return;
 
-        this.externalWsManager.subscribeToTokens(tokenIds);
+        // Subscribe to each token individually using the correct method
+        tokenIds.forEach(tokenId => {
+            this.externalWsManager.subscribeToToken(tokenId);
+        });
+        
         this.logger.debug(`📡 Subscribed to ${tokenIds.length} additional tokens`);
     }
 
@@ -1083,7 +1084,7 @@ export class MarketMakingScanner extends EventEmitter {
             }
         }
 
-        if (assetIds.length > 0 && this.ws?.readyState === 1) {
+        if (assetIds.length > 0 && this.externalWsManager) {
             this.subscribeToTokens(assetIds);
             this.logger.success(`✨ Subscribed to new market: ${question.slice(0, 50)}...`);
         }

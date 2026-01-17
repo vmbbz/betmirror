@@ -276,8 +276,11 @@ export class WebSocketManager extends EventEmitter {
             this.logger.info(`🔌 Connecting to User Channel: ${wsUrl}`);
 
             // Get auth headers from adapter
-            const headers = (this.adapter as any).getAuthHeaders?.() || {};
+            const headers = this.adapter && typeof (this.adapter as any).getAuthHeaders === 'function'
+                ? (this.adapter as any).getAuthHeaders()
+                : {};
             
+            this.logger.debug(`Auth headers for user channel: ${JSON.stringify(headers)}`);
             this.userWs = new WebSocket(wsUrl, { headers });
 
             // FIX: Use .on for Node.js WebSocket

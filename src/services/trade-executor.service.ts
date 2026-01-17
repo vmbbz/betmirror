@@ -77,16 +77,18 @@ export interface QuoteResult {
 
 export class TradeExecutorService {
   private readonly deps: TradeExecutorDeps;
-  
   private balanceCache: Map<string, { value: number; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 5 * 60 * 1000; 
   
+  // ACCOUNTING CORE: Tracks capital in transit
   private pendingSpend = 0;
   private pendingOrders: Map<string, { amount: number; timestamp: number }> = new Map();
-
-  // WebSocket fill state - using centralized manager
-  private isWsRunning = false;
   private inventory = new Map<string, number>();
+  private isListening = false;
+  private isWsRunning = false;
+  private fillListener?: (fill: any) => void; // Store listener reference
+  private readonly CACHE_TTL = 5 * 60 * 1000;
+  private readonly PENDING_ORDER_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+  private cleanupInterval?: NodeJS.Timeout; 
 
   /**
    * Update the pending spend amount for buy orders
@@ -178,21 +180,82 @@ export class TradeExecutorService {
   }
 
   /**
-   * Start the executor and connect to WebSocket fills
-   * This should be called after the WebSocket manager is started
+   * Starts the accounting engine by wiring listeners to the Private WebSocket.
    */
   public async start(): Promise<void> {
-    // Start fill monitor using centralized WebSocket manager
-    this.connectUserChannel();
-    this.deps.logger.success('✅ Trade Executor started');
+      if (this.isListening) return;
+      this.isListening = true;
+      
+      // Start fill monitor using centralized WebSocket manager
+      this.connectUserChannel();
+      this.setupFillAccounting();
+      
+      // Start cleanup interval for stale orders
+      this.startCleanupInterval();
+      
+      this.deps.logger.info("💰 Trade Executor: Accounting Heart Activated.");
   }
 
   /**
-   * Stop the executor and clean up WebSocket connections
+   * Stops listeners and cleans up.
    */
   public async stop(): Promise<void> {
-    this.isWsRunning = false;
-    this.deps.logger.info('🛑 Trade Executor stopped');
+    this.isListening = false;
+    
+    // Remove only our listener, not all fill listeners
+    if (this.fillListener && this.deps.wsManager) {
+      this.deps.wsManager.removeListener('fill', this.fillListener);
+      this.fillListener = undefined;
+    }
+    
+    // Stop cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = undefined;
+    }
+    
+    // Clear pending orders on stop to prevent capital lock
+    this.pendingOrders.clear();
+    this.pendingSpend = 0;
+    
+    this.deps.logger.warn('💰 Trade Executor: Accounting Heart Paused.');
+  }
+
+  /**
+   * Start periodic cleanup of stale pending orders
+   */
+  private startCleanupInterval(): void {
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupStaleOrders();
+    }, 60000); // Check every minute
+  }
+
+  /**
+   * Remove stale pending orders that have timed out
+   */
+  private cleanupStaleOrders(): void {
+    const now = Date.now();
+    const staleOrders: string[] = [];
+    
+    for (const [orderId, order] of this.pendingOrders.entries()) {
+      if (now - order.timestamp > this.PENDING_ORDER_TIMEOUT) {
+        staleOrders.push(orderId);
+      }
+    }
+    
+    if (staleOrders.length > 0) {
+      let totalReleased = 0;
+      for (const orderId of staleOrders) {
+        const order = this.pendingOrders.get(orderId);
+        if (order) {
+          totalReleased += order.amount;
+          this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
+          this.pendingOrders.delete(orderId);
+        }
+      }
+      
+      this.deps.logger.warn(`⏰ Cleaned up ${staleOrders.length} stale orders, released $${totalReleased.toFixed(2)}`);
+    }
   }
 
   private async initializeInventory() {
@@ -206,40 +269,84 @@ export class TradeExecutorService {
 
   /**
    * Connect to user channel using centralized WebSocket manager
-   * This ensures we use the centralized architecture
+   * Note: WebSocket manager should already be started by BotEngine
    */
-  private connectUserChannel() {
+  private connectUserChannel(): void {
+    if (!this.deps.wsManager) {
+      this.deps.logger.error('❌ WebSocket manager not available');
+      return;
+    }
+    
     this.isWsRunning = true;
-    
-    // Setup fill event listener from centralized manager
-    this.deps.wsManager.on('fill', (fill: any) => {
-      this.handleLiveFill(fill);
-    });
-    
     this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
+  }
+
+  private setupFillAccounting(): void {
+    if (!this.deps.wsManager) {
+      this.deps.logger.error('❌ WebSocket manager not available for fill accounting');
+      return;
+    }
+
+    // Store listener reference for clean removal
+    this.fillListener = (fill: any) => {
+      if (this.isListening) {
+        this.handleLiveFill(fill);
+      }
+    };
+    
+    this.deps.wsManager.on('fill', this.fillListener);
+    this.deps.logger.debug('🔌 Fill accounting listener registered');
   }
 
   /**
    * Handles real-time fill events from WebSocket.
    * Updates inventory and pending spend immediately.
    */
-  private handleLiveFill(fill: any) {
+  private handleLiveFill(fill: any): void {
+    try {
       const { asset_id, price, size, side, order_id } = fill;
-      const isBuy = side.toUpperCase() === 'BUY';
       
-      this.deps.logger.success(`⚡ [LIVE FILL] ${side} ${size} units of ${asset_id.slice(0,8)}... @ ${price}`);
-      
-      // 1. Update internal inventory cache immediately
-      const currentInv = this.inventory.get(asset_id) || 0;
-      this.inventory.set(asset_id, isBuy ? currentInv + size : currentInv - size);
-
-      // 2. Clear pending spend if it was a buy
-      if (isBuy) {
-          this.updatePendingSpend(0, false, order_id);
+      // Validate required fields
+      if (!asset_id || !price || !size || !side) {
+        this.deps.logger.warn('⚠️ Invalid fill event received');
+        this.deps.logger.debug(`Fill data: ${JSON.stringify(fill)}`);
+        return;
       }
-
-      // 3. Update quant position tracking for average entry and health score
-      this.updatePosition(asset_id, price, size, isBuy);
+      
+      const isBuy = side.toUpperCase() === 'BUY';
+      const tokenId = asset_id;
+      const fillSize = parseFloat(size);
+      const fillPrice = parseFloat(price);
+      
+      if (isNaN(fillSize) || isNaN(fillPrice) || fillSize <= 0 || fillPrice <= 0) {
+        this.deps.logger.warn('⚠️ Invalid fill values');
+        this.deps.logger.debug(`Fill data: ${JSON.stringify({ asset_id, price, size, side })}`);
+        return;
+      }
+      
+      this.deps.logger.success(`⚡ [FILL DETECTED] ${side} ${fillSize} units @ $${fillPrice}`);
+      
+      // 1. Update Inventory Ledger
+      const currentInv = this.inventory.get(tokenId) || 0;
+      this.inventory.set(tokenId, isBuy ? currentInv + fillSize : currentInv - fillSize);
+      
+      // 2. RELEASE Pending Capital if it was a buy
+      if (isBuy && order_id) {
+        const order = this.pendingOrders.get(order_id);
+        if (order) {
+          this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
+          this.pendingOrders.delete(order_id);
+          this.deps.logger.debug(`💰 Released $${order.amount.toFixed(2)} from pending spend.`);
+        } else {
+          this.deps.logger.debug(`ℹ️ No pending order found for ${order_id}`);
+        }
+      }
+      
+    } catch (error) {
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      this.deps.logger.error('❌ Error processing fill event', errorObj);
+      this.deps.logger.debug(`Fill data: ${JSON.stringify(fill)}`);
+    }
   }
 
   /**

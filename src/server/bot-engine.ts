@@ -211,22 +211,66 @@ export class BotEngine extends EventEmitter {
         try {
             this.addLog('info', 'Authenticating vault and initializing services...');
             
+            // Initialize exchange and authentication
             await this.exchange.initialize();
             await this.exchange.authenticate();
             
-            // Start private fill monitor
-            await this.privateWsManager.start();
+            // Start private fill monitor with error handling
+            try {
+                await this.privateWsManager.start();
+                this.addLog('success', 'Private WebSocket connected');
+            } catch (wsError) {
+                const error = wsError instanceof Error ? wsError : new Error(String(wsError));
+                this.logger.error('❌ Failed to start private WebSocket', error);
+                throw new Error(`WebSocket connection failed: ${error.message}`);
+            }
             
             // Start trade executor after WebSocket is ready
-            await this.executor.start();
+            try {
+                await this.executor.start();
+                this.addLog('success', 'Trade executor accounting activated');
+            } catch (executorError) {
+                const error = executorError instanceof Error ? executorError : new Error(String(executorError));
+                this.logger.error('❌ Failed to start trade executor', error);
+                throw new Error(`Trade executor failed: ${error.message}`);
+            }
             
             // Sync initial state
-            await this.portfolioTracker.syncPositions(true);
+            try {
+                await this.portfolioTracker.syncPositions(true);
+                this.addLog('success', 'Portfolio positions synchronized');
+            } catch (syncError) {
+                const error = syncError instanceof Error ? syncError : new Error(String(syncError));
+                this.logger.error('❌ Portfolio sync failed, stopping...', error);
+                throw error;
+            }
             
-            // Start strategy modules based on config
-            if (this.config.enableCopyTrading) await this.monitor.start();
-            if (this.config.enableMoneyMarkets) await this.arbScanner.start();
-            if (this.config.enableFomoRunner) this.flashMoveService.setEnabled(true);
+            // Start strategy modules based on config with individual error handling
+            const strategyStarts = [];
+            
+            if (this.config.enableCopyTrading) {
+                strategyStarts.push(
+                    this.monitor.start()
+                        .then(() => this.addLog('success', 'Copy trading enabled'))
+                        .catch(error => this.addLog('error', `Copy trading failed: ${error}`))
+                );
+            }
+            
+            if (this.config.enableMoneyMarkets) {
+                strategyStarts.push(
+                    this.arbScanner.start()
+                        .then(() => this.addLog('success', 'Money markets enabled'))
+                        .catch(error => this.addLog('error', `Money markets failed: ${error}`))
+                );
+            }
+            
+            if (this.config.enableFomoRunner) {
+                this.flashMoveService.setEnabled(true);
+                this.addLog('success', 'Flash moves enabled');
+            }
+            
+            // Wait for all strategy startups to complete (or fail)
+            await Promise.allSettled(strategyStarts);
 
             this.logger.success(`✅ Bot online for user ${this.config.userId}`);
             this.addLog('success', 'Execution engine online. Monitoring signals...');
@@ -236,6 +280,16 @@ export class BotEngine extends EventEmitter {
             this.logger.error(`❌ Failed to start bot engine: ${error}`);
             this.addLog('error', `Startup failed: ${error}`);
             this.isRunning = false;
+            
+            // Cleanup on failure
+            try {
+                await this.executor.stop();
+                await this.privateWsManager.stop();
+            } catch (cleanupError) {
+                const error = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+                this.logger.error('Cleanup failed', error);
+            }
+            
             throw error;
         }
     }

@@ -97,14 +97,14 @@ setInterval(async () => {
             price: whaleEvent.price,
             size: whaleEvent.size,
             timestamp: whaleEvent.timestamp,
-            question: 'Whale Trade Detected'
+            question: whaleEvent.question || 'Unknown Market'
         });
         serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
     });
     
     // Broadcast flash moves from global intelligence
     globalIntelligence.on('flash_move', (flashEvent) => {
-        io.emit('FLASH_MOVE_DETECTED', flashEvent);
+        io.emit('flash_move_detected', flashEvent);
         serverLogger.info(`[GLOBAL FLASH] ${flashEvent.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.question?.slice(0, 30)}...`);
     });
 

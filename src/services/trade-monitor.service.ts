@@ -111,6 +111,17 @@ export class TradeMonitorService {
     // FIXED: Added explicit dashboard log for visual feedback
     this.deps.logger.info(`🚨 [WHALE MATCH] ${event.trader.slice(0, 10)}... traded ${event.side} @ ${event.price}`);
 
+    // Emit whale_detected event for server to forward to frontend
+    (this as any).emit('whale_detected', {
+        trader: event.trader,
+        tokenId: event.tokenId,
+        side: event.side,
+        price: event.price,
+        size: event.size,
+        timestamp: event.timestamp,
+        question: event.question || 'Unknown Market'
+    });
+
     const signal: TradeSignal = {
       trader: event.trader,
       marketId: "resolved_by_adapter",

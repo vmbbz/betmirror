@@ -32,7 +32,7 @@ export class MarketIntelligenceService extends EventEmitter {
 
     constructor(public logger: Logger, public wsManager?: WebSocketManager, private flashMoveService?: FlashMoveService) {
         super();
-        this.setMaxListeners(100); 
+        this.setMaxListeners(200); // Increased to handle multiple bot instances
         this.startJanitor();
         
         // Initialize Flash Move Service

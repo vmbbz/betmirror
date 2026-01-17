@@ -169,6 +169,8 @@ export class PolymarketAdapter implements IExchangeAdapter {
             this.logger,
             this.safeAddress 
         );
+        
+        this.safeManager = safeManager; // CRITICAL: Set the safeManager instance
 
         this.provider = new JsonRpcProvider(this.config.rpcUrl);
         const USDC_ABI_INTERNAL = [

@@ -424,6 +424,7 @@ export class MarketMakingScanner extends EventEmitter {
             await this.debugApiResponse();
 
             // STREAMLINED DISCOVERY: Try sampling markets first (has all fields including rewards)
+            // Per docs: ALL sampling markets are reward-eligible by definition
             const usedSampling = await this.discoverFromSamplingMarkets();
 
             if (!usedSampling || this.trackedMarkets.size < 50) {
@@ -488,6 +489,10 @@ export class MarketMakingScanner extends EventEmitter {
         this.logger.info('🔄 [Forced Refresh] Manually triggering market discovery...');
         await this.refreshMarkets();
     }
+
+    // ============================================================
+    // WEBSOCKET SETUP - CENTRALIZED MANAGER
+    // ============================================================
 
     /**
      * Setup WebSocket listeners for centralized manager
@@ -603,7 +608,10 @@ export class MarketMakingScanner extends EventEmitter {
                     isYesToken: outcomes[i]?.toLowerCase() === 'yes' || i === 0,
                     pairedTokenId: assetIds[i === 0 ? 1 : 0],
                     status: 'active',
-                    acceptingOrders: true
+                    acceptingOrders: true,
+                    // New markets from WebSocket are potentially reward-eligible
+                    // Will be confirmed on next refresh from sampling endpoint
+                    featured: false
                 });
 
                 // Also subscribe via intelligence service for redundancy
@@ -675,15 +683,11 @@ export class MarketMakingScanner extends EventEmitter {
             this.logger.debug(`Delegating flash move detection to FlashMoveService for token ${event.asset_id}`);
         }
     }
- 
-    // ============================================================
-    // DISCOVERY - SAMPLING MARKETS (PRIMARY - CLOB API)
-    // Returns markets with active liquidity rewards
-    // ============================================================
 
     // ============================================================
     // DISCOVERY - SAMPLING MARKETS (PRIMARY - CLOB API)
-    // Returns markets with ACTIVE LIQUIDITY REWARDS
+    // Per docs: ALL sampling markets are reward-eligible by definition
+    // The endpoint ONLY returns markets being actively sampled for liquidity rewards
     // ============================================================
 
     private async discoverFromSamplingMarkets(): Promise<boolean> {
@@ -695,76 +699,161 @@ export class MarketMakingScanner extends EventEmitter {
                 return false;
             }
 
-            this.logger.info(`🎯 Processing ${sampling.data.length} sampling markets (reward-eligible)`);
+            // CRITICAL: ALL sampling markets are reward-eligible by definition
+            // The endpoint ONLY returns markets being actively sampled for liquidity rewards
+            this.logger.info(`🎯 Processing ${sampling.data.length} sampling markets (ALL are reward-eligible)`);
+            
             const tokenIds: string[] = [];
+            let skippedClosed = 0;
+            let skippedArchived = 0;
+            let skippedNotAccepting = 0;
+            let skippedInvalidTokens = 0;
+            let updatedExisting = 0;
 
             for (const market of sampling.data) {
-                if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) break;
+                // Respect market cap
+                if (this.trackedMarkets.size >= this.MAX_TRACKED_MARKETS) {
+                    this.logger.info(`📊 Reached max tracked markets cap: ${this.MAX_TRACKED_MARKETS}`);
+                    break;
+                }
 
-                // Per docs: Market interface from CLOB
+                // Per docs: Market interface from CLOB uses condition_id
                 const conditionId = market.condition_id;
                 const tokens = market.tokens || [];
 
-                // Skip invalid markets
-                if (!conditionId || tokens.length < 2) continue;
-                if (market.closed === true) continue;
-                if (market.archived === true) continue;
-                if (market.accepting_orders === false) continue;
+                // Validate market has required fields
+                if (!conditionId) {
+                    continue;
+                }
+                
+                if (tokens.length < 2) {
+                    skippedInvalidTokens++;
+                    continue;
+                }
 
-                // All sampling markets have rewards - that's why they're in this endpoint
-                const hasRewards = !!(market.rewards?.max_spread && market.rewards?.min_size);
+                // Skip closed markets
+                if (market.closed === true) {
+                    skippedClosed++;
+                    continue;
+                }
 
+                // Skip archived markets
+                if (market.archived === true) {
+                    skippedArchived++;
+                    continue;
+                }
+
+                // Skip markets not accepting orders
+                // Cast to boolean to handle potential undefined/null
+                const isAcceptingOrders = Boolean(market.accepting_orders);
+                if (!isAcceptingOrders) {
+                    skippedNotAccepting++;
+                    continue;
+                }
+
+                // Extract reward parameters if present (for spread/size requirements)
+                // Use nullish coalescing to preserve 0 values which are valid
+                // Per docs: rewards { max_spread, min_size, rates }
+                const rewardsMaxSpread = market.rewards?.max_spread ?? undefined;
+                const rewardsMinSize = market.rewards?.min_size ?? undefined;
+
+                // Process each token in the market
                 for (let i = 0; i < tokens.length; i++) {
                     const token = tokens[i];
+                    
                     // Per docs: MarketToken { token_id, outcome, price, winner }
                     const tokenId = token.token_id;
 
-                    if (!tokenId || this.trackedMarkets.has(tokenId)) continue;
+                    if (!tokenId) {
+                        continue;
+                    }
+                    
+                    if (this.trackedMarkets.has(tokenId)) {
+                        // Update existing market with latest info
+                        const existing = this.trackedMarkets.get(tokenId)!;
+                        existing.rewardsMaxSpread = rewardsMaxSpread;
+                        existing.rewardsMinSize = rewardsMinSize;
+                        // CRITICAL: ALL sampling markets are featured/reward-eligible
+                        existing.featured = true;
+                        existing.acceptingOrders = isAcceptingOrders;
+                        existing.status = 'active';
+                        updatedExisting++;
+                        continue;
+                    }
 
-                    const price = typeof token.price === 'number' ? token.price : 0.5;
+                    // Parse price - handle number, string, or default to 0.5
+                    let price = 0.5;
+                    if (typeof token.price === 'number') {
+                        price = token.price;
+                    } else if (typeof token.price === 'string') {
+                        price = parseFloat(token.price) || 0.5;
+                    }
+                    
+                    // Determine if this is the YES token
                     const isYesToken = token.outcome?.toLowerCase() === 'yes' || i === 0;
+                    
+                    // Get paired token ID
                     const pairedToken = tokens[i === 0 ? 1 : 0];
+                    const pairedTokenId = pairedToken?.token_id;
 
+                    // Calculate initial bid/ask from price
+                    const initialBid = Math.max(0.01, price - 0.01);
+                    const initialAsk = Math.min(0.99, price + 0.01);
+
+                    // Create tracked market entry
                     this.trackedMarkets.set(tokenId, {
                         conditionId,
                         tokenId,
-                        question: market.question || market.description || 'Unknown',
+                        question: market.question || market.description || `Market ${conditionId.slice(0, 10)}...`,
                         image: market.image || market.icon || '',
                         marketSlug: market.market_slug || '',
-                        bestBid: Math.max(0.01, price - 0.01),
-                        bestAsk: Math.min(0.99, price + 0.01),
-                        spread: 0.02,
-                        volume: 0, // Fetch from Gamma if needed
-                        liquidity: 0, // Fetch from Gamma if needed
+                        bestBid: initialBid,
+                        bestAsk: initialAsk,
+                        spread: initialAsk - initialBid,
+                        volume: 0,
+                        liquidity: 0,
                         isNewMarket: false,
                         discoveredAt: Date.now(),
-                        // Per docs: rewards { max_spread, min_size, rates }
-                        rewardsMaxSpread: market.rewards?.max_spread,
-                        rewardsMinSize: market.rewards?.min_size,
+                        rewardsMaxSpread: rewardsMaxSpread,
+                        rewardsMinSize: rewardsMinSize,
                         isYesToken,
-                        pairedTokenId: pairedToken?.token_id,
-                        status: market.closed ? 'closed' : 'active',
-                        acceptingOrders: market.accepting_orders === true,
-                        // Per docs: minimum_order_size, minimum_tick_size
-                        orderMinSize: market.minimum_order_size,
-                        orderPriceMinTickSize: market.minimum_tick_size,
-                        category: market.tags?.[0] || '',
-                        // Sampling markets = reward-eligible = "featured" for MM purposes
-                        featured: hasRewards
+                        pairedTokenId,
+                        status: 'active',
+                        acceptingOrders: isAcceptingOrders,
+                        orderMinSize: market.minimum_order_size ?? 5,
+                        orderPriceMinTickSize: market.minimum_tick_size ?? 0.01,
+                        category: Array.isArray(market.tags) && market.tags.length > 0 
+                            ? market.tags[0] 
+                            : undefined,
+                        featured: true
                     });
 
                     tokenIds.push(tokenId);
                 }
             }
 
+            // Subscribe to all discovered tokens via WebSocket
             if (tokenIds.length > 0) {
                 this.subscribeToTokens(tokenIds);
             }
 
+            // Comprehensive logging
+            this.logger.info(`📊 Sampling discovery stats:`);
+            this.logger.info(`   ✅ New reward-eligible tokens added: ${tokenIds.length}`);
+            this.logger.info(`   🔄 Existing tokens updated: ${updatedExisting}`);
+            this.logger.info(`   ⏭️ Skipped (closed): ${skippedClosed}`);
+            this.logger.info(`   ⏭️ Skipped (archived): ${skippedArchived}`);
+            this.logger.info(`   ⏭️ Skipped (not accepting): ${skippedNotAccepting}`);
+            this.logger.info(`   ⏭️ Skipped (invalid tokens): ${skippedInvalidTokens}`);
+            this.logger.info(`   📈 Total tracked markets: ${this.trackedMarkets.size}`);
+            
             this.logger.success(`✅ Loaded ${tokenIds.length} reward-eligible tokens from ${sampling.data.length} sampling markets`);
-            return tokenIds.length > 0;
+            
+            return tokenIds.length > 0 || updatedExisting > 0;
         } catch (error) {
-            this.logger.warn(`Sampling markets failed: ${error}`);
+            const err = error instanceof Error ? error : new Error(String(error));
+            this.logger.warn(`Sampling markets discovery failed: ${err.message}`);
+            this.logger.debug(`Stack trace: ${err.stack}`);
             return false;
         }
     }
@@ -920,8 +1009,12 @@ export class MarketMakingScanner extends EventEmitter {
         const category = this.extractCategory(event, market);
         
         // Check for rewards (Gamma uses rewardsMaxSpread/rewardsMinSize)
-        const hasRewards = !!(market.rewardsMaxSpread && market.rewardsMinSize);
-        // Featured from event or market level
+        // Use nullish coalescing to handle 0 values correctly
+        const rewardsMaxSpread = market.rewardsMaxSpread ?? market.rewards_max_spread ?? undefined;
+        const rewardsMinSize = market.rewardsMinSize ?? market.rewards_min_size ?? undefined;
+        const hasRewards = rewardsMaxSpread !== undefined && rewardsMinSize !== undefined;
+        
+        // Featured from event or market level, or if has rewards
         const isFeatured = market.featured === true || event.featured === true || hasRewards;
 
         for (let i = 0; i < tokenIds.length; i++) {
@@ -934,7 +1027,13 @@ export class MarketMakingScanner extends EventEmitter {
                 existing.liquidity = liquidity;
                 existing.acceptingOrders = acceptingOrders;
                 existing.volume24hr = volume24hr;
+                // Don't override featured=true from sampling endpoint
                 existing.featured = existing.featured || isFeatured;
+                // Update rewards if we have them from Gamma
+                if (hasRewards) {
+                    existing.rewardsMaxSpread = rewardsMaxSpread;
+                    existing.rewardsMinSize = rewardsMinSize;
+                }
 
                 if (outcomePrices?.[i]) {
                     const price = this.parseNumber(outcomePrices[i]);
@@ -973,8 +1072,8 @@ export class MarketMakingScanner extends EventEmitter {
                 liquidity,
                 isNewMarket: market.new === true || this.isRecentlyCreated(market.createdAt),
                 discoveredAt: Date.now(),
-                rewardsMaxSpread: market.rewardsMaxSpread || market.rewards_max_spread,
-                rewardsMinSize: market.rewardsMinSize || market.rewards_min_size,
+                rewardsMaxSpread: rewardsMaxSpread,
+                rewardsMinSize: rewardsMinSize,
                 isYesToken,
                 pairedTokenId,
                 status: market.closed ? 'closed' : 'active',
@@ -993,51 +1092,55 @@ export class MarketMakingScanner extends EventEmitter {
         return result;
     }
 
-    
     private async refreshMarkets(): Promise<void> {
+        // Primary: Sampling markets (all reward-eligible)
         const usedSampling = await this.discoverFromSamplingMarkets();
+        
+        // Fallback: Gamma API for volume/liquidity data
         if (!usedSampling || this.trackedMarkets.size < 50) {
             await this.discoverFromCategories();
         }
+        
+        // Update opportunities after refresh
         this.updateOpportunities();
     }
- 
+
     // ============================================================
     // FLASH MOVE TRADE EXECUTION - DELEGATED TO FLASH MOVE SERVICE
     // Per docs: FAK (Fill-And-Kill) for partial fills
     // ============================================================
     // Flash move execution is now handled by FlashMoveService
     // This removes duplicate logic and uses unified detection/execution system
- 
+
     // ============================================================
     // OPPORTUNITY EVALUATION
     // ============================================================
- 
+
     private evaluateOpportunity(market: TrackedMarket): void {
         // Price validation
         if (market.bestBid <= 0 || market.bestAsk <= 0 || market.bestAsk <= market.bestBid) {
             return;
         }
- 
+
         // Status validation
         if (market.status !== 'active' || !market.acceptingOrders) {
             return;
         }
- 
+
         // Calculate metrics
         const spread = market.spread;
         const midpoint = (market.bestBid + market.bestAsk) / 2;
         const spreadCents = spread * 100;
         const spreadPct = midpoint > 0 ? (spread / midpoint) * 100 : 0;
- 
+
         // Spread filters
         if (spreadCents < this.config.minSpreadCents) return;
         if (spreadCents > this.config.maxSpreadCents) return;
- 
+
         // Check if still "new"
         const ageMinutes = (Date.now() - market.discoveredAt) / (1000 * 60);
         const isStillNew = market.isNewMarket && ageMinutes < this.config.newMarketAgeMinutes;
- 
+
         // Build opportunity
         const opportunity: MarketOpportunity = {
             marketId: market.conditionId,
@@ -1072,10 +1175,10 @@ export class MarketMakingScanner extends EventEmitter {
             lastPriceMovePct: (market as any).lastPriceMovePct,
             isVolatile: (market as any).isVolatile
         };
- 
+
         // Always update monitored list
         this.monitoredMarkets.set(market.tokenId, opportunity);
- 
+
         // Apply volume/liquidity filters for actionable opportunities
         const effectiveMinVolume = isStillNew
             ? Math.max(10, this.config.minVolume * 0.01)  
@@ -1087,11 +1190,11 @@ export class MarketMakingScanner extends EventEmitter {
         
         if (market.volume < effectiveMinVolume) return;
         if (market.liquidity < effectiveMinLiquidity) return;
- 
+
         // Update opportunities list
         this.updateOpportunitiesInternal(opportunity);
     }
- 
+
     private updateOpportunitiesInternal(opp: MarketOpportunity): void {
         const existingIdx = this.opportunities.findIndex(o => o.tokenId === opp.tokenId);
         if (existingIdx !== -1) {
@@ -1099,13 +1202,17 @@ export class MarketMakingScanner extends EventEmitter {
         } else {
             this.opportunities.push(opp);
         }
- 
+
         // Queue for batch DB write
         this.queueDbWrite(opp);
- 
-        // Sort: new markets first, then by spread
+
+        // Sort: featured/reward markets first, then new markets, then by spread
         this.opportunities.sort((a, b) => {
+            // Featured (reward-eligible) markets first
+            if (a.featured !== b.featured) return a.featured ? -1 : 1;
+            // Then new markets
             if (a.isNewMarket !== b.isNewMarket) return a.isNewMarket ? -1 : 1;
+            // Then by spread (higher spread = more opportunity)
             return b.spreadCents - a.spreadCents;
         });
 
@@ -1174,6 +1281,8 @@ export class MarketMakingScanner extends EventEmitter {
                     this.logger.info(`clobTokenIds: ${JSON.stringify(this.parseJsonArray(m.clobTokenIds))}`);
                     this.logger.info(`Volume: ${m.volume || m.volumeNum}`);
                     this.logger.info(`AcceptingOrders: ${m.acceptingOrders}`);
+                    this.logger.info(`RewardsMaxSpread: ${m.rewardsMaxSpread}`);
+                    this.logger.info(`RewardsMinSize: ${m.rewardsMinSize}`);
                 }
             }
 

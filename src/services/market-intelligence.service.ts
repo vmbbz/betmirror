@@ -38,14 +38,41 @@ export class MarketIntelligenceService extends EventEmitter {
         // Initialize Flash Move Service
         this.flashMoveService = flashMoveService;
         
-        // CRITICAL: Forward whale_trade events from WebSocketManager
-        if (this.wsManager) {
-            this.wsManager.on('whale_trade', (event) => {
-                this.emit('whale_trade', event);
+        // If FlashMoveService is provided, forward its events
+        if (this.flashMoveService) {
+            this.flashMoveService.on('flash_move_detected', (event) => {
+                this.emit('flash_move_detected', event);
             });
         }
         
-        this.logger.info('🔌 Initializing Master Intelligence Pipeline...');
+        // CRITICAL: Setup event routing from WebSocketManager to appropriate services
+        if (this.wsManager) {
+            // Route whale trades to TradeMonitorService consumers
+            this.wsManager.on('whale_trade', (event) => {
+                this.emit('whale_trade', event);
+            });
+            
+            // Route price updates to FlashDetectionService
+            this.wsManager.on('price_update', (event) => {
+                this.emit('price_update', event);
+            });
+            
+            // Route trade events to FlashDetectionService for volume analysis
+            this.wsManager.on('trade', (event) => {
+                this.emit('trade', event);
+            });
+            
+            // Route market events to appropriate handlers
+            this.wsManager.on('new_market', (event) => {
+                this.emit('new_market', event);
+            });
+            
+            this.wsManager.on('market_resolved', (event) => {
+                this.emit('market_resolved', event);
+            });
+        }
+        
+        this.logger.info('🔌 Initializing Master Intelligence Pipeline as Event Router...');
     }
 
     /**

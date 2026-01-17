@@ -121,9 +121,9 @@ export class BotEngine extends EventEmitter {
             wsManager: this.privateWsManager
         });
         
-        // Initialize Flash Move Service with GLOBAL intelligence WebSocket
+        // Initialize Flash Move Service with MarketIntelligenceService (event router)
         this.flashMoveService = new FlashMoveService(
-            this.intelligence.wsManager!, // GLOBAL Price Feed
+            this.intelligence, // MarketIntelligenceService as event router
             DEFAULT_FLASH_MOVE_CONFIG,
             this.executor,
             this.logger

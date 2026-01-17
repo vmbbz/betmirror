@@ -17,6 +17,7 @@ import {
   RiskAssessment,
   PortfolioRiskMetrics 
 } from './flash-risk.service.js';
+import { MarketIntelligenceService } from './market-intelligence.service.js';
 import axios from 'axios';
 
 // Re-export interfaces for other services
@@ -45,7 +46,7 @@ export class FlashMoveService extends EventEmitter {
   private riskManager: FlashRiskManager;
   
   constructor(
-    private wsManager: WebSocketManager,
+    private marketIntelligence: MarketIntelligenceService,
     private config: FlashMoveConfig,
     private tradeExecutor: any, // Accept trade executor as dependency
     private logger: Logger
@@ -98,19 +99,14 @@ export class FlashMoveService extends EventEmitter {
    * Setup WebSocket listeners for price and trade data
    */
   private setupWebSocketListeners(): void {
-    // Listen to price updates for detection
-    this.wsManager.on('price_update', (event) => {
-      this.handlePriceUpdate(event.tokenId, event.price);
+    // Listen to price updates from MarketIntelligenceService (event router)
+    this.marketIntelligence.on('price_update', (event) => {
+      this.handlePriceUpdate(event.asset_id, event.price);
     });
     
-    // Listen to trade events for volume analysis
-    this.wsManager.on('trade', (event) => {
+    // Listen to trade events from MarketIntelligenceService for volume analysis
+    this.marketIntelligence.on('trade', (event) => {
       this.handleTradeEvent(event);
-    });
-    
-    // Listen to last trade price for additional detection
-    this.wsManager.on('last_trade_price', (event) => {
-      this.handleLastTradePrice(event);
     });
   }
   
@@ -146,26 +142,6 @@ export class FlashMoveService extends EventEmitter {
       );
     } catch (error) {
       this.logger.error(`❌ Error processing trade event for ${event.token_id}: ${error}`);
-    }
-  }
-  
-  /**
-   * Handle last trade price events
-   */
-  private async handleLastTradePrice(event: any): Promise<void> {
-    if (!this.isEnabled) return;
-    
-    try {
-      const flashMove = await this.detectionEngine.detectFlashMove(
-        event.asset_id, 
-        event.price
-      );
-      
-      if (flashMove) {
-        await this.processFlashMove(flashMove);
-      }
-    } catch (error) {
-      this.logger.error(`❌ Error processing last trade price for ${event.asset_id}: ${error}`);
     }
   }
   

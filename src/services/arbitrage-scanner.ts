@@ -973,24 +973,6 @@ export class MarketMakingScanner extends EventEmitter {
                 this.handleBestBidAsk(msg);
                 break;
             case 'book':
-                this.handleBookUpdate(msg);
-                break;
-            case 'new_market':
-                this.handleNewMarket(msg);
-                break;
-            case 'price_change':
-                this.handlePriceChange(msg);
-                break;
-            case 'last_trade_price':
-                this.handleLastTradePrice(msg);
-                break;
-            case 'market_resolved':
-                this.handleMarketResolved(msg);
-                break;
-            case 'tick_size_change':
-                this.handleTickSizeChange(msg);
-                break;
-            default:
                 this.logger.debug(`Unhandled message type: ${msg.event_type || 'unknown'} - ${JSON.stringify(msg)}`);
         }
     }
@@ -1104,44 +1086,6 @@ export class MarketMakingScanner extends EventEmitter {
 
             this.evaluateOpportunity(market);
         }
-    }
-
-    private handleLastTradePrice(msg: any) {
-        const tokenId = msg.asset_id;
-        const price = parseFloat(msg.price);
-        const market = this.trackedMarkets.get(tokenId);
-        
-        if (!market) return;
-
-        const lastMid = this.lastMidpoints.get(tokenId);
-        
-        if (lastMid && lastMid > 0) {
-            const movePct = Math.abs(price - lastMid) / lastMid * 100;
-
-            // Update market volatility state
-            (market as any).lastPriceMovePct = movePct;
-            (market as any).isVolatile = movePct > this.config.priceMoveThresholdPct;
-
-            if (movePct > this.config.priceMoveThresholdPct) {
-                this.logger.warn(`🔴 FLASH MOVE DETECTED: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
-                
-                // Instead of killing the bot, we emit a specific alert event
-                this.emit('volatilityAlert', { 
-                    tokenId: market.tokenId, 
-                    question: market.question,
-                    movePct, 
-                    timestamp: Date.now() 
-                });
-
-                // We only trigger kill switch if move is extreme (e.g. > 25%) 
-                // and user has enabled the safety feature
-                if (this.config.enableKillSwitch && movePct > 25) {
-                    this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
-                }
-            }
-        }
-
-        this.lastMidpoints.set(tokenId, price);
     }
 
     private handleMarketResolved(msg: any) {

@@ -22,6 +22,7 @@ import { ActivePosition } from '../domain/trade.types.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import { WebSocketManager } from '../services/websocket-manager.service.js';
 import { FlashMoveService } from '../services/flash-move.service.js';
+import { DEFAULT_FLASH_MOVE_CONFIG } from '../config/flash-move.config.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -61,6 +62,17 @@ const wsManager = new WebSocketManager(serverLogger, null);
 
 // Create global intelligence service WITH WebSocket manager
 const globalIntelligence = new MarketIntelligenceService(serverLogger, wsManager);
+
+// Create global FlashMoveService for server-level flash detection
+const globalFlashMoveService = new FlashMoveService(
+    globalIntelligence,
+    DEFAULT_FLASH_MOVE_CONFIG,
+    null, // No trade executor needed at server level
+    serverLogger
+);
+
+// Enable global flash move detection
+globalFlashMoveService.setEnabled(true);
 
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map<string, BotEngine>();
@@ -103,9 +115,9 @@ setInterval(async () => {
     });
     
     // Broadcast flash moves from global intelligence
-    globalIntelligence.on('flash_move', (flashEvent) => {
+    globalIntelligence.on('flash_move_detected', (flashEvent) => {
         io.emit('flash_move_detected', flashEvent);
-        serverLogger.info(`[GLOBAL FLASH] ${flashEvent.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.question?.slice(0, 30)}...`);
+        serverLogger.info(`[GLOBAL FLASH] ${flashEvent.event.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.event.question?.slice(0, 30)}...`);
     });
 
     currentTickIndex++;

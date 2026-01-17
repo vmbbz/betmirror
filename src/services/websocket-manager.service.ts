@@ -44,6 +44,7 @@ export interface WhaleTradeEvent {
     price: number;
     size: number;
     timestamp: number;
+    question?: string; // Optional question field for market context
 }
 
 /**
@@ -534,7 +535,7 @@ export class WebSocketManager extends EventEmitter {
     }
 
     /**
-     * Handle last trade price updates with flash move detection
+     * Handle last trade price updates
      */
     private handleLastTradePrice(msg: any): void {
         const tokenId = msg.asset_id;
@@ -542,20 +543,13 @@ export class WebSocketManager extends EventEmitter {
 
         if (!tokenId || !price) return;
 
-        // Emit price update event
+        // Emit price update event only - flash detection handled by FlashDetectionService
         const priceEvent: PriceEvent = {
             asset_id: tokenId,
             price,
             timestamp: Date.now()
         };
         this.emit('price_update', priceEvent);
-
-        // Emit flash move event for significant price changes
-        this.emit('last_trade_price', {
-            asset_id: tokenId,
-            price,
-            timestamp: Date.now()
-        });
     }
 
     /**
@@ -739,22 +733,39 @@ export class WebSocketManager extends EventEmitter {
      */
     private checkAndEmitWhaleTrade(tradeEvent: TradeEvent): void {
         const maker = tradeEvent.maker_address?.toLowerCase();
-        const taker = tradeEvent.taker_address?.toLowerCase();
-        
-        if (this.whaleWatchlist.has(maker) || this.whaleWatchlist.has(taker)) {
-            const whaleTrader = this.whaleWatchlist.has(maker) ? maker : taker;
-            
-            const whaleEvent: WhaleTradeEvent = {
-                trader: whaleTrader,
-                tokenId: tradeEvent.asset_id,
-                side: tradeEvent.side,
-                price: tradeEvent.price,
-                size: tradeEvent.size,
-                timestamp: tradeEvent.timestamp
-            };
-            
-            this.emit('whale_trade', whaleEvent);
-            this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${tradeEvent.side} ${tradeEvent.size} @ ${tradeEvent.price}`);
         }
+    }, delay);
+}
+
+/**
+ * Update whale watchlist
+ */
+public updateWhaleWatchlist(addresses: string[]): void {
+    this.whaleWatchlist = new Set(addresses.map(addr => addr.toLowerCase()));
+    this.logger.debug(`[WebSocketManager] Whale watchlist updated: ${this.whaleWatchlist.size} whales`);
+}
+
+/**
+ * Check if trade involves whale and emit whale_trade event
+ */
+private checkAndEmitWhaleTrade(tradeEvent: TradeEvent): void {
+    const maker = tradeEvent.maker_address?.toLowerCase();
+    const taker = tradeEvent.taker_address?.toLowerCase();
+    
+    if (this.whaleWatchlist.has(maker) || this.whaleWatchlist.has(taker)) {
+        const whaleTrader = this.whaleWatchlist.has(maker) ? maker : taker;
+        
+        const whaleEvent: WhaleTradeEvent = {
+            trader: whaleTrader,
+            tokenId: tradeEvent.asset_id,
+            side: tradeEvent.side,
+            price: tradeEvent.price,
+            size: tradeEvent.size,
+            timestamp: tradeEvent.timestamp,
+            question: undefined // Will be enriched by TradeMonitorService
+        };
+        
+        this.emit('whale_trade', whaleEvent);
+        this.logger.debug(`[WebSocketManager] Whale trade detected: ${whaleTrader.slice(0, 10)}... ${tradeEvent.side} ${tradeEvent.size} @ ${tradeEvent.price}`);
     }
 }

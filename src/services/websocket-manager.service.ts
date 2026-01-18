@@ -768,7 +768,7 @@ export class WebSocketManager extends EventEmitter {
      * Update whale watchlist
      */
     /**
-     * DEPRECATED: Whale tracking moved to WhaleDataPollerService
+     * DEPRECATED: Whale tracking moved to GlobalWhalePollerService
      * This method is kept for backward compatibility but no longer used.
      */
     public updateWhaleWatchlist(addresses: string[]): void {
@@ -777,7 +777,7 @@ export class WebSocketManager extends EventEmitter {
     }
 
     /**
-     * DEPRECATED: Whale tracking moved to WhaleDataPollerService using Data API
+     * DEPRECATED: Whale tracking moved to GlobalWhalePollerService using Data API
      * This method is kept for backward compatibility but whale_trade events are no longer emitted.
      */
     private checkAndEmitWhaleTrade(tradeEvent: TradeEvent): void {

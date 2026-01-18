@@ -22,7 +22,7 @@ export type TradeMonitorDeps = {
  * 
  * Performance: O(1) Discovery.
  * This service monitors user trades via WebSocket for real-time fill tracking.
- * Whale tracking has been moved to WhaleDataPollerService using Data API.
+ * Whale tracking has been moved to GlobalWhalePollerService.
  * 
  * It handles user-specific trade events and converts them into executable TradeSignals.
  */
@@ -59,7 +59,7 @@ export class TradeMonitorService {
 
   /**
    * Synchronizes the local target list for user trade monitoring.
-   * Note: Whale tracking is now handled by WhaleDataPollerService.
+   * Note: Whale tracking is now handled by GlobalWhalePollerService.
    * 
    * @param newTargets Array of wallet addresses to monitor.
    */
@@ -91,7 +91,7 @@ export class TradeMonitorService {
    * CORE LOGIC: handleUserTrade
    * 
    * This method handles user-specific trade events from WebSocket.
-   * Note: Whale tracking is now handled by WhaleDataPollerService using Data API.
+   * Note: Whale tracking is now handled by GlobalWhalePollerService using Data API.
    */
   private async handleUserTrade(event: WhaleTradeEvent) {
     if (!this.running) return;

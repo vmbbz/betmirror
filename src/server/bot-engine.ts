@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
-import { WhaleDataPollerService } from '../services/whale-data-poller.service.js';
+import { GlobalWhalePollerService } from '../services/global-whale-poller.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
 import { PortfolioService } from '../services/portfolio.service.js';
 import { BotLog, Trade, User } from '../database/index.js';
@@ -57,7 +57,7 @@ export class BotEngine extends EventEmitter {
     private callbacks: BotEngineCallbacks;
     public isRunning = false;
     private monitor: TradeMonitorService;
-    private whalePoller: WhaleDataPollerService;
+    private globalWhalePoller: GlobalWhalePollerService;
     private executor: TradeExecutorService;
     private arbScanner: MarketMakingScanner;
     private exchange: PolymarketAdapter;
@@ -173,36 +173,35 @@ export class BotEngine extends EventEmitter {
             }
         });
         
-        // NEW: Whale Data Poller using Data API
-        this.whalePoller = new WhaleDataPollerService({
-            logger: this.logger,
-            env: {} as any,
-            onDetectedTrade: async (signal) => {
-                if (this.isRunning && this.config.enableCopyTrading) {
-                    this.logger.info(`🐋 Whale Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
-                    
-                    // Emit whale event for WebSocket clients
-                    this.emit('whale_detected', {
-                        trader: signal.trader,
-                        tokenId: signal.tokenId,
-                        side: signal.side,
-                        price: signal.price,
-                        size: signal.sizeUsd / signal.price,
-                        timestamp: signal.timestamp,
-                        question: 'Unknown Market',
-                        marketSlug: null,
-                        eventSlug: null,
-                        conditionId: null
-                    });
-                    
-                    try {
-                        const res = await this.executor.copyTrade(signal);
-                        if (res.status === 'FILLED' && this.callbacks.onTradeComplete) {
-                            await this.callbacks.onTradeComplete({ ...signal, id: res.txHash, status: 'OPEN', serviceOrigin: 'WHALE_DATA' });
-                        }
-                    } catch (error) {
-                        this.logger.error(`Whale copy trade failed: ${error}`);
+        // GLOBAL Whale Data Poller - Shared instance for all bots
+        this.globalWhalePoller = GlobalWhalePollerService.getInstance(this.logger);
+        
+        // Listen for global whale events
+        this.globalWhalePoller.on('whale_trade_detected', async (signal) => {
+            if (this.isRunning && this.config.enableCopyTrading) {
+                this.logger.info(`🐋 Whale Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
+                
+                // Emit whale event for WebSocket clients
+                this.emit('whale_detected', {
+                    trader: signal.trader,
+                    tokenId: signal.tokenId,
+                    side: signal.side,
+                    price: signal.price,
+                    size: signal.sizeUsd / signal.price,
+                    timestamp: signal.timestamp,
+                    question: 'Unknown Market',
+                    marketSlug: null,
+                    eventSlug: null,
+                    conditionId: null
+                });
+                
+                try {
+                    const res = await this.executor.copyTrade(signal);
+                    if (res.status === 'FILLED' && this.callbacks.onTradeComplete) {
+                        await this.callbacks.onTradeComplete({ ...signal, id: res.txHash, status: 'OPEN', serviceOrigin: 'WHALE_DATA' });
                     }
+                } catch (error) {
+                    this.logger.error(`Whale copy trade failed: ${error}`);
                 }
             }
         });
@@ -238,7 +237,7 @@ export class BotEngine extends EventEmitter {
         if (config.activePositions) this.activePositions = config.activePositions;
         if (config.userAddresses) {
             this.monitor.updateTargets(config.userAddresses);
-            this.whalePoller.updateTargets(config.userAddresses); // NEW: Update whale poller targets
+            this.globalWhalePoller.updateTargets(config.userAddresses); // Update global whale poller targets
         }
         
         this.flashMoveService.on('flash_move_executed', async (data) => {
@@ -275,7 +274,7 @@ export class BotEngine extends EventEmitter {
             
             if (this.config.enableCopyTrading) {
                 await this.monitor.start();
-                await this.whalePoller.start(); // NEW: Start whale data polling
+                // Global whale poller is managed centrally - no individual start/stop
             }
             if (this.config.enableMoneyMarkets) await this.arbScanner.start();
             if (this.config.enableFomoRunner) this.flashMoveService.setEnabled(true);
@@ -295,7 +294,7 @@ export class BotEngine extends EventEmitter {
         try {
             // CRITICAL: Explicit cleanup to prevent memory leaks in shared intelligence hub
             await this.monitor.stop();
-            await this.whalePoller.stop(); // NEW: Stop whale data polling
+            // Global whale poller is managed centrally - no individual start/stop
             await this.arbScanner.stop();
             await this.executor.stop();
             await this.privateWsManager.stop();
@@ -317,10 +316,10 @@ export class BotEngine extends EventEmitter {
                     this.config.enableCopyTrading = enabled;
                     if (enabled) {
                         await this.monitor.start();
-                        await this.whalePoller.start(); // NEW: Start whale polling
+                        // Global whale poller is managed centrally
                     } else {
                         await this.monitor.stop();
-                        await this.whalePoller.stop(); // NEW: Stop whale polling
+                        // Global whale poller is managed centrally
                     }
                     break;
                 case 'moneymarkets':
@@ -348,7 +347,7 @@ export class BotEngine extends EventEmitter {
         return {
             copyTrading: {
                 enabled: this.config.enableCopyTrading,
-                running: this.config.enableCopyTrading && (this.monitor.isActive() || this.whalePoller.isActive()), // NEW: Include whale poller
+                running: this.config.enableCopyTrading && this.monitor.isActive(), // Only check monitor, whale poller is global
                 targets: this.config.userAddresses.length
             },
             moneyMarkets: {
@@ -455,6 +454,7 @@ export class BotEngine extends EventEmitter {
     public updateCopyTradingTargets(targets: string[]): void {
         if (this.monitor) {
             this.monitor.updateTargets(targets);
+            this.globalWhalePoller.updateTargets(targets); // Update global whale poller targets
             this.logger.info(`🎯 Copy targets synchronized: ${targets.length} wallets`);
         }
     }

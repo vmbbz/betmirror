@@ -13,6 +13,28 @@ const FlashMoveSchema = new Schema({
     image: String,
     marketSlug: String
 });
+const MarketMetadataSchema = new Schema({
+    conditionId: { type: String, required: true, unique: true, index: true },
+    question: { type: String, required: true },
+    image: String,
+    marketSlug: String,
+    eventSlug: String,
+    acceptingOrders: { type: Boolean, default: true },
+    closed: { type: Boolean, default: false },
+    rewards: {
+        max_spread: { type: Number, default: 15 },
+        min_size: { type: Number, default: 10 },
+        rates: Schema.Types.Mixed
+    },
+    tags: [Schema.Types.Mixed],
+    minimum_order_size: { type: Number, default: 5 },
+    minimum_tick_size: { type: Number, default: 0.01 },
+    lastPrice: Number,
+    volume24h: Number,
+    liquidity: Number,
+    updatedAt: { type: Date, default: Date.now },
+    createdAt: { type: Date, default: Date.now }
+});
 const SportsMatchSchema = new Schema({
     matchId: { type: String, required: true, unique: true },
     conditionId: { type: String, required: true, index: true },
@@ -229,6 +251,7 @@ export const DepositLog = mongoose.model('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model('BotLog', BotLogSchema);
 export const FlashMove = mongoose.model('FlashMove', FlashMoveSchema);
 export const MoneyMarketOpportunity = mongoose.model('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
+export const MarketMetadata = mongoose.model('MarketMetadata', MarketMetadataSchema);
 export const SportsMatch = mongoose.model('SportsMatch', SportsMatchSchema);
 // --- Connection ---
 export const connectDB = async () => {

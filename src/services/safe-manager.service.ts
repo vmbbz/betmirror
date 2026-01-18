@@ -1,4 +1,5 @@
 import { Wallet, Interface, Contract, ethers, JsonRpcProvider } from 'ethers';
+import { ProviderFactory } from './provider-factory.service.js';
 import { RelayClient, SafeTransaction, OperationType } from '@polymarket/builder-relayer-client';
 import { deriveSafe } from '@polymarket/builder-relayer-client/dist/builder/derive.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
@@ -120,7 +121,7 @@ export class SafeManagerService {
         const stdSafe = await deriveSafe(ownerAddress, STANDARD_SAFE_FACTORY);
 
         try {
-            const provider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com');
+            const provider = await ProviderFactory.getSharedProvider();
             
             const stdCode = await provider.getCode(stdSafe);
             if (stdCode && stdCode !== '0x') {

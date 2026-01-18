@@ -1,6 +1,6 @@
-
 import { Wallet, JsonRpcProvider, Contract, parseEther, parseUnits } from 'ethers';
 import { Wallet as WalletV5, providers as providersV5 } from 'ethers-v5';
+import { ProviderFactory } from './provider-factory.service.js';
 import { DatabaseEncryptionService } from './database-encryption.service.js';
 
 // Basic standard ABI for ERC20
@@ -14,12 +14,12 @@ const USDC_ABI = [
  * Includes Shim for Ethers v6 compatibility with Polymarket SDK (v5).
  */
 export class EvmWalletService {
-  private provider: JsonRpcProvider;
+  private provider: JsonRpcProvider | null = null;
   private rpcUrl: string;
 
   constructor(rpcUrl: string, encryptionKey: string) {
     this.rpcUrl = rpcUrl;
-    this.provider = new JsonRpcProvider(rpcUrl);
+    // Note: Provider will be initialized lazily when needed
     
     // Ensure centralized encryption service is initialized
     if (!DatabaseEncryptionService.validateEncryptionKey()) {
@@ -48,6 +48,9 @@ export class EvmWalletService {
    */
   async getWalletInstance(encryptedPrivateKey: string): Promise<Wallet> {
     const privateKey = DatabaseEncryptionService.decrypt(encryptedPrivateKey);
+    if (!this.provider) {
+        this.provider = await ProviderFactory.getSharedProvider(this.rpcUrl);
+    }
     const wallet = new Wallet(privateKey, this.provider);
 
     // --- COMPATIBILITY SHIM START (Legacy Support) ---
@@ -87,10 +90,13 @@ export class EvmWalletService {
 
       if (isNative) {
           // Native Withdrawal (POL)
-          const balance = await this.provider.getBalance(wallet.address);
+          if (!wallet.provider) {
+              throw new Error("Wallet provider is not initialized");
+          }
+          const balance = await wallet.provider.getBalance(wallet.address);
           
           // Ethers v6 FeeData
-          const feeData = await this.provider.getFeeData();
+          const feeData = await wallet.provider.getFeeData();
           // Fallback to 30 gwei if null
           const gasPrice = feeData.gasPrice ?? 30000000000n; 
           const gasLimit = 21000n;

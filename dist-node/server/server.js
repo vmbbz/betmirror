@@ -6,7 +6,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { Server as SocketIOServer } from 'socket.io';
 import { createServer } from 'http';
-import { ethers, JsonRpcProvider } from 'ethers';
+import { ethers } from 'ethers';
 import { BotEngine } from './bot-engine.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
@@ -15,7 +15,13 @@ import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
+import { ProviderFactory } from '../services/provider-factory.service.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
+import { WebSocketManager } from '../services/websocket-manager.service.js';
+import { FlashMoveService } from '../services/flash-move.service.js';
+import { MarketMetadataService } from '../services/market-metadata.service.js';
+import { DEFAULT_FLASH_MOVE_CONFIG } from '../config/flash-move.config.js';
+import { PolymarketAdapter } from '../adapters/polymarket/polymarket.adapter.js';
 import axios from 'axios';
 // ESM compatibility
 const __filename = fileURLToPath(import.meta.url);
@@ -41,7 +47,24 @@ const ENV = loadEnv();
 // Service Singletons
 const dbRegistryService = new DbRegistryService();
 const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
-const globalIntelligence = new MarketIntelligenceService(serverLogger);
+// Create a pseudo-adapter for metadata service (it only needs the getMarketData method)
+const metadataAdapter = new PolymarketAdapter({
+    rpcUrl: ENV.rpcUrl,
+    walletConfig: { address: '0x0000000000000000000000000000000000000000' },
+    userId: 'system',
+    mongoEncryptionKey: ENV.mongoEncryptionKey
+}, serverLogger);
+const serverMetadataService = new MarketMetadataService(metadataAdapter, serverLogger);
+// Create WebSocket manager for global intelligence (market-only connection)
+const wsManager = new WebSocketManager(serverLogger, null);
+// Create global intelligence service WITH WebSocket manager and Metadata Service
+const globalIntelligence = new MarketIntelligenceService(serverLogger, wsManager, undefined, serverMetadataService);
+// Create global FlashMoveService for server-level flash detection
+const globalFlashMoveService = new FlashMoveService(globalIntelligence, DEFAULT_FLASH_MOVE_CONFIG, null, // No trade executor needed at server level
+serverLogger);
+// Wire global services
+globalIntelligence.setFlashMoveService(globalFlashMoveService);
+globalFlashMoveService.setEnabled(true);
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map();
 app.use(cors());
@@ -60,7 +83,7 @@ setInterval(async () => {
     if (engine && engine.isRunning) {
         engine.performTick().catch(() => { });
     }
-    // Broadcast global heat
+    // Broadcast global heat updates
     const moves = await globalIntelligence.getLatestMoves();
     if (moves.length > 0)
         io.emit('FOMO_VELOCITY_UPDATE', moves);
@@ -69,10 +92,12 @@ setInterval(async () => {
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId, config) {
     const normId = userId.toLowerCase();
-    if (ACTIVE_BOTS.has(normId))
-        ACTIVE_BOTS.get(normId)?.stop();
+    if (ACTIVE_BOTS.has(normId)) {
+        const oldEngine = ACTIVE_BOTS.get(normId);
+        if (oldEngine)
+            await oldEngine.stop();
+    }
     const engine = new BotEngine(config, globalIntelligence, dbRegistryService, {
-        onFomoSnipes: (snipes) => io.to(normId).emit('FOMO_SNIPES_UPDATE', snipes),
         onPositionsUpdate: async (positions) => {
             await User.updateOne({ address: normId }, { activePositions: positions });
             io.to(normId).emit('POSITIONS_UPDATE', positions);
@@ -160,6 +185,26 @@ io.on('connection', (socket) => {
         socket.join(normId);
         serverLogger.info(`Socket ${socket.id} joined room: ${normId}`);
     });
+    // Flash Moves WebSocket subscriptions
+    socket.on('subscribe_flash_moves', (userId) => {
+        const normId = userId.toLowerCase();
+        socket.join(`flash_moves_${normId}`);
+        serverLogger.info(`Socket ${socket.id} subscribed to flash moves for: ${normId}`);
+        // Forward flash move events to this socket
+        const engine = ACTIVE_BOTS.get(normId);
+        if (engine) {
+            const flashMoveService = engine.getFlashMoveService();
+            if (flashMoveService) {
+                // Listen for flash move events and forward to client
+                flashMoveService.on('flash_move_detected', (event) => {
+                    socket.emit('flash_move_detected', {
+                        ...event,
+                        serviceStatus: flashMoveService.getStatus()
+                    });
+                });
+            }
+        }
+    });
 });
 // 0. Health Check
 app.get('/health', (req, res) => {
@@ -174,7 +219,6 @@ app.get('/health', (req, res) => {
 // 0. Fomo Data Feed
 app.get('/api/fomo/history', async (req, res) => {
     try {
-        // Fix: Changed getLatestMovesFromDB to getLatestMoves
         const moves = await globalIntelligence.getLatestMoves();
         res.json(moves);
     }
@@ -459,7 +503,7 @@ app.post('/api/bot/stop', async (req, res) => {
 });
 // Live Update Bot
 app.post('/api/bot/update', async (req, res) => {
-    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount, enableFomoRunner } = req.body;
+    const { userId, targets, multiplier, riskProfile, autoTp, autoCashout, notifications, maxTradeAmount, enableCopyTrading } = req.body;
     if (!userId) {
         res.status(400).json({ error: 'Missing userId' });
         return;
@@ -486,8 +530,8 @@ app.post('/api/bot/update', async (req, res) => {
             cfg.autoCashout = autoCashout;
         if (maxTradeAmount)
             cfg.maxTradeAmount = maxTradeAmount;
-        if (enableFomoRunner !== undefined)
-            cfg.enableFomoRunner = enableFomoRunner;
+        if (enableCopyTrading !== undefined)
+            cfg.enableCopyTrading = enableCopyTrading;
         if (notifications) {
             cfg.enableNotifications = notifications.enabled;
             cfg.userPhoneNumber = notifications.phoneNumber;
@@ -502,8 +546,12 @@ app.post('/api/bot/update', async (req, res) => {
                 autoTp: autoTp ? Number(autoTp) : undefined,
                 autoCashout: autoCashout,
                 maxTradeAmount: maxTradeAmount ? Number(maxTradeAmount) : undefined,
-                enableFomoRunner: enableFomoRunner
+                enableCopyTrading: enableCopyTrading
             });
+            // Update copy trading targets if engine supports it
+            if (engine.updateCopyTradingTargets && targets) {
+                engine.updateCopyTradingTargets(targets);
+            }
         }
         res.json({ success: true });
     }
@@ -522,10 +570,16 @@ app.get('/api/bot/status/:userId', async (req, res) => {
         const dbLogs = await BotLog.find({ userId: normId }).sort({ timestamp: -1 }).limit(100).lean();
         const history = await Trade.find({ userId: normId }).sort({ timestamp: -1 }).limit(50).lean();
         let mmOpportunities = [];
-        let fomoChases = [];
+        let flashMoves = [];
         if (engine) {
-            mmOpportunities = engine.getArbOpportunities();
-            fomoChases = engine.getActiveFomoChases();
+            const arbScanner = engine.getArbitrageScanner();
+            if (arbScanner) {
+                mmOpportunities = arbScanner.getOpportunities() || [];
+            }
+            const flashMoveService = engine.getFlashMoveService();
+            if (flashMoveService) {
+                flashMoves = Array.from(flashMoveService.getActivePositions().values());
+            }
         }
         let livePositions = [];
         if (engine) {
@@ -546,8 +600,7 @@ app.get('/api/bot/status/:userId', async (req, res) => {
             stats: user?.stats || null,
             config: user?.activeBotConfig || null,
             mmOpportunities,
-            fomoMoves: engine?.getActiveFomoMoves() || [],
-            fomoSnipes: engine?.getActiveSnipes() || []
+            flashMoves: flashMoves
         });
     }
     catch (e) {
@@ -689,7 +742,7 @@ app.post('/api/wallet/withdraw', async (req, res) => {
         }
         const walletConfig = user.tradingWallet;
         let txHash = '';
-        const provider = new JsonRpcProvider(ENV.rpcUrl);
+        const provider = await ProviderFactory.getSharedProvider();
         const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
         const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, USDC_ABI, provider);
         let safeAddr = targetSafeAddress || walletConfig.safeAddress;
@@ -705,7 +758,7 @@ app.post('/api/wallet/withdraw', async (req, res) => {
         }
         else {
             try {
-                balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
+                balanceToWithdraw = await usdcContract.of(safeAddr);
                 if (!targetSafeAddress)
                     eoaBalance = await usdcContract.balanceOf(walletConfig.address);
             }
@@ -788,15 +841,20 @@ app.post('/api/trade/sync', async (req, res) => {
     const engine = ACTIVE_BOTS.get(normId);
     try {
         if (engine) {
-            await engine.syncPositions(force === true);
+            await engine.getPortfolioTracker().syncPositions(force === true);
             res.json({ success: true });
         }
         else {
-            // If bot not running, at least fetch from API once for UI
-            const user = await User.findOne({ address: normId }).select('+tradingWallet.address');
+            // If bot not running, fetch positions from database for UI
+            const user = await User.findOne({ address: normId }).select('+tradingWallet.address +activePositions');
             if (user?.tradingWallet?.address) {
-                // Temporary logic to allow UI to sync even without bot running
-                res.json({ success: true, note: 'Bot not running, sync limited' });
+                // Return database positions if available
+                const dbPositions = user.activePositions || [];
+                res.json({
+                    success: true,
+                    positions: dbPositions,
+                    note: 'Bot not running, showing database positions'
+                });
             }
             else {
                 res.status(404).json({ error: 'No wallet found' });
@@ -805,6 +863,43 @@ app.post('/api/trade/sync', async (req, res) => {
     }
     catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+// Runtime Service Toggle APIs
+app.post('/api/bot/services/toggle', async (req, res) => {
+    const { userId, service, enabled } = req.body;
+    if (!userId || !service || enabled === undefined) {
+        return res.status(400).json({ error: 'Missing required fields: userId, service, enabled' });
+    }
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine) {
+        return res.status(404).json({ error: 'Bot not running' });
+    }
+    try {
+        const result = await engine.toggleService(service, enabled);
+        res.json({ success: true, result });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/bot/services/status', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID required' });
+    }
+    const normId = userId.toLowerCase();
+    const engine = ACTIVE_BOTS.get(normId);
+    if (!engine) {
+        return res.status(404).json({ error: 'Bot not running' });
+    }
+    try {
+        const status = engine.getServicesStatus();
+        res.json({ success: true, status });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 // Market-Making REST Proxy
@@ -963,48 +1058,97 @@ app.get('/api/portfolio/latest/:userId', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-// --- REGISTRY SEER ---
+// --- ENHANCED REGISTRY SEEDING ---
 async function seedRegistry() {
     const systemWallets = ENV.userAddresses;
-    if (!systemWallets || systemWallets.length === 0)
+    if (!systemWallets || systemWallets.length === 0) {
+        console.log('⚠️ No system wallets found in ENV.userAddresses');
         return;
-    console.log(`🌱 Seeding Registry with ${systemWallets.length} system wallets from wallets.txt...`);
-    for (const address of systemWallets) {
-        if (!address || !address.startsWith('0x'))
-            continue;
-        const normalized = address.toLowerCase();
-        try {
-            const exists = await Registry.findOne({ address: { $regex: new RegExp(`^${normalized}$`, "i") } });
-            if (!exists) {
-                await Registry.create({
-                    address: normalized,
-                    listedBy: 'SYSTEM',
-                    listedAt: new Date().toISOString(),
-                    isSystem: true,
-                    tags: ['OFFICIAL', 'WHALE'],
-                    winRate: 0,
-                    totalPnl: 0,
-                    tradesLast30d: 0,
-                    followers: 0,
-                    copyCount: 0,
-                    copyProfitGenerated: 0
-                });
-                console.log(`   + Added ${normalized.slice(0, 8)}...`);
-            }
-            else if (!exists.isSystem) {
-                exists.isSystem = true;
-                if (!exists.tags?.includes('OFFICIAL')) {
-                    exists.tags = [...(exists.tags || []), 'OFFICIAL'];
-                }
-                await exists.save();
-                console.log(`   ^ Upgraded ${normalized.slice(0, 8)}... to Official`);
-            }
-        }
-        catch (e) {
-            console.warn(`Failed to seed ${normalized}:`, e);
-        }
     }
-    await registryAnalytics.updateAllRegistryStats();
+    console.log(`🌱 Seeding Registry with ${systemWallets.length} system wallets from wallets.txt...`);
+    let addedCount = 0;
+    let upgradedCount = 0;
+    let errorCount = 0;
+    // Validate addresses first
+    const validWallets = systemWallets.filter(address => {
+        return address &&
+            address.startsWith('0x') &&
+            address.length === 42 &&
+            /^0x[a-fA-F0-9]{40}$/.test(address);
+    });
+    if (validWallets.length !== systemWallets.length) {
+        console.warn(`⚠️ Filtered ${systemWallets.length - validWallets.length} invalid addresses`);
+    }
+    // Batch operations for better performance
+    const operations = [];
+    for (const address of validWallets) {
+        const normalized = address.toLowerCase();
+        operations.push((async () => {
+            try {
+                const exists = await Registry.findOne({
+                    address: { $regex: new RegExp(`^${normalized}$`, "i") }
+                });
+                if (!exists) {
+                    await Registry.create({
+                        address: normalized,
+                        listedBy: 'SYSTEM',
+                        listedAt: new Date().toISOString(),
+                        isSystem: true,
+                        tags: ['OFFICIAL', 'WHALE', 'SYSTEM'],
+                        winRate: 0,
+                        totalPnl: 0,
+                        tradesLast30d: 0,
+                        followers: 0,
+                        copyCount: 0,
+                        copyProfitGenerated: 0,
+                        lastUpdated: new Date(),
+                        verified: true
+                    });
+                    addedCount++;
+                    console.log(`   ✅ Added ${normalized.slice(0, 8)}... as Official System Wallet`);
+                }
+                else if (!exists.isSystem) {
+                    // Upgrade existing wallet to system status
+                    const updateData = {
+                        isSystem: true,
+                        verified: true,
+                        lastUpdated: new Date()
+                    };
+                    // Merge tags properly
+                    const existingTags = exists.tags || [];
+                    const newTags = new Set([...existingTags, 'OFFICIAL', 'SYSTEM']);
+                    if (!newTags.has('WHALE'))
+                        newTags.add('WHALE');
+                    updateData.tags = Array.from(newTags);
+                    await Registry.updateOne({ address: { $regex: new RegExp(`^${normalized}$`, "i") } }, updateData);
+                    upgradedCount++;
+                    console.log(`   🔄 Upgraded ${normalized.slice(0, 8)}... to Official System Status`);
+                }
+                else {
+                    console.log(`   ℹ️ ${normalized.slice(0, 8)}... already exists as System Wallet`);
+                }
+            }
+            catch (e) {
+                errorCount++;
+                console.error(`   ❌ Failed to process ${normalized.slice(0, 8)}...:`, e instanceof Error ? e.message : e);
+            }
+        })());
+    }
+    // Wait for all operations to complete
+    await Promise.allSettled(operations);
+    console.log(`\n📊 Registry Seeding Complete:`);
+    console.log(`   ✅ Added: ${addedCount} new system wallets`);
+    console.log(`   🔄 Upgraded: ${upgradedCount} existing wallets`);
+    console.log(`   ❌ Errors: ${errorCount} failed operations`);
+    console.log(`   📈 Total processed: ${validWallets.length} wallets\n`);
+    // Update analytics for all wallets
+    try {
+        await registryAnalytics.updateAllRegistryStats();
+        console.log('📈 Registry analytics updated successfully');
+    }
+    catch (e) {
+        console.error('⚠️ Failed to update registry analytics:', e);
+    }
 }
 // Handle React SPA Routing
 app.get('*', (req, res) => {
@@ -1019,7 +1163,42 @@ async function bootstrap() {
     serverLogger.success("Global Market Intelligence Online.");
     const runningUsers = await User.find({ isBotRunning: true }).select('+tradingWallet.encryptedPrivateKey +tradingWallet.l2ApiCredentials.key +tradingWallet.l2ApiCredentials.secret +tradingWallet.l2ApiCredentials.passphrase');
     serverLogger.info(`Restoring ${runningUsers.length} active bot instances...`);
+    // Group by wallet address to prevent duplicate instances
+    const walletGroups = new Map();
     for (const u of runningUsers) {
+        if (!u.tradingWallet?.address)
+            continue;
+        const walletAddr = u.tradingWallet.address.toLowerCase();
+        if (!walletGroups.has(walletAddr)) {
+            walletGroups.set(walletAddr, u);
+        }
+        else {
+            serverLogger.warn(`[DUPLICATE] Skipping duplicate bot instance for wallet ${walletAddr} (user: ${u.address})`);
+            // Mark duplicate as stopped
+            await User.updateOne({ address: u.address }, { isBotRunning: false });
+        }
+    }
+    // Attach core hub events once at startup (CRITICAL: Fixes the listener leak)
+    globalIntelligence.on('whale_trade', (whaleEvent) => {
+        io.emit('WHALE_DETECTED', {
+            trader: whaleEvent.trader,
+            tokenId: whaleEvent.tokenId,
+            side: whaleEvent.side,
+            price: whaleEvent.price,
+            size: whaleEvent.size,
+            timestamp: whaleEvent.timestamp,
+            question: whaleEvent.question || 'Unknown Market',
+            marketSlug: whaleEvent.marketSlug,
+            eventSlug: whaleEvent.eventSlug,
+            conditionId: whaleEvent.conditionId
+        });
+        serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+    });
+    globalIntelligence.on('flash_move_detected', (flashEvent) => {
+        io.emit('flash_move_detected', flashEvent);
+        serverLogger.info(`[GLOBAL FLASH] ${flashEvent.event.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.event.question?.slice(0, 30)}...`);
+    });
+    for (const u of walletGroups.values()) {
         if (!u.activeBotConfig || !u.tradingWallet)
             continue;
         try {
@@ -1032,6 +1211,8 @@ async function bootstrap() {
                 builderApiSecret: ENV.builderApiSecret,
                 builderApiPassphrase: ENV.builderApiPassphrase
             });
+            // STAGGERING: Add delay to respect 25 req/min Relayer Rate Limit
+            await new Promise(resolve => setTimeout(resolve, 2500));
         }
         catch (e) {
             serverLogger.error(`Failed to restore bot for ${u.address}: ${e.message}`);

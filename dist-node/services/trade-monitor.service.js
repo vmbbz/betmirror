@@ -22,8 +22,10 @@ export class TradeMonitorService {
     constructor(deps) {
         this.deps = deps;
         this.updateTargets(deps.userAddresses);
-        // Initialize the listener bound to this instance context
-        this.boundHandler = (event) => this.handleWhaleSignal(event);
+        // Store bound handler reference to allow clean removal of event listeners
+        this.boundHandler = (event) => {
+            this.handleWhaleSignal(event);
+        };
     }
     /**
      * Returns the current operational status of the monitor.
@@ -42,7 +44,7 @@ export class TradeMonitorService {
         this.targetWallets = new Set(newTargets.map(t => t.toLowerCase()));
         // Notify the Singleton to update the global WebSocket filter
         this.deps.intelligence.updateWatchlist(newTargets);
-        this.deps.logger.info(`🎯 Monitor targets synced. Bot is now following ${this.targetWallets.size} specific whales.`);
+        this.deps.logger.info(`🎯 Monitor targets synced: ${this.targetWallets.size} whales.`);
     }
     /**
      * Connects the monitor to the global intelligence event bus.
@@ -52,7 +54,7 @@ export class TradeMonitorService {
             return;
         this.running = true;
         this.deps.intelligence.on('whale_trade', this.boundHandler);
-        this.deps.logger.info(`🔌 Signal Monitor: ONLINE. Tracking ${this.targetWallets.size} targets.`);
+        this.deps.logger.info(`🔌 Signal Monitor: ONLINE.`);
     }
     stop() {
         this.running = false;
@@ -77,8 +79,10 @@ export class TradeMonitorService {
             return;
         this.processedTrades.set(tradeKey, Date.now());
         this.pruneCache();
-        // FIXED: Added explicit dashboard log for visual feedback
-        this.deps.logger.info(`🚨 [WHALE MATCH] ${event.trader.slice(0, 10)}... traded ${event.side} @ ${event.price}`);
+        this.deps.logger.success(`🚨 [SIGNAL] ${event.trader.slice(0, 10)}... ${event.side} @ ${event.price}`);
+        // CRITICAL: Bridging the Intelligence Gap
+        // Tell the central WS manager to subscribe to this token immediately so we have sub-second book data
+        this.deps.intelligence.subscribeToToken(event.tokenId);
         const signal = {
             trader: event.trader,
             marketId: "resolved_by_adapter",
@@ -93,7 +97,6 @@ export class TradeMonitorService {
     }
     /**
      * Memory Janitor: Cleans up the deduplication cache.
-     * Keeps the server memory footprint low even during high-frequency trading.
      */
     pruneCache() {
         const now = Date.now();
@@ -105,16 +108,5 @@ export class TradeMonitorService {
                 }
             }
         }
-    }
-    /**
-     * LEGACY COMPATIBILITY: The following methods are preserved but effectively
-     * bypassed by the high-performance WebSocket implementation.
-     */
-    async checkUserActivity(user) {
-        // Logic moved to handleWhaleSignal via push events
-        this.deps.logger.debug(`Legacy polling bypassed for ${user}. WebSocket active.`);
-    }
-    async processTrade(user, activity) {
-        // Logic moved to handleWhaleSignal for sub-millisecond execution
     }
 }

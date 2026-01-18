@@ -16,44 +16,82 @@ var SignatureType;
     SignatureType[SignatureType["POLY_GNOSIS_SAFE"] = 2] = "POLY_GNOSIS_SAFE";
 })(SignatureType || (SignatureType = {}));
 export class PolymarketAdapter {
+    static publicClient = null;
+    static PUBLIC_CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    static publicClientCreatedAt = 0;
+    // SHARED PROVIDER: Prevent detectNetwork overhead for every bot instance
+    static sharedProvider = null;
     config;
+    client = null;
     logger;
-    exchangeName = 'Polymarket';
-    client;
-    invalidTokenIds = new Set();
-    lastTokenIdCheck = new Map();
-    TOKEN_ID_CHECK_COOLDOWN = 5 * 60 * 1000;
-    // --- GLOBAL HFT PROTECTION: Shared across all instances to prevent 429s ---
-    static metadataCache = new Map();
-    static positionCache = new Map();
-    static isThrottled = false;
-    static throttleExpiry = 0;
-    METADATA_TTL = 24 * 60 * 60 * 1000;
-    POSITION_CACHE_TTL = 300000; // 5 minutes
-    wallet;
     walletV5;
-    walletService;
-    safeManager;
-    usdcContract;
+    walletV6;
     provider;
     safeAddress;
+    usdcContract = null;
+    lastTokenIdCheck = new Map();
+    TOKEN_ID_CHECK_COOLDOWN = 60000; // 1 minute
+    invalidTokenIds = new Set();
+    // Additional properties needed for initialization
+    walletService;
+    safeManager;
+    // Static caches for shared state across all instances
+    static metadataCache = new Map();
+    static METADATA_TTL = 24 * 60 * 60 * 1000; // 24 hours
+    static isThrottled = false;
+    static throttleExpiry = 0;
+    static positionCache = new Map();
+    static POSITION_CACHE_TTL = 30000; // 30 seconds
+    // Required by IExchangeAdapter
+    exchangeName = 'Polymarket';
     constructor(config, logger) {
         this.config = config;
         this.logger = logger;
     }
+    /**
+     * Get or create cached public client for non-authenticated API calls
+     */
+    getPublicClient() {
+        const now = Date.now();
+        // Create new client if cache expired or doesn't exist
+        if (!PolymarketAdapter.publicClient ||
+            (now - PolymarketAdapter.publicClientCreatedAt) > PolymarketAdapter.PUBLIC_CLIENT_CACHE_TTL) {
+            PolymarketAdapter.publicClient = new ClobClient(HOST_URL, Chain.POLYGON);
+            PolymarketAdapter.publicClientCreatedAt = now;
+            this.logger.debug('Created new public client instance');
+        }
+        return PolymarketAdapter.publicClient;
+    }
     async initialize() {
-        this.walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
+        const walletService = new EvmWalletService(this.config.rpcUrl, this.config.mongoEncryptionKey);
         if (this.config.walletConfig.encryptedPrivateKey) {
-            this.wallet = await this.walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
-            this.walletV5 = await this.walletService.getWalletInstanceV5(this.config.walletConfig.encryptedPrivateKey);
+            this.walletV6 = await walletService.getWalletInstance(this.config.walletConfig.encryptedPrivateKey);
+            this.walletV5 = await walletService.getWalletInstanceV5(this.config.walletConfig.encryptedPrivateKey);
         }
         else {
             throw new Error("Missing Encrypted Private Key for Trading Wallet");
         }
         const sdkAlignedAddress = await SafeManagerService.computeAddress(this.config.walletConfig.address);
         this.safeAddress = sdkAlignedAddress;
-        this.safeManager = new SafeManagerService(this.wallet, this.config.builderApiKey, this.config.builderApiSecret, this.config.builderApiPassphrase, this.logger, this.safeAddress);
-        this.provider = new JsonRpcProvider(this.config.rpcUrl);
+        const safeManager = new SafeManagerService(this.walletV6, this.config.builderApiKey, this.config.builderApiSecret, this.config.builderApiPassphrase, this.logger, this.safeAddress);
+        this.safeManager = safeManager; // CRITICAL: Set the safeManager instance
+        // IMPLEMENT SHARED PROVIDER TO PREVENT RPC RATE LIMITING
+        if (!PolymarketAdapter.sharedProvider) {
+            try {
+                // Use static network to avoid detectNetwork calls on every instance
+                const network = { chainId: 137, name: 'polygon' };
+                PolymarketAdapter.sharedProvider = new JsonRpcProvider(this.config.rpcUrl, network, { staticNetwork: true });
+                // Verify once
+                const networkCheck = await PolymarketAdapter.sharedProvider.getNetwork();
+                this.logger.info(`✅ Shared RPC Provider initialized for network: ${networkCheck.name}`);
+            }
+            catch (e) {
+                this.logger.warn(`⚠️ Primary RPC (${this.config.rpcUrl}) failed shared init. Using fallback: https://polygon-rpc.com`);
+                const network = { chainId: 137, name: 'polygon' };
+                PolymarketAdapter.sharedProvider = new JsonRpcProvider('https://polygon-rpc.com', network, { staticNetwork: true });
+            }
+        }
+        this.provider = PolymarketAdapter.sharedProvider;
         const USDC_ABI_INTERNAL = [
             'function balanceOf(address owner) view returns (uint256)',
             'function allowance(address owner, address spender) view returns (uint256)',
@@ -63,12 +101,12 @@ export class PolymarketAdapter {
     }
     async validatePermissions() { return true; }
     async authenticate() {
-        if (!this.wallet || !this.safeManager || !this.safeAddress)
+        if (!this.walletV6 || !this.safeManager || !this.safeAddress)
             throw new Error("Adapter not initialized");
         await this.safeManager.deploySafe();
         await this.safeManager.enableApprovals();
         let apiCreds = this.config.l2ApiCredentials;
-        if (!apiCreds || !apiCreds.key) {
+        if (!apiCreds || !apiCreds.key || !apiCreds.secret) {
             await this.deriveAndSaveKeys();
             apiCreds = this.config.l2ApiCredentials;
         }
@@ -91,13 +129,15 @@ export class PolymarketAdapter {
         if (!this.config.l2ApiCredentials)
             return {};
         return {
-            'POLY_API_KEY': this.config.l2ApiCredentials.key,
-            'POLY_PASSPHRASE': this.config.l2ApiCredentials.passphrase
+            'apiKey': this.config.l2ApiCredentials.key,
+            'secret': this.config.l2ApiCredentials.secret,
+            'passphrase': this.config.l2ApiCredentials.passphrase
         };
     }
     async deriveAndSaveKeys() {
         try {
-            const tempClient = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5, undefined, SignatureType.EOA, undefined);
+            // Use POLY_GNOSIS_SAFE signature type to match trading signature
+            const tempClient = new ClobClient(HOST_URL, Chain.POLYGON, this.walletV5, undefined, SignatureType.POLY_GNOSIS_SAFE, this.safeAddress);
             const rawCreds = await tempClient.createOrDeriveApiKey();
             if (!rawCreds || !rawCreds.key)
                 throw new Error("Empty keys returned");
@@ -131,21 +171,19 @@ export class PolymarketAdapter {
         }
     }
     async getMarketPrice(marketId, tokenId, side = 'BUY') {
-        if (!this.client) {
-            this.logger.warn('Client not initialized when getting market price');
-            return 0;
-        }
+        // Use cached public client for better performance
+        const client = this.client ?? this.getPublicClient();
         const isTradeable = await this.isMarketTradeable(marketId);
         if (!isTradeable) {
             return 0;
         }
         try {
-            const priceRes = await this.client.getPrice(tokenId, side);
+            const priceRes = await client.getPrice(tokenId, side);
             return parseFloat(priceRes.price) || 0;
         }
         catch (e) {
             try {
-                const mid = await this.client.getMidpoint(tokenId);
+                const mid = await client.getMidpoint(tokenId);
                 return parseFloat(mid.mid) || 0;
             }
             catch (midErr) {
@@ -215,13 +253,13 @@ export class PolymarketAdapter {
         }
     }
     async getOrderBook(tokenId) {
-        if (!this.client)
-            return this.getEmptyOrderBook();
+        // Use cached public client for better performance
+        const client = this.client ?? this.getPublicClient();
         const isTradeable = await this.isMarketTradeable(tokenId);
         if (!isTradeable)
             return this.getEmptyOrderBook();
         try {
-            const book = await this.client.getOrderBook(tokenId);
+            const book = await client.getOrderBook(tokenId);
             if (!book)
                 return this.getEmptyOrderBook();
             return {
@@ -281,51 +319,45 @@ export class PolymarketAdapter {
         }
     }
     async getSamplingMarkets() {
-        if (!this.client)
-            throw new Error("Not authenticated");
+        // For public methods like getSamplingMarkets, create a public-only client if no authenticated client exists
+        const client = this.getPublicClient();
         try {
-            const response = await this.client.getSamplingMarkets();
+            this.logger.info(`[DEBUG] Attempting getSamplingMarkets with public client...`);
+            const response = await client.getSamplingMarkets();
+            this.logger.info(`[DEBUG] getSamplingMarkets response: ${JSON.stringify(response?.data?.length || 0)} markets`);
             const markets = response?.data || [];
-            // Transform to match the new Market interface format
             const transformedMarkets = markets.map((market) => ({
                 accepting_orders: market.accepting_orders !== false,
                 active: market.active !== false,
                 archived: market.archived === true,
                 closed: market.closed === true,
-                condition_id: market.condition_id || market.market_id,
-                description: market.description || market.question || '',
-                icon: market.icon || market.image || '',
+                condition_id: market.condition_id,
+                description: market.description || '',
+                icon: market.icon || '',
                 image: market.image || '',
-                market_slug: market.market_slug || market.slug || '',
-                minimum_order_size: market.minimum_order_size || market.minimumSize || 5,
-                minimum_tick_size: market.minimum_tick_size || market.minimumTickSize || 0.01,
+                market_slug: market.market_slug || '',
+                minimum_order_size: market.minimum_order_size || 5,
+                minimum_tick_size: market.minimum_tick_size || 0.01,
                 question: market.question || '',
                 rewards: {
-                    max_spread: market.rewards?.max_spread || market.rewards_max_spread || 15,
-                    min_size: market.rewards?.min_size || market.rewards_min_size || 10,
+                    max_spread: market.rewards?.max_spread || 15,
+                    min_size: market.rewards?.min_size || 10,
                     rates: market.rewards?.rates || null
                 },
                 tags: market.tags || [],
-                tokens: market.tokens || [{
-                        outcome: 'Yes',
-                        price: 0.5,
-                        token_id: market.token_id || '',
-                        winner: false
-                    }]
+                tokens: market.tokens || []
             }));
-            return {
-                limit: response?.limit || transformedMarkets.length,
-                count: response?.count || transformedMarkets.length,
-                data: transformedMarkets
-            };
+            this.logger.info(`[DEBUG] Transformed ${transformedMarkets.length} markets successfully`);
+            return { limit: response?.limit || transformedMarkets.length, count: response?.count || transformedMarkets.length, data: transformedMarkets };
         }
         catch (e) {
-            return {
-                limit: 0,
-                count: 0,
-                data: []
-            };
+            this.logger.warn(`getSamplingMarkets failed: ${e.message}`);
+            this.logger.warn(`[DEBUG] Error details: ${JSON.stringify(e?.response?.data || e)}`);
+            return { limit: 0, count: 0, data: [] };
         }
+    }
+    getEmptySamplingPayload() {
+        return { limit: 0, count: 0, data: [] };
     }
     // ============================================
     // POSITION & MARKET DATA METHODS (CACHED)
@@ -335,7 +367,7 @@ export class PolymarketAdapter {
      */
     async fetchMarketSlugs(conditionId) {
         const cached = PolymarketAdapter.metadataCache.get(conditionId);
-        if (cached && (Date.now() - cached.ts < this.METADATA_TTL))
+        if (cached && (Date.now() - cached.ts < PolymarketAdapter.METADATA_TTL))
             return cached.data;
         const result = { marketSlug: '', eventSlug: '', question: '', image: '', conditionId, acceptingOrders: true, closed: false };
         if (!this.client || !conditionId)
@@ -538,10 +570,13 @@ export class PolymarketAdapter {
                 size: size,
                 feeRateBps: 0,
                 taker: "0x0000000000000000000000000000000000000000"
+            }, {
+                tickSize: tickSize, // Type assertion for TickSize
+                negRisk: market.neg_risk || false
             });
             let orderType = params.orderType === 'GTC' ? OrderType.GTC : OrderType.FOK;
             const res = await this.client.postOrder(signedOrder, orderType);
-            if (res && res.success) {
+            if (res && res.success && !res.errorMsg) {
                 return {
                     success: true,
                     orderId: res.orderID,
@@ -550,7 +585,19 @@ export class PolymarketAdapter {
                     priceFilled: price
                 };
             }
-            throw new Error(res.errorMsg || "Rejected");
+            // Handle specific errors as per docs
+            if (res.errorMsg?.includes('MIN_TICK_SIZE')) {
+                throw new Error(`Price doesn't match tick size: ${tickSize}`);
+            }
+            else if (res.errorMsg?.includes('MIN_SIZE')) {
+                throw new Error(`Order too small. Minimum: ${minOrderSize} USDC`);
+            }
+            else if (res.errorMsg?.includes('NOT_ENOUGH_BALANCE')) {
+                throw new Error('Insufficient funds for this order');
+            }
+            else {
+                throw new Error(res.errorMsg || "Order rejected");
+            }
         }
         catch (error) {
             if (retryCount < 1 && (String(error).includes("401") || String(error).includes("signature"))) {
@@ -631,7 +678,7 @@ export class PolymarketAdapter {
     }
     getFunderAddress() { return this.safeAddress || this.config.walletConfig.address; }
     getRawClient() { return this.client; }
-    getSigner() { return this.wallet; }
+    getSigner() { return this.walletV6; }
     async redeemPosition(conditionId, tokenId) {
         if (!this.safeManager || !this.safeAddress)
             throw new Error('Safe manager not initialized');

@@ -17,6 +17,7 @@ import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
+import { ProviderFactory } from '../services/provider-factory.service.js';
 import { BuilderVolumeData } from '../domain/alpha.types.js';
 import { ArbitrageOpportunity } from '../adapters/interfaces.js';
 import { ActivePosition } from '../domain/trade.types.js';
@@ -784,7 +785,7 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
         if (!user || !user.tradingWallet || !user.tradingWallet.encryptedPrivateKey) { res.status(400).json({ error: 'Wallet not configured' }); return; }
         const walletConfig = user.tradingWallet;
         let txHash = '';
-        const provider = new JsonRpcProvider(ENV.rpcUrl);
+        const provider = await ProviderFactory.getSharedProvider();
         const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
         const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, USDC_ABI, provider);
         let safeAddr = targetSafeAddress || walletConfig.safeAddress;

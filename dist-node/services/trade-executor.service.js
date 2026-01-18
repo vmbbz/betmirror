@@ -1,21 +1,23 @@
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { httpGet } from '../utils/http.js';
-import { TOKENS, WS_URLS } from '../config/env.js'; // Added WS_URLS
+import { TOKENS } from '../config/env.js';
 import { LiquidityHealth } from '../adapters/interfaces.js';
 import axios from 'axios';
-import WebSocket from 'ws'; // Added WebSocket
 export class TradeExecutorService {
     deps;
     balanceCache = new Map();
-    CACHE_TTL = 5 * 60 * 1000;
+    // ACCOUNTING CORE: Tracks capital in transit
     pendingSpend = 0;
     pendingOrders = new Map();
-    // WebSocket fill state
-    // Fix: Changed type to any to resolve TypeScript errors with 'on' method in hybrid environments
-    userWs;
-    isWsRunning = false;
-    pingInterval;
+    lastQuoteTime = new Map();
     inventory = new Map();
+    isListening = false;
+    isWsRunning = false;
+    fillListener; // Store listener reference
+    CACHE_TTL = 5 * 60 * 1000;
+    PENDING_ORDER_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+    REQUOTE_THROTTLE_MS = 8000; // 8 seconds per token re-quote
+    cleanupInterval;
     /**
      * Update the pending spend amount for buy orders
      * @param amount - The amount to add or subtract from pending spend
@@ -84,9 +86,74 @@ export class TradeExecutorService {
         this.deps = deps;
         if (mmConfig)
             this.mmConfig = { ...this.mmConfig, ...mmConfig };
-        //Start fill minitor
-        this.connectUserChannel();
+        // Initialize inventory sync
         this.initializeInventory().catch(e => this.deps.logger.error("Inventory Sync Failed", e));
+    }
+    /**
+     * Starts the accounting engine by wiring listeners to the Private WebSocket.
+     */
+    async start() {
+        if (this.isListening)
+            return;
+        this.isListening = true;
+        // Start fill monitor using centralized WebSocket manager
+        this.connectUserChannel();
+        this.setupFillAccounting();
+        // Start cleanup interval for stale orders
+        this.startCleanupInterval();
+        this.deps.logger.info("💰 Trade Executor: Accounting Heart Activated.");
+    }
+    /**
+     * Stops listeners and cleans up.
+     */
+    async stop() {
+        this.isListening = false;
+        // Remove only our listener, not all fill listeners
+        if (this.fillListener && this.deps.wsManager) {
+            this.deps.wsManager.removeListener('fill', this.fillListener);
+            this.fillListener = undefined;
+        }
+        // Stop cleanup interval
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+            this.cleanupInterval = undefined;
+        }
+        // Clear pending orders on stop to prevent capital lock
+        this.pendingOrders.clear();
+        this.pendingSpend = 0;
+        this.deps.logger.warn('💰 Trade Executor: Accounting Heart Paused.');
+    }
+    /**
+     * Start periodic cleanup of stale pending orders
+     */
+    startCleanupInterval() {
+        this.cleanupInterval = setInterval(() => {
+            this.cleanupStaleOrders();
+        }, 60000); // Check every minute
+    }
+    /**
+     * Remove stale pending orders that have timed out
+     */
+    cleanupStaleOrders() {
+        const now = Date.now();
+        const staleOrders = [];
+        for (const [orderId, order] of this.pendingOrders.entries()) {
+            if (now - order.timestamp > this.PENDING_ORDER_TIMEOUT) {
+                staleOrders.push(orderId);
+            }
+        }
+        if (staleOrders.length > 0) {
+            let totalReleased = 0;
+            for (const orderId of staleOrders) {
+                const order = this.pendingOrders.get(orderId);
+                if (order) {
+                    totalReleased += order.amount;
+                    this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
+                    this.pendingOrders.delete(orderId);
+                }
+            }
+            this.deps.logger.warn(`⏰ Cleaned up ${staleOrders.length} stale orders, released $${totalReleased.toFixed(2)}`);
+        }
     }
     async initializeInventory() {
         this.deps.logger.info("📦 Synchronizing Executor inventory cache...");
@@ -97,58 +164,75 @@ export class TradeExecutorService {
         this.deps.logger.success(`✅ Inventory synced: ${this.inventory.size} active positions loaded.`);
     }
     /**
-     * FIX: Added authenticated headers to the private User Channel connection.
-     * This ensures the connection is accepted by Polymarket's CLOB.
+     * Connect to user channel using centralized WebSocket manager
+     * Note: WebSocket manager should already be started by BotEngine
      */
     connectUserChannel() {
+        if (!this.deps.wsManager) {
+            this.deps.logger.error('❌ WebSocket manager not available');
+            return;
+        }
         this.isWsRunning = true;
-        const wsUrl = `${WS_URLS.CLOB}/ws/user`;
-        // Fetch auth headers (Key, Passphrase) from the adapter
-        const headers = this.deps.adapter.getAuthHeaders?.() || {};
-        this.userWs = new WebSocket(wsUrl, { headers });
-        this.userWs.on('open', () => {
-            this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
-            if (this.pingInterval)
-                clearInterval(this.pingInterval);
-            this.pingInterval = setInterval(() => {
-                if (this.userWs?.readyState === 1)
-                    this.userWs.send('PING');
-            }, 10000);
-        });
-        this.userWs.on('message', (data) => {
-            try {
-                const msg = JSON.parse(data.toString());
-                // Now calling centralized handleLiveFill to ensure all state is updated correctly
-                if (msg.event_type === 'order_filled') {
-                    this.handleLiveFill(msg);
-                }
+        this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
+    }
+    setupFillAccounting() {
+        if (!this.deps.wsManager) {
+            this.deps.logger.error('❌ WebSocket manager not available for fill accounting');
+            return;
+        }
+        // Store listener reference for clean removal
+        this.fillListener = (fill) => {
+            if (this.isListening) {
+                this.handleLiveFill(fill);
             }
-            catch (e) { }
-        });
-        this.userWs.on('close', () => {
-            if (this.pingInterval)
-                clearInterval(this.pingInterval);
-            if (this.isWsRunning)
-                setTimeout(() => this.connectUserChannel(), 5000);
-        });
+        };
+        this.deps.wsManager.on('fill', this.fillListener);
+        this.deps.logger.debug('🔌 Fill accounting listener registered');
     }
     /**
      * Handles real-time fill events from WebSocket.
      * Updates inventory and pending spend immediately.
      */
     handleLiveFill(fill) {
-        const { asset_id, price, size, side, order_id } = fill;
-        const isBuy = side.toUpperCase() === 'BUY';
-        this.deps.logger.success(`⚡ [LIVE FILL] ${side} ${size} units of ${asset_id.slice(0, 8)}... @ ${price}`);
-        // 1. Update internal inventory cache immediately
-        const currentInv = this.inventory.get(asset_id) || 0;
-        this.inventory.set(asset_id, isBuy ? currentInv + size : currentInv - size);
-        // 2. Clear pending spend if it was a buy
-        if (isBuy) {
-            this.updatePendingSpend(0, false, order_id);
+        try {
+            const { asset_id, price, size, side, order_id } = fill;
+            // Validate required fields
+            if (!asset_id || !price || !size || !side) {
+                this.deps.logger.warn('⚠️ Invalid fill event received');
+                this.deps.logger.debug(`Fill data: ${JSON.stringify(fill)}`);
+                return;
+            }
+            const isBuy = side.toUpperCase() === 'BUY';
+            const tokenId = asset_id;
+            const fillSize = parseFloat(size);
+            const fillPrice = parseFloat(price);
+            if (isNaN(fillSize) || isNaN(fillPrice) || fillSize <= 0 || fillPrice <= 0) {
+                this.deps.logger.warn('⚠️ Invalid fill values');
+                this.deps.logger.debug(`Fill data: ${JSON.stringify({ asset_id, price, size, side })}`);
+                return;
+            }
+            this.deps.logger.success(`⚡ [FILL DETECTED] ${side} ${fillSize} units @ $${fillPrice}`);
+            // 1. Update Inventory Ledger
+            const currentInv = this.inventory.get(tokenId) || 0;
+            this.inventory.set(tokenId, isBuy ? currentInv + fillSize : currentInv - fillSize);
+            // 2. RELEASE Pending Capital if it was a buy
+            if (isBuy && order_id) {
+                const order = this.pendingOrders.get(order_id);
+                if (order) {
+                    this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
+                    this.pendingOrders.delete(order_id);
+                    this.deps.logger.debug(`💰 Released $${order.amount.toFixed(2)} from pending spend.`);
+                }
+                else {
+                    this.deps.logger.debug(`ℹ️ No pending order found for ${order_id}`);
+                }
+            }
         }
-        // 3. Update quant position tracking for average entry and health score
-        this.updatePosition(asset_id, price, size, isBuy);
+        catch (error) {
+            const errorObj = error instanceof Error ? error : new Error(String(error));
+            this.deps.logger.error('❌ Error processing fill event', errorObj);
+            this.deps.logger.debug(`Fill data: ${JSON.stringify(fill)}`);
+        }
     }
     /**
      * Calculate dynamic position size based on volatility and portfolio
@@ -248,7 +332,14 @@ export class TradeExecutorService {
         if (availableForBid < bidSize * prices.bidPrice) {
             const oldBidSize = bidSize;
             bidSize = availableForBid / prices.bidPrice;
-            this.deps.logger.warn(`[MM] Reduced bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} due to insufficient balance`);
+            // Skip market making if balance is critically low
+            if (bidSize < minSize || availableForBid < 10) { // $10 minimum threshold
+                this.deps.logger.warn(`[MM] Insufficient balance ($${availableForBid.toFixed(2)}) for market making on ${tokenId}`);
+                bidSize = 0;
+            }
+            else {
+                this.deps.logger.info(`[MM] Adjusted bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} for ${tokenId}`);
+            }
         }
         // Ensure minimum size requirements
         if (bidSize < minSize) {
@@ -434,6 +525,13 @@ export class TradeExecutorService {
     async executeMarketMakingQuotes(opportunity) {
         const { logger, adapter, proxyWallet } = this.deps;
         const { tokenId, conditionId, midpoint, spread, rewardsMaxSpread, rewardsMinSize } = opportunity;
+        const now = Date.now();
+        // 1. Re-quote Throttle Check (Crucial for Rate Limits & Stability)
+        const last = this.lastQuoteTime.get(tokenId) || 0;
+        if (now - last < this.REQUOTE_THROTTLE_MS) {
+            return { tokenId, status: 'SKIPPED', reason: 'throttled' };
+        }
+        this.lastQuoteTime.set(tokenId, now);
         const vol = opportunity.volatility || 0.05;
         const volume = opportunity.volume || 0;
         // Update market state with latest data
@@ -444,14 +542,15 @@ export class TradeExecutorService {
             reason
         });
         try {
-            // 1. Check if market is still active
+            this.deps.logger.info(`⚡ [MM Quote] Processing ${opportunity.question.slice(0, 25)}... (Mid: ${midpoint.toFixed(2)}, Spread: ${(spread * 100).toFixed(1)}¢)`);
+            // 2. Check if market is still active
             const market = await this.validateMarketForMM(conditionId);
             if (!market.valid) {
                 return failResult(market.reason || 'market_invalid');
             }
-            // 2. Cancel existing quotes for this token before placing new ones
+            // 3. Cancel existing quotes for this token before placing new ones
             await this.cancelExistingQuotes(tokenId);
-            // 3. Check inventory limits with dynamic position sizing
+            // 4. Check inventory limits with dynamic position sizing
             const currentInventory = await this.getTokenInventory(tokenId);
             const inventoryValueUsd = currentInventory * midpoint;
             // Calculate dynamic position size based on volatility and portfolio
@@ -467,9 +566,9 @@ export class TradeExecutorService {
                 // Only post asks to reduce inventory
                 return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
             }
-            // 4. Calculate dynamic spreads with inventory skew and volatility adjustment
+            // 5. Calculate dynamic spreads with inventory skew and volatility adjustment
             const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, market);
-            // 5. Calculate order sizes with inventory management
+            // 6. Calculate order sizes with inventory management
             const optimalSizes = await this.calculateOptimalSizes(opportunity, currentInventory, positionSize, { bidPrice, askPrice });
             // If no valid sizes after all adjustments, skip this market
             if (optimalSizes.bidSize <= 0 && optimalSizes.askSize <= 0) {
@@ -479,7 +578,7 @@ export class TradeExecutorService {
                     reason: 'insufficient_size_after_risk_checks'
                 };
             }
-            // 6. Final size adjustments
+            // 7. Final size adjustments
             let finalBidSize = optimalSizes.bidSize;
             let finalAskSize = optimalSizes.askSize;
             // Check rewards min_size requirement
@@ -494,7 +593,7 @@ export class TradeExecutorService {
             if (availableForBid < finalBidSize * bidPrice) {
                 finalBidSize = availableForBid / bidPrice;
             }
-            // 7. Place orders using GTC
+            // 8. Place orders using GTC
             const result = {
                 tokenId,
                 status: 'POSTED',

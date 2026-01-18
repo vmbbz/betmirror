@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
+import { WhaleDataPollerService } from '../services/whale-data-poller.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
 import { PortfolioService } from '../services/portfolio.service.js';
 import { BotLog, Trade, User } from '../database/index.js';
@@ -56,6 +57,7 @@ export class BotEngine extends EventEmitter {
     private callbacks: BotEngineCallbacks;
     public isRunning = false;
     private monitor: TradeMonitorService;
+    private whalePoller: WhaleDataPollerService;
     private executor: TradeExecutorService;
     private arbScanner: MarketMakingScanner;
     private exchange: PolymarketAdapter;
@@ -171,6 +173,25 @@ export class BotEngine extends EventEmitter {
             }
         });
         
+        // NEW: Whale Data Poller using Data API
+        this.whalePoller = new WhaleDataPollerService({
+            logger: this.logger,
+            env: {} as any,
+            onDetectedTrade: async (signal) => {
+                if (this.isRunning && this.config.enableCopyTrading) {
+                    this.logger.info(`🐋 Whale Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
+                    try {
+                        const res = await this.executor.copyTrade(signal);
+                        if (res.status === 'FILLED' && this.callbacks.onTradeComplete) {
+                            await this.callbacks.onTradeComplete({ ...signal, id: res.txHash, status: 'OPEN', serviceOrigin: 'WHALE_DATA' });
+                        }
+                    } catch (error) {
+                        this.logger.error(`Whale copy trade failed: ${error}`);
+                    }
+                }
+            }
+        });
+        
         this.arbScanner = new MarketMakingScanner(
             this.exchange,
             this.logger,
@@ -200,7 +221,10 @@ export class BotEngine extends EventEmitter {
         });
         
         if (config.activePositions) this.activePositions = config.activePositions;
-        if (config.userAddresses) this.monitor.updateTargets(config.userAddresses);
+        if (config.userAddresses) {
+            this.monitor.updateTargets(config.userAddresses);
+            this.whalePoller.updateTargets(config.userAddresses); // NEW: Update whale poller targets
+        }
         
         this.flashMoveService.on('flash_move_executed', async (data) => {
             this.logger.success(`🔥 FOMO EXECUTED: ${data.event.question}`);
@@ -234,7 +258,10 @@ export class BotEngine extends EventEmitter {
             await this.executor.start();
             await this.portfolioTracker.syncPositions(true);
             
-            if (this.config.enableCopyTrading) await this.monitor.start();
+            if (this.config.enableCopyTrading) {
+                await this.monitor.start();
+                await this.whalePoller.start(); // NEW: Start whale data polling
+            }
             if (this.config.enableMoneyMarkets) await this.arbScanner.start();
             if (this.config.enableFomoRunner) this.flashMoveService.setEnabled(true);
 
@@ -253,6 +280,7 @@ export class BotEngine extends EventEmitter {
         try {
             // CRITICAL: Explicit cleanup to prevent memory leaks in shared intelligence hub
             await this.monitor.stop();
+            await this.whalePoller.stop(); // NEW: Stop whale data polling
             await this.arbScanner.stop();
             await this.executor.stop();
             await this.privateWsManager.stop();
@@ -272,8 +300,13 @@ export class BotEngine extends EventEmitter {
             switch (service.toLowerCase()) {
                 case 'copytrading':
                     this.config.enableCopyTrading = enabled;
-                    if (enabled) await this.monitor.start();
-                    else await this.monitor.stop();
+                    if (enabled) {
+                        await this.monitor.start();
+                        await this.whalePoller.start(); // NEW: Start whale polling
+                    } else {
+                        await this.monitor.stop();
+                        await this.whalePoller.stop(); // NEW: Stop whale polling
+                    }
                     break;
                 case 'moneymarkets':
                 case 'arbitrage':
@@ -300,7 +333,7 @@ export class BotEngine extends EventEmitter {
         return {
             copyTrading: {
                 enabled: this.config.enableCopyTrading,
-                running: this.config.enableCopyTrading && this.monitor.isActive(),
+                running: this.config.enableCopyTrading && (this.monitor.isActive() || this.whalePoller.isActive()), // NEW: Include whale poller
                 targets: this.config.userAddresses.length
             },
             moneyMarkets: {

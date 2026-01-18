@@ -91,6 +91,9 @@ export class TradeExecutorService {
   private readonly PENDING_ORDER_TIMEOUT = 10 * 60 * 1000; // 10 minutes
   private readonly REQUOTE_THROTTLE_MS = 8000; // 8 seconds per token re-quote
   private cleanupInterval?: NodeJS.Timeout; 
+  private closedMarkets: Set<string> = new Set(); // Cache of closed markets to avoid repeated API calls
+  private readonly CLOSED_MARKETS_TTL = 30 * 60 * 1000; // 30 minutes TTL for closed markets cache
+  private closedMarketsTimestamps: Map<string, number> = new Map(); // Track when markets were marked closed 
 
   /**
    * Update the pending spend amount for buy orders
@@ -229,6 +232,7 @@ export class TradeExecutorService {
   private startCleanupInterval(): void {
     this.cleanupInterval = setInterval(() => {
       this.cleanupStaleOrders();
+      this.cleanupExpiredClosedMarkets();
     }, 60000); // Check every minute
   }
 
@@ -257,6 +261,29 @@ export class TradeExecutorService {
       }
       
       this.deps.logger.warn(`⏰ Cleaned up ${staleOrders.length} stale orders, released $${totalReleased.toFixed(2)}`);
+    }
+  }
+
+  /**
+   * Remove expired closed markets from cache
+   */
+  private cleanupExpiredClosedMarkets(): void {
+    const now = Date.now();
+    const expiredMarkets: string[] = [];
+    
+    for (const [conditionId, timestamp] of this.closedMarketsTimestamps.entries()) {
+      if (now - timestamp > this.CLOSED_MARKETS_TTL) {
+        expiredMarkets.push(conditionId);
+      }
+    }
+    
+    for (const conditionId of expiredMarkets) {
+      this.closedMarkets.delete(conditionId);
+      this.closedMarketsTimestamps.delete(conditionId);
+    }
+    
+    if (expiredMarkets.length > 0) {
+      this.deps.logger.debug(`[MM] Cleaned up ${expiredMarkets.length} expired closed markets from cache`);
     }
   }
 
@@ -764,10 +791,17 @@ export class TradeExecutorService {
       try {
           this.deps.logger.info(`⚡ [MM Quote] Processing ${opportunity.question.slice(0,25)}... (Mid: ${midpoint.toFixed(2)}, Spread: ${(spread*100).toFixed(1)}¢)`);
 
-          // 2. Check if market is still active
-          const market = await this.validateMarketForMM(conditionId);
-          if (!market.valid) {
-              return failResult(market.reason || 'market_invalid');
+          // 2. Check if market was previously marked as closed (fail-fast approach)
+          if (this.closedMarkets.has(conditionId)) {
+              // Check if TTL expired
+              const timestamp = this.closedMarketsTimestamps.get(conditionId);
+              if (timestamp && (Date.now() - timestamp) < this.CLOSED_MARKETS_TTL) {
+                  return failResult('market_previously_closed');
+              } else {
+                  // TTL expired, remove from cache
+                  this.closedMarkets.delete(conditionId);
+                  this.closedMarketsTimestamps.delete(conditionId);
+              }
           }
 
           // 3. Cancel existing quotes for this token before placing new ones
@@ -794,7 +828,13 @@ export class TradeExecutorService {
           }
 
           // 5. Calculate dynamic spreads with inventory skew and volatility adjustment
-          const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, market);
+          // Use cached market data or defaults - no API validation needed
+          const marketData = {
+              negRisk: false,
+              tickSize: '0.01',
+              minOrderSize: 5
+          };
+          const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, marketData);
           
           // 6. Calculate order sizes with inventory management
           const optimalSizes = await this.calculateOptimalSizes(
@@ -818,7 +858,7 @@ export class TradeExecutorService {
           let finalAskSize = optimalSizes.askSize;
 
           // Check rewards min_size requirement
-          const minSize = rewardsMinSize || market.minOrderSize || 5;
+          const minSize = rewardsMinSize || marketData.minOrderSize || 5;
           if (finalBidSize > 0 && finalBidSize < minSize) finalBidSize = minSize;
           if (finalAskSize > 0 && finalAskSize < minSize && currentInventory >= minSize) finalAskSize = minSize;
 
@@ -846,8 +886,8 @@ export class TradeExecutorService {
                   side: 'BUY',
                   price: bidPrice,
                   size: finalBidSize,
-                  negRisk: market.negRisk,
-                  tickSize: market.tickSize
+                  negRisk: marketData.negRisk,
+                  tickSize: marketData.tickSize
               });
 
               if (bidOrder.success) {
@@ -866,8 +906,8 @@ export class TradeExecutorService {
                   side: 'SELL',
                   price: askPrice,
                   size: finalAskSize,
-                  negRisk: market.negRisk,
-                  tickSize: market.tickSize
+                  negRisk: marketData.negRisk,
+                  tickSize: marketData.tickSize
               });
 
               if (askOrder.success) {
@@ -889,6 +929,14 @@ export class TradeExecutorService {
       } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
           logger.error(`[MM] Quote execution failed: ${err.message}`, err);
+          
+          // If error indicates market is closed, mark it to avoid repeated attempts
+          if (err.message.includes('closed') || err.message.includes('inactive') || err.message.includes('accepting_orders')) {
+              this.closedMarkets.add(conditionId);
+              this.closedMarketsTimestamps.set(conditionId, Date.now());
+              logger.warn(`[MM] Market ${conditionId} marked as closed due to: ${err.message}`);
+          }
+          
           return failResult(err.message);
       }
   }
@@ -962,6 +1010,9 @@ export class TradeExecutorService {
 
       const market = await this.validateMarketForMM(conditionId);
       if (!market.valid) {
+          // Mark market as closed to avoid repeated API calls
+          this.closedMarkets.add(conditionId);
+          this.closedMarketsTimestamps.set(conditionId, Date.now());
           return { tokenId, status: 'FAILED', reason: market.reason };
       }
 

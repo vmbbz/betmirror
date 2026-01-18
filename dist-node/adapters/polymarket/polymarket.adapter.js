@@ -3,7 +3,7 @@ import { ClobClient, Chain, OrderType, Side } from '@polymarket/clob-client';
 import { JsonRpcProvider, Contract, formatUnits, Interface, ethers } from 'ethers';
 import { EvmWalletService } from '../../services/evm-wallet.service.js';
 import { SafeManagerService } from '../../services/safe-manager.service.js';
-import { User, Trade } from '../../database/index.js';
+import { User, Trade, MarketMetadata as DBMarketMetadata } from '../../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { TOKENS } from '../../config/env.js';
 import axios from 'axios';
@@ -213,15 +213,51 @@ export class PolymarketAdapter {
             ? a.price - b.price
             : b.price - a.price);
     }
+    /**
+     * PASSIVE METADATA RETRIEVAL:
+     * We no longer hit the CLOB API for individual market metadata during live loops.
+     * We check the DB (populated by the scanner) or memory cache.
+     */
     async getMarket(marketId) {
-        if (!this.client)
-            return null;
+        // Check memory cache first
+        const cached = PolymarketAdapter.metadataCache.get(marketId);
+        if (cached && (Date.now() - cached.ts < PolymarketAdapter.PUBLIC_CLIENT_CACHE_TTL)) {
+            return cached.data;
+        }
         try {
-            return await this.client.getMarket(marketId);
+            // Check Database first
+            const dbMeta = await DBMarketMetadata.findOne({ conditionId: marketId }).lean();
+            if (dbMeta) {
+                return dbMeta;
+            }
+            // Fallback only if absolutely necessary and not throttled
+            if (PolymarketAdapter.isThrottled && Date.now() < PolymarketAdapter.throttleExpiry) {
+                return null;
+            }
+            const client = this.client || this.getPublicClient();
+            const market = await client.getMarket(marketId);
+            if (market) {
+                // Seed DB cache if missing
+                await DBMarketMetadata.findOneAndUpdate({ conditionId: marketId }, {
+                    conditionId: marketId,
+                    question: market.question,
+                    image: market.image,
+                    marketSlug: market.market_slug,
+                    closed: market.closed,
+                    active: market.active,
+                    acceptingOrders: market.accepting_orders
+                }, { upsert: true });
+                return market;
+            }
         }
         catch (error) {
+            if (error.response?.status === 429) {
+                PolymarketAdapter.isThrottled = true;
+                PolymarketAdapter.throttleExpiry = Date.now() + 60000;
+            }
             return null;
         }
+        return null;
     }
     isTokenIdValid(tokenId) {
         const now = Date.now();
@@ -244,8 +280,8 @@ export class PolymarketAdapter {
             const isTradeable = !!(market &&
                 market.active &&
                 !market.closed &&
-                market.accepting_orders &&
-                market.enable_order_book);
+                (market.accepting_orders || market.acceptingOrders) &&
+                (market.enable_order_book || market.enable_order_book === undefined));
             return isTradeable;
         }
         catch (error) {
@@ -364,34 +400,52 @@ export class PolymarketAdapter {
     // ============================================
     /**
      * 429 MITIGATION: Shared static cache to prevent hammering Polymarket.
+     * Checks database first.
      */
     async fetchMarketSlugs(conditionId) {
         const cached = PolymarketAdapter.metadataCache.get(conditionId);
         if (cached && (Date.now() - cached.ts < PolymarketAdapter.METADATA_TTL))
             return cached.data;
         const result = { marketSlug: '', eventSlug: '', question: '', image: '', conditionId, acceptingOrders: true, closed: false };
-        if (!this.client || !conditionId)
+        if (!conditionId)
             return result;
         try {
-            const marketData = await this.client.getMarket(conditionId);
-            if (marketData) {
-                result.marketSlug = marketData.market_slug || '';
-                result.question = marketData.question || '';
-                result.image = marketData.image || '';
-                result.acceptingOrders = marketData.accepting_orders ?? true;
-                result.closed = marketData.closed || false;
-                if (result.marketSlug) {
-                    try {
-                        const gammaRes = await axios.get(`https://gamma-api.polymarket.com/markets/slug/${result.marketSlug}`);
-                        result.eventSlug = gammaRes.data.events?.[0]?.slug || '';
-                    }
-                    catch (e) { }
+            // Passive DB-first check
+            const dbMeta = await DBMarketMetadata.findOne({ conditionId }).lean();
+            if (dbMeta) {
+                result.marketSlug = dbMeta.marketSlug || '';
+                result.question = dbMeta.question || '';
+                result.image = dbMeta.image || '';
+                result.acceptingOrders = dbMeta.acceptingOrders ?? true;
+                result.closed = dbMeta.closed || false;
+            }
+            else if (!PolymarketAdapter.isThrottled) {
+                // Active fetch only if not throttled
+                const client = this.client || this.getPublicClient();
+                const marketData = await client.getMarket(conditionId);
+                if (marketData) {
+                    result.marketSlug = marketData.market_slug || '';
+                    result.question = marketData.question || '';
+                    result.image = marketData.image || '';
+                    result.acceptingOrders = marketData.accepting_orders ?? true;
+                    result.closed = marketData.closed || false;
+                    // Seed DB
+                    await DBMarketMetadata.findOneAndUpdate({ conditionId }, {
+                        conditionId,
+                        question: marketData.question,
+                        image: marketData.image,
+                        marketSlug: marketData.market_slug,
+                        closed: marketData.closed,
+                        active: marketData.active,
+                        acceptingOrders: marketData.accepting_orders
+                    }, { upsert: true });
                 }
             }
         }
         catch (e) { }
-        if (result.question || result.marketSlug)
+        if (result.question || result.marketSlug) {
             PolymarketAdapter.metadataCache.set(conditionId, { data: result, ts: Date.now() });
+        }
         return result;
     }
     async getDbPositions() {
@@ -574,7 +628,9 @@ export class PolymarketAdapter {
                 tickSize: tickSize, // Type assertion for TickSize
                 negRisk: market.neg_risk || false
             });
-            let orderType = params.orderType === 'GTC' ? OrderType.GTC : OrderType.FOK;
+            let orderType = params.orderType === 'GTC' ? OrderType.GTC :
+                params.orderType === 'FAK' ? OrderType.FAK :
+                    OrderType.FOK;
             const res = await this.client.postOrder(signedOrder, orderType);
             if (res && res.success && !res.errorMsg) {
                 return {
@@ -642,8 +698,6 @@ export class PolymarketAdapter {
         return await this.safeManager.executeTransaction({ to: CTF_ADDRESS, data, value: "0" });
     }
     async cashout(amount, destination) {
-        if (!this.safeManager)
-            throw new Error("Safe Manager not initialized");
         return await this.safeManager.withdrawUSDC(destination, Math.floor(amount * 1000000).toString());
     }
     async ensureUsdcAllowance(isNegRisk, tradeAmountUsd = 0) {

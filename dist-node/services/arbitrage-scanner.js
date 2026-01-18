@@ -1,5 +1,5 @@
 import { WS_URLS } from '../config/env.js';
-import { MoneyMarketOpportunity } from '../database/index.js';
+import { MoneyMarketOpportunity, MarketMetadata as DBMarketMetadata } from '../database/index.js';
 import EventEmitter from 'events';
 // FIX: Use named import for WebSocket to ensure it is constructable as a class in ESM environment
 import { WebSocket } from 'ws';
@@ -26,6 +26,7 @@ class RateLimiter {
 export class MarketMakingScanner extends EventEmitter {
     adapter;
     logger;
+    metadataService;
     isScanning = false;
     isConnected = false;
     ws;
@@ -67,10 +68,11 @@ export class MarketMakingScanner extends EventEmitter {
         autoMergeThreshold: 100,
         enableKillSwitch: true
     };
-    constructor(adapter, logger, config) {
+    constructor(adapter, logger, metadataService, config) {
         super();
         this.adapter = adapter;
         this.logger = logger;
+        this.metadataService = metadataService;
         if (config)
             this.config = { ...this.config, ...config };
     }
@@ -198,7 +200,7 @@ export class MarketMakingScanner extends EventEmitter {
             const tags = await response.json();
             // Store ALL tags by their slug - catches everything dynamically
             for (const tag of tags) {
-                const slug = (tag.slug || '').toLowerCase();
+                const slug = (tag.slug || tag.label || '').toLowerCase();
                 const id = parseInt(tag.id);
                 if (slug && id && !isNaN(id)) {
                     tagMap[slug] = id;
@@ -221,8 +223,8 @@ export class MarketMakingScanner extends EventEmitter {
             let samplingTokens = new Set();
             try {
                 const sampling = await this.adapter.getSamplingMarkets?.();
-                if (sampling && Array.isArray(sampling)) {
-                    sampling.forEach(m => samplingTokens.add(m.token_id));
+                if (sampling && Array.isArray(sampling.data)) {
+                    sampling.data.forEach(m => samplingTokens.add(m.condition_id));
                     this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools.`);
                 }
             }
@@ -325,6 +327,28 @@ export class MarketMakingScanner extends EventEmitter {
         const status = this.computeMarketStatus(market);
         const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
         const category = this.extractCategory(event, market);
+        // SEED DB: Save metadata so adapter can be passive
+        DBMarketMetadata.findOneAndUpdate({ conditionId }, {
+            conditionId,
+            question: market.question || event.title || 'Unknown',
+            image: market.image || market.icon || event.image || '',
+            marketSlug: market.slug || '',
+            closed: market.closed || false,
+            active: market.active || true,
+            acceptingOrders: market.acceptingOrders || true,
+            updatedAt: new Date()
+        }, { upsert: true }).catch(() => { });
+        // PROACTIVE HYDRATION: Map Market ID AND Token IDs so lookups work regardless of trigger type
+        if (this.metadataService) {
+            this.metadataService.hydrate(conditionId, {
+                conditionId,
+                question: market.question || event.title || 'Unknown',
+                tokenId: tokenIds[0], // Primary token
+                tokenIds: tokenIds, // All tokens for unified mapping
+                marketSlug: market.slug || '',
+                image: market.image || market.icon || event.image || ''
+            });
+        }
         // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];

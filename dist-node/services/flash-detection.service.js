@@ -1,7 +1,7 @@
 import { MoneyMarketOpportunity } from '../database/index.js';
 import axios from 'axios';
 /**
- * Flash Detection Engine - Unified detection logic
+ * Flash Detection Engine - Unified detection logic with HFT support
  */
 export class FlashDetectionEngine {
     config;
@@ -15,14 +15,14 @@ export class FlashDetectionEngine {
     /**
      * Process new price data and detect flash moves
      */
-    async detectFlashMove(tokenId, currentPrice, currentVolume) {
+    async detectFlashMove(tokenId, currentPrice, currentVolume, bestBid, bestAsk) {
         const now = Date.now();
         // Update price history
         const history = this.priceHistory.get(tokenId) || [];
-        history.push({ price: currentPrice, timestamp: now });
-        // Keep only last 30 data points for velocity calculation
-        if (history.length > 30) {
-            history.splice(0, history.length - 30);
+        history.push({ price: currentPrice, timestamp: now, bestBid, bestAsk });
+        // Keep only last 100 data points for HFT analysis
+        if (history.length > 100) {
+            history.splice(0, history.length - 100);
         }
         this.priceHistory.set(tokenId, history);
         // Update volume history
@@ -37,34 +37,46 @@ export class FlashDetectionEngine {
         // Need at least 2 points for velocity calculation
         if (history.length < 2)
             return null;
+        // --- HFT ANALYTICS: Micro-Tick Window (500ms) ---
+        const microWindowSize = 500;
+        const microOldest = history.find(p => now - p.timestamp < microWindowSize);
+        let microVelocity = 0;
+        if (microOldest && microOldest.price !== currentPrice) {
+            microVelocity = (currentPrice - microOldest.price) / microOldest.price;
+        }
+        // --- ORDERBOOK IMBALANCE ---
+        let imbalance = 1.0;
+        if (bestBid && bestAsk) {
+            // Since we only get best prices in the stream, we use bid/ask spread as proxy for pressure
+            // In a true world-class system, we'd use L2 depth here
+            imbalance = bestBid / bestAsk;
+        }
         const oldest = history[0];
         const timeWindow = now - oldest.timestamp;
-        // Only analyze if we have enough data (30 second window)
-        if (timeWindow < 30000)
-            return null;
         // Calculate velocity (primary detection method)
         const velocity = (currentPrice - oldest.price) / oldest.price;
         // Calculate momentum (price acceleration)
         const momentum = this.calculateMomentum(history);
         // Calculate volume spike
         const volumeSpike = this.calculateVolumeSpike(tokenId, currentVolume);
-        // Combine signals for confidence scoring
-        const confidence = this.calculateConfidence(velocity, momentum, volumeSpike);
-        // Check if any threshold is met
+        // Determine if any threshold is met (including HFT triggers)
         const velocityTriggered = Math.abs(velocity) >= this.config.velocityThreshold;
+        const microTriggered = Math.abs(microVelocity) >= (this.config.microTickThreshold || 0.01);
         const momentumTriggered = Math.abs(momentum) >= this.config.momentumThreshold;
         const volumeTriggered = volumeSpike >= this.config.volumeSpikeMultiplier;
-        if (!velocityTriggered && !momentumTriggered && !volumeTriggered) {
+        if (!velocityTriggered && !momentumTriggered && !volumeTriggered && !microTriggered) {
             return null;
         }
+        // Calculate confidence scoring
+        const confidence = this.calculateConfidence(velocity, momentum, volumeSpike, microVelocity);
         // Determine strategy used
         let strategy = 'velocity';
-        if (momentumTriggered && !velocityTriggered)
+        if (microTriggered)
+            strategy = 'micro-tick';
+        else if (momentumTriggered)
             strategy = 'momentum';
-        if (volumeTriggered && !velocityTriggered && !momentumTriggered)
+        else if (volumeTriggered)
             strategy = 'volume';
-        if (momentumTriggered && volumeTriggered)
-            strategy = 'combined';
         // Calculate risk score
         const riskScore = this.calculateRiskScore(velocity, momentum, volumeSpike);
         // Enrich metadata
@@ -83,9 +95,10 @@ export class FlashDetectionEngine {
             image: metadata.image,
             marketSlug: metadata.marketSlug,
             riskScore,
-            strategy
+            strategy,
+            imbalance
         };
-        this.logger.info(`🔴 FLASH MOVE DETECTED: ${strategy} strategy on ${metadata.question || tokenId} (Velocity: ${(velocity * 100).toFixed(2)}%, Confidence: ${(confidence * 100).toFixed(1)}%)`);
+        this.logger.info(`🔴 FLASH MOVE DETECTED [${strategy}]: ${metadata.question || tokenId} (Velocity: ${(velocity * 100).toFixed(2)}%, Confidence: ${(confidence * 100).toFixed(1)}%)`);
         return event;
     }
     /**
@@ -118,19 +131,23 @@ export class FlashDetectionEngine {
     /**
      * Calculate confidence score based on multiple signals
      */
-    calculateConfidence(velocity, momentum, volumeSpike) {
+    calculateConfidence(velocity, momentum, volumeSpike, microVelocity) {
         let confidence = 0;
-        // Velocity confidence (40% weight)
+        // Micro-velocity (High weight for HFT)
+        if (Math.abs(microVelocity) >= 0.01) {
+            confidence += 0.5;
+        }
+        // Velocity confidence (30% weight)
         if (Math.abs(velocity) >= this.config.velocityThreshold) {
-            confidence += 0.4;
+            confidence += 0.3;
         }
-        // Momentum confidence (30% weight)
+        // Momentum confidence (10% weight)
         if (Math.abs(momentum) >= this.config.momentumThreshold) {
-            confidence += 0.3;
+            confidence += 0.1;
         }
-        // Volume confidence (30% weight)
+        // Volume confidence (10% weight)
         if (volumeSpike >= this.config.volumeSpikeMultiplier) {
-            confidence += 0.3;
+            confidence += 0.1;
         }
         return Math.min(confidence, 1.0);
     }

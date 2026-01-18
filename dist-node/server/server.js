@@ -6,7 +6,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { Server as SocketIOServer } from 'socket.io';
 import { createServer } from 'http';
-import { ethers } from 'ethers';
+import { ethers, JsonRpcProvider } from 'ethers';
 import { BotEngine } from './bot-engine.js';
 import { connectDB, User, Registry, Trade, Feedback, BridgeTransaction, BotLog, DepositLog, HunterEarning } from '../database/index.js';
 import { PortfolioSnapshotModel } from '../database/portfolio.schema.js';
@@ -15,7 +15,6 @@ import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
-import { ProviderFactory } from '../services/provider-factory.service.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import { WebSocketManager } from '../services/websocket-manager.service.js';
 import { FlashMoveService } from '../services/flash-move.service.js';
@@ -742,7 +741,7 @@ app.post('/api/wallet/withdraw', async (req, res) => {
         }
         const walletConfig = user.tradingWallet;
         let txHash = '';
-        const provider = await ProviderFactory.getSharedProvider();
+        const provider = new JsonRpcProvider(ENV.rpcUrl);
         const USDC_ABI = ['function balanceOf(address owner) view returns (uint256)'];
         const usdcContract = new ethers.Contract(TOKENS.USDC_BRIDGED, USDC_ABI, provider);
         let safeAddr = targetSafeAddress || walletConfig.safeAddress;
@@ -1102,7 +1101,7 @@ async function seedRegistry() {
                         copyCount: 0,
                         copyProfitGenerated: 0,
                         lastUpdated: new Date(),
-                        verified: true
+                        isVerified: true // FIX: Changed from 'verified' to 'isVerified'
                     });
                     addedCount++;
                     console.log(`   ✅ Added ${normalized.slice(0, 8)}... as Official System Wallet`);
@@ -1111,7 +1110,7 @@ async function seedRegistry() {
                     // Upgrade existing wallet to system status
                     const updateData = {
                         isSystem: true,
-                        verified: true,
+                        isVerified: true, // FIX: Changed from 'verified' to 'isVerified'
                         lastUpdated: new Date()
                     };
                     // Merge tags properly

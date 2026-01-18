@@ -12,8 +12,12 @@ export const DEFAULT_FLASH_MOVE_CONFIG: FlashMoveConfig = {
   momentumThreshold: 0.02,        // 2% price acceleration threshold
   volumeSpikeMultiplier: 3.0,     // 3x normal volume triggers detection
   
+  // HFT thresholds
+  microTickThreshold: 0.01,        // Velocity threshold for 500ms window
+  imbalanceThreshold: 5.0,          // Bid/Ask imbalance multiplier
+  
   // Execution parameters
-  baseTradeSize: 50,              // $50 default trade size
+  baseTradeSize: 10,              // $10 default trade size
   maxSlippagePercent: 0.02,      // 2% maximum slippage tolerance
   stopLossPercent: 0.10,           // 10% stop loss
   takeProfitPercent: 0.20,         // 20% take profit
@@ -39,7 +43,7 @@ export const CONSERVATIVE_FLASH_MOVE_CONFIG: FlashMoveConfig = {
   velocityThreshold: 0.05,        // 5% threshold (more selective)
   momentumThreshold: 0.03,        // 3% acceleration threshold
   volumeSpikeMultiplier: 4.0,     // 4x volume required
-  baseTradeSize: 25,              // $25 smaller position size
+  baseTradeSize: 5,              // $5 smaller position size
   maxSlippagePercent: 0.01,      // 1% tighter slippage control
   stopLossPercent: 0.05,           // 5% tighter stop loss
   takeProfitPercent: 0.15,         // 15% conservative take profit
@@ -57,7 +61,7 @@ export const AGGRESSIVE_FLASH_MOVE_CONFIG: FlashMoveConfig = {
   velocityThreshold: 0.02,        // 2% threshold (more sensitive)
   momentumThreshold: 0.015,       // 1.5% acceleration threshold
   volumeSpikeMultiplier: 2.0,     // 2x volume required
-  baseTradeSize: 100,             // $100 larger position size
+  baseTradeSize: 20,             // $20 larger position size
   maxSlippagePercent: 0.03,      // 3% looser slippage tolerance
   stopLossPercent: 0.15,           // 15% wider stop loss
   takeProfitPercent: 0.30,         // 30% higher take profit target

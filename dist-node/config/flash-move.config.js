@@ -9,6 +9,9 @@ export const DEFAULT_FLASH_MOVE_CONFIG = {
     velocityThreshold: 0.03, // 3% price movement triggers detection
     momentumThreshold: 0.02, // 2% price acceleration threshold
     volumeSpikeMultiplier: 3.0, // 3x normal volume triggers detection
+    // HFT thresholds
+    microTickThreshold: 0.01, // Velocity threshold for 500ms window
+    imbalanceThreshold: 5.0, // Bid/Ask imbalance multiplier
     // Execution parameters
     baseTradeSize: 50, // $50 default trade size
     maxSlippagePercent: 0.02, // 2% maximum slippage tolerance

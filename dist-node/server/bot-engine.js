@@ -103,7 +103,8 @@ export class BotEngine extends EventEmitter {
                 }
             }
         });
-        this.arbScanner = new MarketMakingScanner(this.exchange, this.logger, {
+        this.arbScanner = new MarketMakingScanner(this.exchange, this.logger, this.marketMetadataService, // Add proactive hydration support
+        {
             minSpreadCents: 1,
             maxSpreadCents: 15,
             minVolume: 5000,

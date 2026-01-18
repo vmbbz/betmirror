@@ -1,5 +1,4 @@
-import { Interface, Contract, ethers } from 'ethers';
-import { ProviderFactory } from './provider-factory.service.js';
+import { Interface, Contract, ethers, JsonRpcProvider } from 'ethers';
 import { RelayClient, OperationType } from '@polymarket/builder-relayer-client';
 import { deriveSafe } from '@polymarket/builder-relayer-client/dist/builder/derive.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
@@ -102,7 +101,13 @@ export class SafeManagerService {
         const polySafe = await deriveSafe(ownerAddress, POLYMARKET_SAFE_FACTORY);
         const stdSafe = await deriveSafe(ownerAddress, STANDARD_SAFE_FACTORY);
         try {
-            const provider = await ProviderFactory.getSharedProvider();
+            const network = { chainId: 137, name: 'polygon' };
+            const provider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com', network, {
+                staticNetwork: true,
+                batchMaxCount: 10,
+                polling: false,
+                cacheTimeout: 10000
+            });
             const stdCode = await provider.getCode(stdSafe);
             if (stdCode && stdCode !== '0x') {
                 console.log(`[SafeManager] Found existing Legacy Safe at ${stdSafe}`);

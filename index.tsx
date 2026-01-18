@@ -68,7 +68,7 @@ const LogItem = ({ log, onTradeLive }: { log: any, onTradeLive: (id: string) => 
                         href={`https://polymarket.com/profile/${addresses[i]}`} 
                         target="_blank" 
                         rel="noreferrer"
-                        className="text-blue-500 hover:underline font-bold"
+                        className="text-blue-500 hover:underline font-mono text-[9px]"
                     >
                         {addresses[i].slice(0, 10)}...
                     </a>
@@ -79,27 +79,27 @@ const LogItem = ({ log, onTradeLive }: { log: any, onTradeLive: (id: string) => 
     };
 
     return (
-        <div className="flex flex-col gap-1 hover:bg-gray-50 dark:hover:bg-white/5 p-2 rounded border-l-2 border-transparent hover:border-blue-500/30 group transition-all">
-            <div className="flex gap-3 items-start">
-                <span className="text-gray-400 dark:text-gray-600 shrink-0 font-mono select-none text-[10px]">
+        <div className="flex flex-col gap-0 hover:bg-gray-50 dark:hover:bg-white/5 px-1 py-0.5 rounded border-l border-transparent hover:border-blue-500/30 group transition-all">
+            <div className="flex gap-1 items-start">
+                <span className="text-gray-500 dark:text-gray-600 shrink-0 font-mono select-none text-[8px] leading-none">
                     [{log.time || new Date(log.timestamp).toLocaleTimeString()}]
                 </span>
                 
                 <div className="flex-1 min-w-0">
-                    <span className={`break-all font-mono text-[11px] ${
+                    <span className={`break-all font-mono text-[9px] leading-none ${
                         log.type === 'error' ? 'text-red-600 dark:text-terminal-danger' : 
                         log.type === 'warn' ? 'text-yellow-600 dark:text-terminal-warn' : 
                         log.type === 'success' ? 'text-green-600 dark:text-terminal-success' : 
                         isWhale ? 'text-blue-600 dark:text-blue-400' : 
-                        isFlash ? 'text-rose-500' : 'text-gray-800 dark:text-blue-200'
+                        isFlash ? 'text-rose-500' : 'text-gray-700 dark:text-gray-300'
                     }`}>
                         {renderMessage(log.message)}
                     </span>
                     
                     {(isWhale || isFlash) && metadata?.question && (
-                        <div className="mt-1 flex items-center gap-2 flex-wrap">
-                            <span className="text-[9px] text-gray-500 uppercase font-black tracking-tighter">Market:</span>
-                            <span className="text-[9px] text-gray-400 font-bold truncate max-w-[250px]">{metadata.question}</span>
+                        <div className="mt-0 flex items-center gap-1 flex-wrap">
+                            <span className="text-[7px] text-gray-500 uppercase font-black tracking-tighter">Market:</span>
+                            <span className="text-[7px] text-gray-400 font-bold truncate max-w-[250px] leading-none">{metadata.question}</span>
                             {metadata.marketSlug && (
                                 <a 
                                     href={`https://polymarket.com/market/${metadata.marketSlug}`} 
@@ -107,7 +107,7 @@ const LogItem = ({ log, onTradeLive }: { log: any, onTradeLive: (id: string) => 
                                     rel="noreferrer"
                                     className="text-blue-500/70 hover:text-blue-500"
                                 >
-                                    <ExternalLink size={10}/>
+                                    <ExternalLink size={6}/>
                                 </a>
                             )}
                         </div>
@@ -117,9 +117,9 @@ const LogItem = ({ log, onTradeLive }: { log: any, onTradeLive: (id: string) => 
                 {(isWhale || isFlash) && (metadata.conditionId || metadata.tokenId) && (
                     <button 
                         onClick={() => onTradeLive(metadata.conditionId || metadata.tokenId)}
-                        className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 bg-blue-600 text-white text-[8px] font-black rounded uppercase tracking-widest transition-all hover:bg-blue-500"
+                        className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 px-1 py-0.5 bg-blue-600 text-white text-[6px] font-black rounded uppercase tracking-widest transition-all hover:bg-blue-500"
                     >
-                        <Zap size={10} fill="currentColor"/> Trade Live
+                        <Zap size={6} fill="currentColor"/> T
                     </button>
                 )}
             </div>
@@ -3521,28 +3521,28 @@ return (
                     </div>
 
                     {/* LIVE LOG TERMINAL */}
-                    <div className="flex-1 glass-panel rounded-[2rem] border-white/5 flex flex-col min-h-[400px] overflow-hidden shadow-2xl">
-                        <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-                            <div className="flex items-center gap-3">
-                                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.5)]"></div>
-                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.4em] flex items-center gap-2">
-                                    <Terminal size={12}/> Log Stream
+                    <div className="flex-1 glass-panel rounded-[0.5rem] border-white/5 flex flex-col min-h-[200px] overflow-hidden shadow-lg">
+                        <div className="px-2 py-1 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+                            <div className="flex items-center gap-1">
+                                <div className="w-1 h-1 rounded-full bg-blue-500 animate-pulse shadow-[0_0_4px_rgba(59,130,246,0.5)]"></div>
+                                <span className="text-[7px] font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-0.5">
+                                    <Terminal size={8}/> LOGS
                                 </span>
                             </div>
                             <button 
                                 onClick={() => setLogs([])} 
-                                className="p-2 text-slate-600 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
+                                className="p-0.5 text-slate-600 hover:text-white hover:bg-white/5 rounded transition-colors"
                                 title="Clear Terminal"
                             >
-                                <Trash2 size={14}/>
+                                <Trash2 size={10}/>
                             </button>
                         </div>
                         
-                        <div className="flex-1 overflow-y-auto p-4 space-y-1 custom-scrollbar bg-black/20">
+                        <div className="flex-1 overflow-y-auto p-1 space-y-0 custom-scrollbar bg-black/20">
                             {logs.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center opacity-20 gap-4">
-                                    <Activity size={48} className="text-blue-500" />
-                                    <p className="uppercase font-black text-[10px] tracking-[0.3em] text-white">Awaiting Network Pulse...</p>
+                                <div className="h-full flex flex-col items-center justify-center opacity-20 gap-2">
+                                    <Activity size={24} className="text-blue-500" />
+                                    <p className="uppercase font-black text-[7px] tracking-[0.1em] text-gray-400">Awaiting Network Pulse...</p>
                                 </div>
                             ) : (
                                 logs.map((log, i) => (

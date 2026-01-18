@@ -17,9 +17,9 @@ export interface MarketMetadataCacheEntry {
 
 export class MarketMetadataService {
     private memoryCache = new Map<string, MarketMetadataCacheEntry>();
-    private readonly MAX_MEMORY_CACHE_SIZE = 50; // Hot markets only
-    private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-    private readonly DB_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes for DB
+    private readonly MAX_MEMORY_CACHE_SIZE = 5000; // Expanded to handle all token mappings
+    private readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+    private readonly DB_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour for DB
 
     constructor(
         private adapter: IExchangeAdapter,
@@ -27,48 +27,102 @@ export class MarketMetadataService {
     ) {}
 
     /**
-     * Get market metadata with hybrid caching strategy
-     * L1: Memory cache (hot markets - last 50 accessed)
-     * L2: Database cache (all markets ever seen)  
-     * L3: API fetch (fallback with rate limiting)
+     * HFT LOOP ONLY: Synchronous RAM lookup.
+     * Bypasses DB and API entirely to ensure sub-millisecond execution.
+     * Supports both conditionId and tokenId lookups.
      */
+    public getMetadataSync(id: string): any | null {
+        const entry = this.memoryCache.get(id);
+        if (entry && (Date.now() - entry.lastAccessed < this.CACHE_TTL_MS)) {
+            entry.lastAccessed = Date.now();
+            return entry.metadata;
+        }
+        return null;
+    }
+
     /**
-     * Get market metadata with hybrid caching strategy.
+     * PROACTIVE HYDRATION: Scanner pushes data to RAM and background-saves to DB.
+     * Now maps the conditionId AND all associated tokenIds to the same entry.
+     */
+    public hydrate(conditionId: string, metadata: any): void {
+        const enriched = {
+            ...metadata,
+            updatedAt: new Date()
+        };
+
+        const entry: MarketMetadataCacheEntry = {
+            metadata: enriched,
+            lastAccessed: Date.now()
+        };
+
+        // Map by Market ID
+        this.memoryCache.set(conditionId, entry);
+
+        // Map by Single Token ID
+        if (metadata.tokenId) {
+            this.memoryCache.set(metadata.tokenId, entry);
+        }
+
+        // Map by Multiple Token IDs (Outcome level)
+        if (metadata.tokenIds && Array.isArray(metadata.tokenIds)) {
+            metadata.tokenIds.forEach((tid: string) => {
+                this.memoryCache.set(tid, entry);
+            });
+        }
+
+        this.saveToDatabase(enriched as IMarketMetadata).catch(e => 
+            this.logger.debug(`[Metadata] Background save deferred for ${conditionId}`)
+        );
+    }
+
+    /**
+     * Get market metadata with hybrid caching strategy
+     * L1: Memory cache (hot markets - support for tokenId or conditionId)
+     * L2: Database cache (OR query for all ID types)
+     * L3: API fetch (fallback with rate limiting)
      * @param skipApi - If true, only check memory and DB. Crucial for log enrichment to avoid 429s.
      */
-    async getMetadata(conditionId: string, skipApi = false): Promise<IMarketMetadata | null> {
+    async getMetadata(id: string, skipApi = false): Promise<IMarketMetadata | null> {
         try {
             // L1: Memory
-            const memoryEntry = this.memoryCache.get(conditionId);
-            if (memoryEntry && (Date.now() - memoryEntry.lastAccessed < this.CACHE_TTL_MS)) {
-                return memoryEntry.metadata;
-            }
+            const ram = this.getMetadataSync(id);
+            if (ram) return ram;
 
-            // L2: Database
-            const dbMetadata = await DBMarketMetadata.findOne({ conditionId }).lean();
+            // L2: Database - Support OR query for both ID types
+            const dbMetadata = await DBMarketMetadata.findOne({ 
+                $or: [
+                    { conditionId: id }, 
+                    { tokenId: id }, 
+                    { tokenIds: id },
+                    { marketSlug: id }
+                ] 
+            }).lean();
+            
             if (dbMetadata) {
-                this.updateMemoryCache(conditionId, dbMetadata as any);
+                // Re-hydrate L1 for future fast-path lookups
+                this.hydrate(dbMetadata.conditionId, dbMetadata);
                 return dbMetadata as any;
             }
 
             // L3: API (Optional)
             if (skipApi) return null;
 
-            this.logger.debug(`[Metadata] Cache miss, fetching from API: ${conditionId}`);
-            const marketData = await this.adapter.getMarketData(conditionId);
+            this.logger.debug(`[Metadata] Cache miss, fetching from API: ${id}`);
+            const marketData = await this.adapter.getMarketData(id);
             if (marketData) {
                 const metadata: any = {
-                    conditionId,
+                    conditionId: marketData.condition_id,
                     question: marketData.question,
                     image: marketData.image,
                     marketSlug: marketData.market_slug,
                     eventSlug: marketData.market_slug,
+                    tokenId: marketData.tokens?.[0]?.token_id,
+                    tokenIds: marketData.tokens?.map(t => t.token_id) || [],
                     acceptingOrders: marketData.accepting_orders,
                     closed: marketData.closed,
                     updatedAt: new Date()
                 };
-                await DBMarketMetadata.findOneAndUpdate({ conditionId }, metadata, { upsert: true });
-                this.updateMemoryCache(conditionId, metadata);
+                this.hydrate(metadata.conditionId, metadata);
                 return metadata;
             }
 
@@ -82,49 +136,37 @@ export class MarketMetadataService {
      * Batch fetch metadata for multiple markets
      * Optimized for bulk operations like portfolio sync
      */
-    async getBatchMetadata(conditionIds: string[]): Promise<Map<string, IMarketMetadata>> {
+    async getBatchMetadata(ids: string[]): Promise<Map<string, IMarketMetadata>> {
         const results = new Map<string, IMarketMetadata>();
         const toFetch: string[] = [];
 
         // Check cache first
-        for (const conditionId of conditionIds) {
-            const memoryEntry = this.memoryCache.get(conditionId);
-            if (memoryEntry && this.isCacheValid(memoryEntry.lastAccessed)) {
-                results.set(conditionId, memoryEntry.metadata);
-                this.updateMemoryAccess(conditionId);
+        for (const id of ids) {
+            const metadata = this.getMetadataSync(id);
+            if (metadata) {
+                results.set(id, metadata);
             } else {
-                toFetch.push(conditionId);
+                toFetch.push(id);
             }
         }
 
         // Batch fetch from database for remaining
         if (toFetch.length > 0) {
-            const dbResults = await this.getBatchFromDatabase(toFetch);
-            for (const [conditionId, metadata] of dbResults) {
-                if (this.isDbCacheValid(metadata.updatedAt)) {
-                    results.set(conditionId, metadata);
-                    this.updateMemoryCache(conditionId, metadata);
-                }
-            }
-        }
+            try {
+                const dbResults = await DBMarketMetadata.find({ 
+                    $or: [
+                        { conditionId: { $in: toFetch } },
+                        { tokenId: { $in: toFetch } },
+                        { tokenIds: { $in: toFetch } }
+                    ]
+                }).lean();
 
-        // Identify still missing markets
-        const stillMissing = conditionIds.filter(id => !results.has(id));
-        if (stillMissing.length > 0) {
-            this.logger.info(`[Metadata] Batch fetching ${stillMissing.length} markets from API`);
-            
-            // API fetch with rate limiting
-            for (const conditionId of stillMissing) {
-                try {
-                    const apiMetadata = await this.fetchFromAPI(conditionId);
-                    if (apiMetadata) {
-                        await this.saveToDatabase(apiMetadata);
-                        this.updateMemoryCache(conditionId, apiMetadata);
-                        results.set(conditionId, apiMetadata);
-                    }
-                } catch (error) {
-                    this.logger.error(`[Metadata] Failed to fetch ${conditionId}: ${error}`);
+                for (const record of dbResults) {
+                    this.hydrate(record.conditionId, record);
+                    results.set(record.conditionId, record as any);
                 }
+            } catch (error) {
+                this.logger.error(`[Metadata] Batch DB query failed: ${error}`);
             }
         }
 
@@ -137,10 +179,10 @@ export class MarketMetadataService {
     async updateMetadata(conditionId: string, updates: Partial<IMarketMetadata>): Promise<void> {
         try {
             // Update in memory if cached
-            const memoryEntry = this.memoryCache.get(conditionId);
-            if (memoryEntry) {
-                Object.assign(memoryEntry.metadata, updates, { updatedAt: new Date() });
-                memoryEntry.lastAccessed = Date.now();
+            const entry = this.memoryCache.get(conditionId);
+            if (entry) {
+                Object.assign(entry.metadata, updates, { updatedAt: new Date() });
+                entry.lastAccessed = Date.now();
             }
 
             // Update in database
@@ -161,39 +203,23 @@ export class MarketMetadataService {
         entries.sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
         
         // Remove expired entries
-        for (const [conditionId, entry] of entries) {
-            if (!this.isCacheValid(entry.lastAccessed) || this.memoryCache.size > this.MAX_MEMORY_CACHE_SIZE) {
-                this.memoryCache.delete(conditionId);
+        for (const [id, entry] of entries) {
+            if (now - entry.lastAccessed > this.CACHE_TTL_MS || this.memoryCache.size > this.MAX_MEMORY_CACHE_SIZE) {
+                this.memoryCache.delete(id);
             }
         }
     }
 
-    // ============================================================
+    // ============================================
     // PRIVATE METHODS
-    // ============================================================
+    // ============================================
 
-    private isCacheValid(lastAccessed: number): boolean {
-        return (Date.now() - lastAccessed) < this.CACHE_TTL_MS;
-    }
-
-    private isDbCacheValid(updatedAt: Date): boolean {
-        return (Date.now() - updatedAt.getTime()) < this.DB_CACHE_TTL_MS;
-    }
-
-    private updateMemoryAccess(conditionId: string): void {
-        const entry = this.memoryCache.get(conditionId);
-        if (entry) {
-            entry.lastAccessed = Date.now();
-        }
-    }
-
-    private updateMemoryCache(conditionId: string, metadata: IMarketMetadata): void {
-        // Implement LRU eviction if cache is full
+    private updateMemoryCache(id: string, metadata: IMarketMetadata): void {
         if (this.memoryCache.size >= this.MAX_MEMORY_CACHE_SIZE) {
             this.evictLRU();
         }
 
-        this.memoryCache.set(conditionId, {
+        this.memoryCache.set(id, {
             metadata: { ...metadata },
             lastAccessed: Date.now()
         });
@@ -212,62 +238,6 @@ export class MarketMetadataService {
 
         if (oldestKey) {
             this.memoryCache.delete(oldestKey);
-        }
-    }
-
-    private async fetchFromAPI(conditionId: string): Promise<IMarketMetadata | null> {
-        try {
-            const marketData = await this.adapter.getMarketData(conditionId);
-            if (!marketData) return null;
-            
-            // Convert Market interface to IMarketMetadata
-            const metadata: any = {
-                conditionId,
-                question: marketData.question,
-                image: marketData.image,
-                marketSlug: marketData.market_slug,
-                eventSlug: marketData.market_slug, // Using market_slug as eventSlug for now
-                acceptingOrders: marketData.accepting_orders,
-                closed: marketData.closed,
-                rewards: marketData.rewards,
-                tags: marketData.tags,
-                minimum_order_size: marketData.minimum_order_size,
-                minimum_tick_size: marketData.minimum_tick_size,
-                updatedAt: new Date(),
-                createdAt: new Date()
-            };
-            return metadata;
-        } catch (error) {
-            this.logger.error(`[Metadata] API fetch failed for ${conditionId}: ${error}`);
-            return null;
-        }
-    }
-
-    private async getFromDatabase(conditionId: string): Promise<IMarketMetadata | null> {
-        try {
-            const metadata = await DBMarketMetadata.findOne({ conditionId });
-            return metadata ? metadata.toObject() : null;
-        } catch (error) {
-            this.logger.error(`[Metadata] DB query failed for ${conditionId}: ${error}`);
-            return null;
-        }
-    }
-
-    private async getBatchFromDatabase(conditionIds: string[]): Promise<Map<string, IMarketMetadata>> {
-        try {
-            const metadataRecords = await DBMarketMetadata.find({ 
-                conditionId: { $in: conditionIds } 
-            });
-            
-            const results = new Map<string, IMarketMetadata>();
-            for (const record of metadataRecords) {
-                results.set(record.conditionId, record.toObject());
-            }
-            
-            return results;
-        } catch (error) {
-            this.logger.error(`[Metadata] Batch DB query failed: ${error}`);
-            return new Map<string, IMarketMetadata>();
         }
     }
 
@@ -305,9 +275,6 @@ export class MarketMetadataService {
         }
     }
 
-    /**
-     * Get cache statistics for monitoring
-     */
     getCacheStats(): {
         memoryCacheSize: number;
         maxMemoryCacheSize: number;
@@ -316,7 +283,7 @@ export class MarketMetadataService {
         return {
             memoryCacheSize: this.memoryCache.size,
             maxMemoryCacheSize: this.MAX_MEMORY_CACHE_SIZE,
-            hitRate: 0 // Would need to track hits/misses
+            hitRate: 0 
         };
     }
 }

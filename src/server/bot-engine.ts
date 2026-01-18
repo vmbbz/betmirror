@@ -1,4 +1,3 @@
-
 import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
@@ -174,6 +173,7 @@ export class BotEngine extends EventEmitter {
         this.arbScanner = new MarketMakingScanner(
             this.exchange,
             this.logger,
+            this.marketMetadataService, // Add proactive hydration support
             {
                 minSpreadCents: 1,
                 maxSpreadCents: 15,

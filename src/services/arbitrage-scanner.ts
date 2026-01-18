@@ -2,6 +2,7 @@ import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { Logger } from '../utils/logger.util.js';
 import { WS_URLS } from '../config/env.js';
 import { MoneyMarketOpportunity, MarketMetadata as DBMarketMetadata } from '../database/index.js';
+import { MarketMetadataService } from './market-metadata.service.js';
 import EventEmitter from 'events';
 // FIX: Use named import for WebSocket to ensure it is constructable as a class in ESM environment
 import { WebSocket } from 'ws';
@@ -184,6 +185,7 @@ export class MarketMakingScanner extends EventEmitter {
     constructor(
         private adapter: IExchangeAdapter,
         private logger: Logger,
+        private metadataService: MarketMetadataService,
         config?: Partial<MarketMakerConfig>
     ) {
         super();
@@ -500,6 +502,18 @@ export class MarketMakingScanner extends EventEmitter {
             acceptingOrders: market.acceptingOrders || true,
             updatedAt: new Date()
         }, { upsert: true }).catch(() => {});
+
+        // PROACTIVE HYDRATION: Map Market ID AND Token IDs so lookups work regardless of trigger type
+        if (this.metadataService) {
+            this.metadataService.hydrate(conditionId, {
+                conditionId,
+                question: market.question || event.title || 'Unknown',
+                tokenId: tokenIds[0], // Primary token
+                tokenIds: tokenIds, // All tokens for unified mapping
+                marketSlug: market.slug || '',
+                image: market.image || market.icon || event.image || ''
+            });
+        }
 
         // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {

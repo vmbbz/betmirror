@@ -773,7 +773,10 @@ private getEmptySamplingPayload(): PaginationPayload<Market> {
                 negRisk: market.neg_risk || false
             });
 
-            let orderType = params.orderType === 'GTC' ? OrderType.GTC : OrderType.FOK;
+            let orderType = params.orderType === 'GTC' ? OrderType.GTC : 
+                           params.orderType === 'FAK' ? OrderType.FAK : 
+                           OrderType.FOK;
+            
             const res = await this.client.postOrder(signedOrder, orderType);
 
             if (res && res.success && !res.errorMsg) {

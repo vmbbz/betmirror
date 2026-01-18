@@ -1,4 +1,3 @@
-
 import { EventEmitter } from 'events';
 // FIX: Use named import for WebSocket class. The Node.js 'ws' package exports it this way.
 import { WebSocket } from 'ws';
@@ -26,6 +25,8 @@ export interface PriceEvent {
     asset_id: string;
     price: number;
     timestamp: number;
+    best_bid?: number;
+    best_ask?: number;
 }
 
 export interface TradeEvent {
@@ -239,7 +240,12 @@ export class WebSocketManager extends EventEmitter {
                 this.logger.success('✅ Market Channel Connected');
 
                 // Subscribe to general topics
-                this.marketWs?.send(JSON.stringify({ type: "market", assets_ids: [] }));
+                // HFT UPGRADE: Enable custom features for best_bid_ask low-latency events
+                this.marketWs?.send(JSON.stringify({ 
+                    type: "market", 
+                    assets_ids: Array.from(this.marketSubscriptions),
+                    custom_feature_enabled: true 
+                }));
                 this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
 
                 // Resubscribe to all tokens
@@ -270,6 +276,27 @@ export class WebSocketManager extends EventEmitter {
                 if (this.isRunning) {
                     this.handleMarketReconnect();
                 }
+            });
+
+            wsAny.on('open', () => {
+                this.isMarketConnected = true;
+                this.marketReconnectAttempts = 0;
+                this.logger.success('✅ Market Channel Connected');
+
+                // Subscribe to general topics
+                // HFT UPGRADE: Enable custom features for best_bid_ask low-latency events
+                this.marketWs?.send(JSON.stringify({ 
+                    type: "market", 
+                    assets_ids: Array.from(this.marketSubscriptions),
+                    custom_feature_enabled: true 
+                }));
+                this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
+
+                // Resubscribe to all tokens
+                this.resubscribeAllTokens();
+
+                this.startMarketPing();
+                resolve();
             });
 
             wsAny.on('error', (error: Error) => {
@@ -441,6 +468,8 @@ export class WebSocketManager extends EventEmitter {
             const priceEvent: PriceEvent = {
                 asset_id: tokenId,
                 price: (bestBid + bestAsk) / 2, // Use midpoint as price
+                best_bid: bestBid,
+                best_ask: bestAsk,
                 timestamp: Date.now()
             };
             this.emit('price_update', priceEvent);
@@ -464,6 +493,8 @@ export class WebSocketManager extends EventEmitter {
             const priceEvent: PriceEvent = {
                 asset_id: tokenId,
                 price: (bestBid + bestAsk) / 2, // Use midpoint as price
+                best_bid: bestBid,
+                best_ask: bestAsk,
                 timestamp: Date.now()
             };
             this.emit('price_update', priceEvent);
@@ -511,6 +542,8 @@ export class WebSocketManager extends EventEmitter {
                 const priceEvent: PriceEvent = {
                     asset_id: tokenId,
                     price: (bestBid + bestAsk) / 2, // Use midpoint as price
+                    best_bid: bestBid,
+                    best_ask: bestAsk,
                     timestamp: Date.now()
                 };
                 this.emit('price_update', priceEvent);
@@ -614,7 +647,8 @@ export class WebSocketManager extends EventEmitter {
         if (this.marketWs?.readyState === 1) {
             this.marketWs.send(JSON.stringify({
                 type: "market",
-                assets_ids: [tokenId]
+                assets_ids: [tokenId],
+                custom_feature_enabled: true
             }));
         }
     }
@@ -623,11 +657,12 @@ export class WebSocketManager extends EventEmitter {
      * Resubscribe to all tracked tokens
      */
     private resubscribeAllTokens(): void {
-        this.marketSubscriptions.forEach(tokenId => {
-            this.sendMarketSubscription(tokenId);
-        });
-        
         if (this.marketSubscriptions.size > 0) {
+            this.marketWs?.send(JSON.stringify({
+                type: "market",
+                assets_ids: Array.from(this.marketSubscriptions),
+                custom_feature_enabled: true
+            }));
             this.logger.info(`🔌 Resubscribed to ${this.marketSubscriptions.size} tokens`);
         }
     }

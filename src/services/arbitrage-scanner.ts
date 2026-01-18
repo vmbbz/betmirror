@@ -81,6 +81,8 @@ interface TrackedMarket {
     marketSlug?: string;
     bestBid: number;
     bestAsk: number;
+    bestBidSize: number;  // Order size at best bid
+    bestAskSize: number;  // Order size at best ask
     spread: number;
     volume: number;
     liquidity: number;
@@ -561,6 +563,8 @@ export class MarketMakingScanner extends EventEmitter {
                 marketSlug: market.slug || '',
                 bestBid: initialBid,
                 bestAsk: initialAsk,
+                bestBidSize: 0,  // Initialize with 0, will be updated from price feed
+                bestAskSize: 0,  // Initialize with 0, will be updated from price feed
                 spread: initialAsk - initialBid,
                 volume,
                 liquidity,
@@ -1018,6 +1022,8 @@ export class MarketMakingScanner extends EventEmitter {
 
         const bestBid = parseFloat(msg.best_bid || '0');
         const bestAsk = parseFloat(msg.best_ask || '1');
+        const bestBidSize = parseFloat(msg.best_bid_size || '0');
+        const bestAskSize = parseFloat(msg.best_ask_size || '0');
         
         // Calculate spread if not provided
         const spread = msg.spread !== undefined ? parseFloat(msg.spread) : (bestAsk - bestBid);
@@ -1032,6 +1038,8 @@ export class MarketMakingScanner extends EventEmitter {
         if (bestBid > 0 && bestAsk > 0 && bestAsk > bestBid) {
             market.bestBid = bestBid;
             market.bestAsk = bestAsk;
+            market.bestBidSize = bestBidSize;
+            market.bestAskSize = bestAskSize;
             market.spread = spread;
             
             const midpoint = (bestBid + bestAsk) / 2;
@@ -1061,9 +1069,13 @@ export class MarketMakingScanner extends EventEmitter {
 
         const bestBid = parseFloat(bids[0]?.price || '0');
         const bestAsk = parseFloat(asks[0]?.price || '1');
+        const bestBidSize = parseFloat(bids[0]?.size || bids[0]?.amount || '0');
+        const bestAskSize = parseFloat(asks[0]?.size || asks[0]?.amount || '0');
 
         market.bestBid = bestBid;
         market.bestAsk = bestAsk;
+        market.bestBidSize = bestBidSize;
+        market.bestAskSize = bestAskSize;
         market.spread = bestAsk - bestBid;
 
         this.evaluateOpportunity(market);
@@ -1088,6 +1100,8 @@ export class MarketMakingScanner extends EventEmitter {
                     question,
                     bestBid: 0,
                     bestAsk: 0,
+                    bestBidSize: 0,
+                    bestAskSize: 0,
                     spread: 0,
                     volume: 0,
                     liquidity: 0,
@@ -1248,6 +1262,21 @@ export class MarketMakingScanner extends EventEmitter {
         // Check strict MM filters for the actionable opportunities array
         if (market.volume < effectiveMinVolume) return;
         if (market.liquidity < effectiveMinLiquidity) return;
+        
+        // NEW: Filter out markets with tiny order sizes (low liquidity)
+        // This prevents the "Bid size below minimum" spam
+        const minOrderSizeThreshold = 500; // $500 minimum order size for good liquidity
+        if (market.bestBidSize < minOrderSizeThreshold && market.bestAskSize < minOrderSizeThreshold) {
+            this.logger.debug(`[MM] Skipping low liquidity market: ${market.question.slice(0, 30)}... (Bid: $${market.bestBidSize}, Ask: $${market.bestAskSize})`);
+            return;
+        }
+        
+        // NEW: Filter out markets with tiny spreads (not profitable)
+        const minSpreadCents = 2; // Minimum 2 cent spread for profitability
+        if (spreadCents < minSpreadCents) {
+            this.logger.debug(`[MM] Skipping low spread market: ${market.question.slice(0, 30)}... (Spread: ${spreadCents.toFixed(1)}¢)`);
+            return;
+        }
         
         // 9. Update opportunities
         this.updateOpportunitiesInternal(opportunity);

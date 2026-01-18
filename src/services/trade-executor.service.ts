@@ -1008,13 +1008,24 @@ export class TradeExecutorService {
       const { logger } = this.deps;
       const { tokenId, conditionId, midpoint, rewardsMaxSpread, rewardsMinSize } = opportunity;
 
-      const market = await this.validateMarketForMM(conditionId);
-      if (!market.valid) {
-          // Mark market as closed to avoid repeated API calls
-          this.closedMarkets.add(conditionId);
-          this.closedMarketsTimestamps.set(conditionId, Date.now());
-          return { tokenId, status: 'FAILED', reason: market.reason };
+      // Check if market was previously marked as closed (fail-fast approach)
+      if (this.closedMarkets.has(conditionId)) {
+          // Check if TTL expired
+          const timestamp = this.closedMarketsTimestamps.get(conditionId);
+          if (timestamp && (Date.now() - timestamp) < this.CLOSED_MARKETS_TTL) {
+              return { tokenId, status: 'FAILED', reason: 'market_previously_closed' };
+          }
+          // TTL expired, remove from closed markets
+          this.closedMarkets.delete(conditionId);
+          this.closedMarketsTimestamps.delete(conditionId);
       }
+
+      // Use default market data - no API validation needed
+      const marketData = {
+          negRisk: false,
+          tickSize: '0.01',
+          minOrderSize: 5
+      };
 
       const offset = rewardsMaxSpread ? Math.min(this.mmConfig.spreadOffset, rewardsMaxSpread / 2) : this.mmConfig.spreadOffset;
       const price = side === 'BUY' 
@@ -1025,7 +1036,7 @@ export class TradeExecutorService {
           ? Math.min(this.mmConfig.quoteSize / price, inventory)
           : this.mmConfig.quoteSize / price;
 
-      const minSize = rewardsMinSize || market.minOrderSize || 5;
+      const minSize = rewardsMinSize || marketData.minOrderSize || 5;
       if (size < minSize) {
           return { tokenId, status: 'SKIPPED', reason: `size_below_minimum: ${size} < ${minSize}` };
       }
@@ -1036,8 +1047,8 @@ export class TradeExecutorService {
           side,
           price,
           size,
-          negRisk: market.negRisk,
-          tickSize: market.tickSize
+          negRisk: marketData.negRisk,
+          tickSize: marketData.tickSize
       });
 
       if (result.success) {

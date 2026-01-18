@@ -1266,9 +1266,16 @@ async function bootstrap() {
     
     // Start global whale poller with all targets
     if (allWhaleTargets.size > 0) {
-        globalWhalePoller.updateTargets(Array.from(allWhaleTargets));
-        await globalWhalePoller.start();
-        serverLogger.success(`🐋 Global whale poller started for ${allWhaleTargets.size} wallets`);
+        try {
+            globalWhalePoller.updateTargets(Array.from(allWhaleTargets));
+            await globalWhalePoller.start();
+            serverLogger.success(`🐋 Global whale poller started for ${allWhaleTargets.size} wallets`);
+        } catch (error) {
+            serverLogger.error(`Failed to start global whale poller: ${error}`);
+            // Continue startup even if whale poller fails
+        }
+    } else {
+        serverLogger.info('No whale targets configured, skipping whale poller startup');
     }
 
     for (const u of walletGroups.values()) {

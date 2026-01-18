@@ -246,7 +246,7 @@ export class WebSocketManager extends EventEmitter {
                     assets_ids: Array.from(this.marketSubscriptions),
                     custom_feature_enabled: true 
                 }));
-                this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
+                this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trade" }));
 
                 // Resubscribe to all tokens
                 this.resubscribeAllTokens();
@@ -290,7 +290,7 @@ export class WebSocketManager extends EventEmitter {
                     assets_ids: Array.from(this.marketSubscriptions),
                     custom_feature_enabled: true 
                 }));
-                this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trades" }));
+                this.marketWs?.send(JSON.stringify({ type: "subscribe", topic: "trade" }));
 
                 // Resubscribe to all tokens
                 this.resubscribeAllTokens();

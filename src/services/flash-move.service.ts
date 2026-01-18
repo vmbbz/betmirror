@@ -18,6 +18,7 @@ import {
   PortfolioRiskMetrics 
 } from './flash-risk.service.js';
 import { MarketIntelligenceService } from './market-intelligence.service.js';
+import { MarketMetadataService } from './market-metadata.service.js';
 import axios from 'axios';
 
 // Re-export interfaces for other services
@@ -54,12 +55,13 @@ export class FlashMoveService extends EventEmitter {
     private marketIntelligence: MarketIntelligenceService,
     private config: FlashMoveConfig,
     private tradeExecutor: any,
-    private logger: Logger
+    private logger: Logger,
+    private marketMetadataService: MarketMetadataService
   ) {
     super();
     
     // Initialize components
-    this.detectionEngine = new FlashDetectionEngine(config, logger);
+    this.detectionEngine = new FlashDetectionEngine(config, logger, marketMetadataService);
     this.executionEngine = new FlashExecutionEngine(config, tradeExecutor, logger);
     this.riskManager = new FlashRiskManager(config, logger);
     

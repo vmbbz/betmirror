@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { WebSocketManager } from './websocket-manager.service.js';
 import { FlashMove, MoneyMarketOpportunity } from '../database/index.js';
+import { MarketMetadataService } from './market-metadata.service.js';
 import axios from 'axios';
 
 /**
@@ -73,7 +74,11 @@ export class FlashDetectionEngine {
   private priceHistory: Map<string, PriceDataPoint[]> = new Map();
   private volumeHistory: Map<string, number[]> = new Map();
   
-  constructor(private config: FlashMoveConfig, private logger: Logger) {}
+  constructor(
+    private config: FlashMoveConfig, 
+    private logger: Logger,
+    private marketMetadataService: MarketMetadataService
+  ) {}
   
   /**
    * Process new price data and detect flash moves
@@ -275,40 +280,29 @@ export class FlashDetectionEngine {
     marketSlug: string;
   }> {
     try {
-      // Check local cache first (fastest)
-      const existingOpp = await MoneyMarketOpportunity.findOne({ tokenId });
-      if (existingOpp) {
+      // Use unified MarketMetadataService for cache-first enrichment
+      const metadata = await this.marketMetadataService.getMetadata(tokenId, true);
+      if (metadata) {
         return {
-          conditionId: existingOpp.marketId,
-          question: existingOpp.question,
-          image: existingOpp.image || '',
-          marketSlug: existingOpp.marketSlug || ''
+          conditionId: metadata.conditionId,
+          question: metadata.question,
+          image: metadata.image || '',
+          marketSlug: metadata.marketSlug || ''
         };
       }
       
-      // Fallback to Gamma API
-      const res = await axios.get(`https://gamma-api.polymarket.com/markets?token_id=${tokenId}`);
-      if (res.data?.[0]) {
-        const m = res.data[0];
-        return {
-          conditionId: m.conditionId,
-          question: m.question,
-          image: m.image,
-          marketSlug: m.slug
-        };
-      }
-      
+      // Fallback to empty metadata if not found
       return {
         conditionId: '',
-        question: `Market ${tokenId}`,
+        question: 'Unknown Market',
         image: '',
         marketSlug: ''
       };
     } catch (error) {
-      this.logger.warn(`Failed to enrich metadata for ${tokenId}: ${error}`);
+      this.logger.error(`[FlashDetection] Failed to enrich metadata for ${tokenId}: ${error}`);
       return {
         conditionId: '',
-        question: `Market ${tokenId}`,
+        question: 'Unknown Market',
         image: '',
         marketSlug: ''
       };

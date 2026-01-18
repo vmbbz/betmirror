@@ -121,7 +121,8 @@ export class BotEngine extends EventEmitter {
             this.intelligence,
             DEFAULT_FLASH_MOVE_CONFIG,
             this.executor,
-            this.logger
+            this.logger,
+            this.marketMetadataService
         );
         
         this.portfolioService = new PortfolioService(this.logger);

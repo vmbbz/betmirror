@@ -81,7 +81,8 @@ const globalFlashMoveService = new FlashMoveService(
     globalIntelligence,
     DEFAULT_FLASH_MOVE_CONFIG,
     null, // No trade executor needed at server level
-    serverLogger
+    serverLogger,
+    serverMetadataService
 );
 
 // Wire global services

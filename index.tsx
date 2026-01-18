@@ -48,13 +48,13 @@ const CHAIN_NAMES: Record<number, string> = {
 };
 
 // --- Sub-Component: Interactive Log Item ---
-const LogItem = ({ log, onTradeLive }: { log: Log, onTradeLive: (id: string) => void }) => {
+const LogItem = ({ log, onTradeLive }: { log: any, onTradeLive: (id: string) => void }) => {
     const isWhale = log.type === 'whale_trade';
-    const isFlash = log.type === 'flash_move';
-    const metadata = (log as any).data;
-    
-    // Helper to render addresses as clickable links
+    const isFlash = log.type === 'flash_move' || log.type === 'flash_move_detected';
+    const metadata = log.data || log.event || {};
+
     const renderMessage = (text: string) => {
+        if (!text) return "";
         const addressRegex = /0x[a-fA-F0-9]{40}/g;
         const parts = text.split(addressRegex);
         const addresses = text.match(addressRegex) || [];
@@ -79,44 +79,45 @@ const LogItem = ({ log, onTradeLive }: { log: Log, onTradeLive: (id: string) => 
     };
 
     return (
-        <div className="flex flex-col gap-1 hover:bg-gray-50 dark:hover:bg-white/5 p-2 rounded animate-in fade-in duration-200 border-l-2 border-transparent hover:border-blue-500/30 group">
+        <div className="flex flex-col gap-1 hover:bg-gray-50 dark:hover:bg-white/5 p-2 rounded border-l-2 border-transparent hover:border-blue-500/30 group transition-all">
             <div className="flex gap-3 items-start">
-                <span className="text-gray-400 dark:text-gray-600 shrink-0 select-none font-mono">[{log.time}]</span>
+                <span className="text-gray-400 dark:text-gray-600 shrink-0 font-mono select-none text-[10px]">
+                    [{log.time || new Date(log.timestamp).toLocaleTimeString()}]
+                </span>
+                
                 <div className="flex-1 min-w-0">
-                    <span className={`break-all font-mono ${
+                    <span className={`break-all font-mono text-[11px] ${
                         log.type === 'error' ? 'text-red-600 dark:text-terminal-danger' : 
                         log.type === 'warn' ? 'text-yellow-600 dark:text-terminal-warn' : 
                         log.type === 'success' ? 'text-green-600 dark:text-terminal-success' : 
-                        isWhale ? 'text-blue-600 dark:text-blue-400' : 'text-gray-800 dark:text-blue-200'
+                        isWhale ? 'text-blue-600 dark:text-blue-400' : 
+                        isFlash ? 'text-rose-500' : 'text-gray-800 dark:text-blue-200'
                     }`}>
-                        {isWhale ? <Users size={10} className="inline mr-1 mb-0.5" /> : null}
                         {renderMessage(log.message)}
                     </span>
                     
-                    {/* ENRICHED METADATA VIEW */}
                     {(isWhale || isFlash) && metadata?.question && (
                         <div className="mt-1 flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] text-gray-500 uppercase font-black tracking-tighter">Market:</span>
-                            <span className="text-[10px] text-gray-400 font-bold truncate max-w-[200px]">{metadata.question}</span>
+                            <span className="text-[9px] text-gray-500 uppercase font-black tracking-tighter">Market:</span>
+                            <span className="text-[9px] text-gray-400 font-bold truncate max-w-[250px]">{metadata.question}</span>
                             {metadata.marketSlug && (
                                 <a 
                                     href={`https://polymarket.com/market/${metadata.marketSlug}`} 
                                     target="_blank" 
                                     rel="noreferrer"
-                                    className="text-[9px] text-blue-500/70 hover:text-blue-500 flex items-center gap-0.5"
+                                    className="text-blue-500/70 hover:text-blue-500"
                                 >
-                                    <ExternalLink size={8}/>
+                                    <ExternalLink size={10}/>
                                 </a>
                             )}
                         </div>
                     )}
                 </div>
                 
-                {/* ACTION BUTTON */}
-                {(isWhale || isFlash) && metadata?.tokenId && (
+                {(isWhale || isFlash) && (metadata.conditionId || metadata.tokenId) && (
                     <button 
                         onClick={() => onTradeLive(metadata.conditionId || metadata.tokenId)}
-                        className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 bg-blue-600 text-white text-[9px] font-black rounded uppercase tracking-widest transition-all hover:bg-blue-500 active:scale-95 shadow-lg shadow-blue-500/20"
+                        className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 bg-blue-600 text-white text-[8px] font-black rounded uppercase tracking-widest transition-all hover:bg-blue-500"
                     >
                         <Zap size={10} fill="currentColor"/> Trade Live
                     </button>

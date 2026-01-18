@@ -1,4 +1,3 @@
-
 import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { FlashMove, MoneyMarketOpportunity, BotLog } from '../database/index.js';
@@ -52,9 +51,11 @@ export class MarketIntelligenceService extends EventEmitter {
             this.wsManager.on('whale_trade', async (event: WhaleTradeEvent) => {
                 let enrichedEvent = { ...event };
                 
+                // LAZY ENRICHMENT: Only try to add metadata if we have it locally (skipApi = true)
+                // This prevents the bot from hitting Polymarket API for every whale signal
                 if (this.marketMetadataService) {
                     try {
-                        const meta = await this.marketMetadataService.getMetadata(event.tokenId);
+                        const meta = await this.marketMetadataService.getMetadata(event.tokenId, true);
                         if (meta) {
                             enrichedEvent.question = meta.question;
                             (enrichedEvent as any).marketSlug = meta.marketSlug;
@@ -62,7 +63,8 @@ export class MarketIntelligenceService extends EventEmitter {
                             (enrichedEvent as any).conditionId = meta.conditionId;
                         }
                     } catch (e) {
-                        this.logger.debug(`Metadata enrichment failed for ${event.tokenId}`);
+                        // Silent fail - we still want the log even without the question
+                        this.logger.debug(`Metadata enrichment skipped for ${event.tokenId} (Cache Miss)`);
                     }
                 }
                 this.emit('whale_trade', enrichedEvent);

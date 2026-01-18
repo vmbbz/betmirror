@@ -32,34 +32,48 @@ export class MarketMetadataService {
      * L2: Database cache (all markets ever seen)  
      * L3: API fetch (fallback with rate limiting)
      */
-    async getMetadata(conditionId: string): Promise<IMarketMetadata | null> {
+    /**
+     * Get market metadata with hybrid caching strategy.
+     * @param skipApi - If true, only check memory and DB. Crucial for log enrichment to avoid 429s.
+     */
+    async getMetadata(conditionId: string, skipApi = false): Promise<IMarketMetadata | null> {
         try {
-            // L1: Check memory cache first
+            // L1: Memory
             const memoryEntry = this.memoryCache.get(conditionId);
-            if (memoryEntry && this.isCacheValid(memoryEntry.lastAccessed)) {
-                this.updateMemoryAccess(conditionId);
+            if (memoryEntry && (Date.now() - memoryEntry.lastAccessed < this.CACHE_TTL_MS)) {
                 return memoryEntry.metadata;
             }
 
-            // L2: Check database cache
-            const dbMetadata = await this.getFromDatabase(conditionId);
-            if (dbMetadata && this.isDbCacheValid(dbMetadata.updatedAt)) {
-                this.updateMemoryCache(conditionId, dbMetadata);
-                return dbMetadata;
+            // L2: Database
+            const dbMetadata = await DBMarketMetadata.findOne({ conditionId }).lean();
+            if (dbMetadata) {
+                this.updateMemoryCache(conditionId, dbMetadata as any);
+                return dbMetadata as any;
             }
 
-            // L3: Fetch from API
-            this.logger.info(`[Metadata] Fetching from API: ${conditionId}`);
-            const apiMetadata = await this.fetchFromAPI(conditionId);
-            if (apiMetadata) {
-                await this.saveToDatabase(apiMetadata);
-                this.updateMemoryCache(conditionId, apiMetadata);
-                return apiMetadata;
+            // L3: API (Optional)
+            if (skipApi) return null;
+
+            this.logger.debug(`[Metadata] Cache miss, fetching from API: ${conditionId}`);
+            const marketData = await this.adapter.getMarketData(conditionId);
+            if (marketData) {
+                const metadata: any = {
+                    conditionId,
+                    question: marketData.question,
+                    image: marketData.image,
+                    marketSlug: marketData.market_slug,
+                    eventSlug: marketData.market_slug,
+                    acceptingOrders: marketData.accepting_orders,
+                    closed: marketData.closed,
+                    updatedAt: new Date()
+                };
+                await DBMarketMetadata.findOneAndUpdate({ conditionId }, metadata, { upsert: true });
+                this.updateMemoryCache(conditionId, metadata);
+                return metadata;
             }
 
             return null;
         } catch (error) {
-            this.logger.error(`[Metadata] Failed to get metadata for ${conditionId}: ${error}`);
             return null;
         }
     }

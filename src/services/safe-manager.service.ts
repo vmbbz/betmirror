@@ -121,7 +121,13 @@ export class SafeManagerService {
         const stdSafe = await deriveSafe(ownerAddress, STANDARD_SAFE_FACTORY);
 
         try {
-            const provider = await ProviderFactory.getSharedProvider();
+            const network = { chainId: 137, name: 'polygon' };
+            const provider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com', network, { 
+                staticNetwork: true,
+                batchMaxCount: 10,
+                polling: false,
+                cacheTimeout: 10000
+            });
             
             const stdCode = await provider.getCode(stdSafe);
             if (stdCode && stdCode !== '0x') {

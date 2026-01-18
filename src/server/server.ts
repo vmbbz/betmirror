@@ -93,7 +93,6 @@ const ACTIVE_BOTS = new Map<string, BotEngine>();
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }) as any); 
-
 // --- STATIC FILES (For Production) ---
 const distPath = path.join(__dirname, '../../dist');
 app.use(express.static(distPath) as any);
@@ -798,7 +797,7 @@ app.post('/api/wallet/withdraw', async (req: any, res: any) => {
             if (!targetSafeAddress) eoaBalance = await provider.getBalance(walletConfig.address);
         } else { 
             try { 
-                balanceToWithdraw = await usdcContract.balanceOf(safeAddr);
+                balanceToWithdraw = await usdcContract.of(safeAddr);
                 if (!targetSafeAddress) eoaBalance = await usdcContract.balanceOf(walletConfig.address);
             } catch(e) {} 
         }
@@ -1247,6 +1246,9 @@ async function bootstrap() {
                 builderApiSecret: ENV.builderApiSecret,
                 builderApiPassphrase: ENV.builderApiPassphrase
             } as any);
+            
+            // STAGGERING: Add delay to respect 25 req/min Relayer Rate Limit
+            await new Promise(resolve => setTimeout(resolve, 2500));
         } catch (e: any) {
             serverLogger.error(`Failed to restore bot for ${u.address}: ${e.message}`);
         }

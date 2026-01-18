@@ -94,6 +94,9 @@ export class PolymarketAdapter implements IExchangeAdapter {
     private static readonly PUBLIC_CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
     private static publicClientCreatedAt = 0;
     
+    // SHARED PROVIDER: Prevent detectNetwork overhead for every bot instance
+    private static sharedProvider: JsonRpcProvider | null = null;
+    
     private config: PolymarketAdapterConfig;
     private client: ClobClient | null = null;
     private logger: Logger;
@@ -172,18 +175,24 @@ export class PolymarketAdapter implements IExchangeAdapter {
         
         this.safeManager = safeManager; // CRITICAL: Set the safeManager instance
 
-        // Enhanced RPC Initialization with failover logic
-        try {
-            this.provider = new JsonRpcProvider(this.config.rpcUrl, undefined, { staticNetwork: true });
-            // Test connection with timeout to prevent hang
-            const networkPromise = this.provider.getNetwork();
-            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("RPC Timeout")), 5000));
-            await Promise.race([networkPromise, timeoutPromise]);
-            this.logger.info(`✅ Connected to primary RPC: ${this.config.rpcUrl}`);
-        } catch (e) {
-            this.logger.warn(`⚠️ Primary RPC (${this.config.rpcUrl}) failed network check or timed out. Using fallback: https://polygon-rpc.com`);
-            this.provider = new JsonRpcProvider('https://polygon-rpc.com', undefined, { staticNetwork: true });
+        // IMPLEMENT SHARED PROVIDER TO PREVENT RPC RATE LIMITING
+        if (!PolymarketAdapter.sharedProvider) {
+            try {
+                // Use static network to avoid detectNetwork calls on every instance
+                const network = { chainId: 137, name: 'polygon' };
+                PolymarketAdapter.sharedProvider = new JsonRpcProvider(this.config.rpcUrl, network, { staticNetwork: true });
+                
+                // Verify once
+                const networkCheck = await PolymarketAdapter.sharedProvider.getNetwork();
+                this.logger.info(`✅ Shared RPC Provider initialized for network: ${networkCheck.name}`);
+            } catch (e) {
+                this.logger.warn(`⚠️ Primary RPC (${this.config.rpcUrl}) failed shared init. Using fallback: https://polygon-rpc.com`);
+                const network = { chainId: 137, name: 'polygon' };
+                PolymarketAdapter.sharedProvider = new JsonRpcProvider('https://polygon-rpc.com', network, { staticNetwork: true });
+            }
         }
+        
+        this.provider = PolymarketAdapter.sharedProvider;
 
         const USDC_ABI_INTERNAL = [
             'function balanceOf(address owner) view returns (uint256)', 

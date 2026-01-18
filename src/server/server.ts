@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
@@ -22,7 +23,9 @@ import { ActivePosition } from '../domain/trade.types.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import { WebSocketManager } from '../services/websocket-manager.service.js';
 import { FlashMoveService } from '../services/flash-move.service.js';
+import { MarketMetadataService } from '../services/market-metadata.service.js';
 import { DEFAULT_FLASH_MOVE_CONFIG } from '../config/flash-move.config.js';
+import { PolymarketAdapter } from '../adapters/polymarket/polymarket.adapter.js';
 import axios from 'axios';
 import { Logger } from '../utils/logger.util.js';
 import fs from 'fs';
@@ -57,11 +60,21 @@ const ENV = loadEnv();
 const dbRegistryService = new DbRegistryService();
 const evmWalletService = new EvmWalletService(ENV.rpcUrl, ENV.mongoEncryptionKey);
 
+// Create a pseudo-adapter for metadata service (it only needs the getMarketData method)
+const metadataAdapter = new PolymarketAdapter({
+    rpcUrl: ENV.rpcUrl,
+    walletConfig: { address: '0x0000000000000000000000000000000000000000' } as any,
+    userId: 'system',
+    mongoEncryptionKey: ENV.mongoEncryptionKey
+}, serverLogger);
+
+const serverMetadataService = new MarketMetadataService(metadataAdapter, serverLogger);
+
 // Create WebSocket manager for global intelligence (market-only connection)
 const wsManager = new WebSocketManager(serverLogger, null);
 
-// Create global intelligence service WITH WebSocket manager
-const globalIntelligence = new MarketIntelligenceService(serverLogger, wsManager);
+// Create global intelligence service WITH WebSocket manager and Metadata Service
+const globalIntelligence = new MarketIntelligenceService(serverLogger, wsManager, undefined, serverMetadataService);
 
 // Create global FlashMoveService for server-level flash detection
 const globalFlashMoveService = new FlashMoveService(
@@ -1209,7 +1222,10 @@ async function bootstrap() {
             price: whaleEvent.price,
             size: whaleEvent.size,
             timestamp: whaleEvent.timestamp,
-            question: whaleEvent.question || 'Unknown Market'
+            question: whaleEvent.question || 'Unknown Market',
+            marketSlug: (whaleEvent as any).marketSlug,
+            eventSlug: (whaleEvent as any).eventSlug,
+            conditionId: (whaleEvent as any).conditionId
         });
         serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
     });

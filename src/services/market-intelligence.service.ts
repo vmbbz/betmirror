@@ -4,6 +4,7 @@ import { Logger } from '../utils/logger.util.js';
 import { FlashMove, MoneyMarketOpportunity, BotLog } from '../database/index.js';
 import { WebSocketManager, WhaleTradeEvent, PriceEvent } from './websocket-manager.service.js';
 import { FlashMoveService, EnhancedFlashMoveEvent } from './flash-move.service.js';
+import { MarketMetadataService } from './market-metadata.service.js';
 import axios from 'axios';
 
 // Re-export events for consumer services
@@ -27,7 +28,12 @@ export class MarketIntelligenceService extends EventEmitter {
     // Performance Parameters
     private readonly JANITOR_INTERVAL_MS = 60 * 1000;
 
-    constructor(public logger: Logger, public wsManager?: WebSocketManager, private flashMoveService?: FlashMoveService) {
+    constructor(
+        public logger: Logger, 
+        public wsManager?: WebSocketManager, 
+        private flashMoveService?: FlashMoveService,
+        private marketMetadataService?: MarketMetadataService
+    ) {
         super();
         this.setMaxListeners(1500); // Increased to handle high-concurrency bot instances
         this.startJanitor();
@@ -42,9 +48,24 @@ export class MarketIntelligenceService extends EventEmitter {
         
         // CRITICAL: Setup event routing from WebSocketManager to appropriate services
         if (this.wsManager) {
-            // Route whale trades to TradeMonitorService consumers
-            this.wsManager.on('whale_trade', (event) => {
-                this.emit('whale_trade', event);
+            // ENRICHMENT ROUTER: Capture whale trades and attach metadata
+            this.wsManager.on('whale_trade', async (event: WhaleTradeEvent) => {
+                let enrichedEvent = { ...event };
+                
+                if (this.marketMetadataService) {
+                    try {
+                        const meta = await this.marketMetadataService.getMetadata(event.tokenId);
+                        if (meta) {
+                            enrichedEvent.question = meta.question;
+                            (enrichedEvent as any).marketSlug = meta.marketSlug;
+                            (enrichedEvent as any).eventSlug = meta.eventSlug;
+                            (enrichedEvent as any).conditionId = meta.conditionId;
+                        }
+                    } catch (e) {
+                        this.logger.debug(`Metadata enrichment failed for ${event.tokenId}`);
+                    }
+                }
+                this.emit('whale_trade', enrichedEvent);
             });
             
             // Route price updates to FlashDetectionService
@@ -76,6 +97,13 @@ export class MarketIntelligenceService extends EventEmitter {
     public setFlashMoveService(service: FlashMoveService): void {
         this.flashMoveService = service;
         this.setupFlashMoveForwarding();
+    }
+
+    /**
+     * Sets the global metadata service for enrichment
+     */
+    public setMarketMetadataService(service: MarketMetadataService): void {
+        this.marketMetadataService = service;
     }
 
     private setupFlashMoveForwarding(): void {

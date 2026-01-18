@@ -190,13 +190,10 @@ export class BotEngine extends EventEmitter {
             }
         );
         
-        // Connect scanner to global intelligence feed
         this.arbScanner.setWebSocketManager(this.intelligence.wsManager!);
 
         this.arbScanner.on('opportunity', async (opp) => {
             if (this.isRunning && this.config.enableMoneyMarkets) {
-                // Throttle: Don't execute MM quotes if we just placed one for this token in last 5s
-                // (Logic handled inside executor for state persistence)
                 await this.executor.executeMarketMakingQuotes(opp);
             }
         });
@@ -204,7 +201,6 @@ export class BotEngine extends EventEmitter {
         if (config.activePositions) this.activePositions = config.activePositions;
         if (config.userAddresses) this.monitor.updateTargets(config.userAddresses);
         
-        // --- FOMO RUNNER INTERNAL ROUTING ---
         this.flashMoveService.on('flash_move_executed', async (data) => {
             this.logger.success(`🔥 FOMO EXECUTED: ${data.event.question}`);
             if (this.callbacks.onTradeComplete) {
@@ -260,7 +256,7 @@ export class BotEngine extends EventEmitter {
             await this.executor.stop();
             await this.privateWsManager.stop();
             this.flashMoveService.setEnabled(false);
-            this.flashMoveService.cleanup(); // Fixes listener leak
+            this.flashMoveService.cleanup(); // Fixed listener leak
             
             this.logger.warn(`🛑 Bot engine paused.`);
             this.emit('stopped');
@@ -299,9 +295,6 @@ export class BotEngine extends EventEmitter {
         }
     }
 
-    /**
-     * Returns the current running status of all strategy modules
-     */
     public getServicesStatus(): any {
         return {
             copyTrading: {

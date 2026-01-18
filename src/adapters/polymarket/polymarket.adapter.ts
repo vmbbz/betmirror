@@ -172,16 +172,16 @@ export class PolymarketAdapter implements IExchangeAdapter {
         
         this.safeManager = safeManager; // CRITICAL: Set the safeManager instance
 
-        // Improved Provider Initialization with explicit connectivity check and automatic fallback
+        // Enhanced RPC Initialization with failover logic
         try {
             this.provider = new JsonRpcProvider(this.config.rpcUrl, undefined, { staticNetwork: true });
-            // Test connection with a timeout to prevent "failed to detect network" hang
+            // Test connection with timeout to prevent hang
             const networkPromise = this.provider.getNetwork();
             const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("RPC Timeout")), 5000));
             await Promise.race([networkPromise, timeoutPromise]);
             this.logger.info(`✅ Connected to primary RPC: ${this.config.rpcUrl}`);
         } catch (e) {
-            this.logger.warn(`⚠️ Primary RPC (${this.config.rpcUrl}) failed network detection or timed out. Switching to fallback public RPC: https://polygon-rpc.com`);
+            this.logger.warn(`⚠️ Primary RPC (${this.config.rpcUrl}) failed network check or timed out. Using fallback: https://polygon-rpc.com`);
             this.provider = new JsonRpcProvider('https://polygon-rpc.com', undefined, { staticNetwork: true });
         }
 

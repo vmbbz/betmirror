@@ -209,6 +209,13 @@ async function startUserBot(userId: string, config: BotConfig) {
     } catch (e) {}
 
     ACTIVE_BOTS.set(normId, engine);
+    
+    // Listen for whale events from this bot engine
+    engine.on('whale_detected', (whaleEvent) => {
+        io.emit('WHALE_DETECTED', whaleEvent);
+        serverLogger.info(`[WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+    });
+    
     await engine.start();
 }
 
@@ -1214,26 +1221,19 @@ async function bootstrap() {
     }
 
     // Attach core hub events once at startup (CRITICAL: Fixes the listener leak)
-    globalIntelligence.on('whale_trade', (whaleEvent) => {
-        io.emit('WHALE_DETECTED', {
-            trader: whaleEvent.trader,
-            tokenId: whaleEvent.tokenId,
-            side: whaleEvent.side,
-            price: whaleEvent.price,
-            size: whaleEvent.size,
-            timestamp: whaleEvent.timestamp,
-            question: whaleEvent.question || 'Unknown Market',
-            marketSlug: (whaleEvent as any).marketSlug,
-            eventSlug: (whaleEvent as any).eventSlug,
-            conditionId: (whaleEvent as any).conditionId
-        });
-        serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
-    });
-
+    // Note: whale_trade events are deprecated - now handled by WhaleDataPollerService
     globalIntelligence.on('flash_move_detected', (flashEvent) => {
         io.emit('flash_move_detected', flashEvent);
         serverLogger.info(`[GLOBAL FLASH] ${flashEvent.event.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.event.question?.slice(0, 30)}...`);
     });
+
+    // Listen for whale events from individual bot engines
+    for (const [userId, engine] of ACTIVE_BOTS.entries()) {
+        engine.on('whale_detected', (whaleEvent) => {
+            io.emit('WHALE_DETECTED', whaleEvent);
+            serverLogger.info(`[WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+        });
+    }
 
     for (const u of walletGroups.values()) {
         if (!u.activeBotConfig || !u.tradingWallet) continue;

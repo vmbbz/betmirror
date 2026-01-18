@@ -180,6 +180,21 @@ export class BotEngine extends EventEmitter {
             onDetectedTrade: async (signal) => {
                 if (this.isRunning && this.config.enableCopyTrading) {
                     this.logger.info(`🐋 Whale Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
+                    
+                    // Emit whale event for WebSocket clients
+                    this.emit('whale_detected', {
+                        trader: signal.trader,
+                        tokenId: signal.tokenId,
+                        side: signal.side,
+                        price: signal.price,
+                        size: signal.sizeUsd / signal.price,
+                        timestamp: signal.timestamp,
+                        question: 'Unknown Market',
+                        marketSlug: null,
+                        eventSlug: null,
+                        conditionId: null
+                    });
+                    
                     try {
                         const res = await this.executor.copyTrade(signal);
                         if (res.status === 'FILLED' && this.callbacks.onTradeComplete) {

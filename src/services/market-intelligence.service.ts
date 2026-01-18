@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { FlashMove, MoneyMarketOpportunity, BotLog } from '../database/index.js';
@@ -17,23 +18,18 @@ export type { WhaleTradeEvent, PriceEvent };
 export class MarketIntelligenceService extends EventEmitter {
     public isRunning = false;
     
-    // Core Data Structures
-    private lastUpdateTrack: Map<string, number> = new Map();
-    
     // Subscription Management
     private tokenSubscriptionRefs: Map<string, number> = new Map();
     
     // Global Watchlist
     private globalWatchlist: Set<string> = new Set();
-    private processedHashes: Map<string, number> = new Map();
     
     // Performance Parameters
-    private readonly JANITOR_INTERVAL_MS = 60 * 1000; // Aggressive: Check every minute
-    private whaleWatcherInterval: NodeJS.Timeout | null = null;
+    private readonly JANITOR_INTERVAL_MS = 60 * 1000;
 
     constructor(public logger: Logger, public wsManager?: WebSocketManager, private flashMoveService?: FlashMoveService) {
         super();
-        this.setMaxListeners(200); // Increased to handle multiple bot instances
+        this.setMaxListeners(1500); // Increased to handle high-concurrency bot instances
         this.startJanitor();
         
         // Initialize Flash Move Service
@@ -41,9 +37,7 @@ export class MarketIntelligenceService extends EventEmitter {
         
         // If FlashMoveService is provided, forward its events
         if (this.flashMoveService) {
-            this.flashMoveService.on('flash_move_detected', (event) => {
-                this.emit('flash_move_detected', event);
-            });
+            this.setupFlashMoveForwarding();
         }
         
         // CRITICAL: Setup event routing from WebSocketManager to appropriate services
@@ -58,7 +52,7 @@ export class MarketIntelligenceService extends EventEmitter {
                 this.emit('price_update', event);
             });
             
-            // Route trade events to FlashDetectionService for volume analysis
+            // Route trade events for volume analysis
             this.wsManager.on('trade', (event) => {
                 this.emit('trade', event);
             });
@@ -77,6 +71,21 @@ export class MarketIntelligenceService extends EventEmitter {
     }
 
     /**
+     * Sets the global flash move service for the intelligence singleton
+     */
+    public setFlashMoveService(service: FlashMoveService): void {
+        this.flashMoveService = service;
+        this.setupFlashMoveForwarding();
+    }
+
+    private setupFlashMoveForwarding(): void {
+        if (!this.flashMoveService) return;
+        this.flashMoveService.on('flash_move_detected', (event) => {
+            this.emit('flash_move_detected', event);
+        });
+    }
+
+    /**
      * Updates the global whale filter.
      */
     public updateWatchlist(addresses: string[]): void {
@@ -85,7 +94,7 @@ export class MarketIntelligenceService extends EventEmitter {
         
         // Also update WebSocketManager's whale watchlist
         if (this.wsManager) {
-            (this.wsManager as any).updateWhaleWatchlist(addresses);
+            this.wsManager.updateWhaleWatchlist(addresses);
         }
     }
 
@@ -108,86 +117,15 @@ export class MarketIntelligenceService extends EventEmitter {
         const count = (this.tokenSubscriptionRefs.get(tokenId) || 0) - 1;
         if (count <= 0) {
             this.tokenSubscriptionRefs.delete(tokenId);
-            this.lastUpdateTrack.delete(tokenId);
         } else {
             this.tokenSubscriptionRefs.set(tokenId, count);
         }
     }
 
-    /**
-     * Centralized Whale Watcher: Polls activity for all whales in the global watchlist.
-     */
-    private async startWhaleWatcher() {
-        if (this.whaleWatcherInterval) clearInterval(this.whaleWatcherInterval);
-
-        this.whaleWatcherInterval = setInterval(async () => {
-            if (!this.isRunning || this.globalWatchlist.size === 0) return;
-
-            // Iterate through watchlist and fetch activity
-            const whales = Array.from(this.globalWatchlist);
-            for (const address of whales) {
-                try {
-                    const res = await axios.get(`https://data-api.polymarket.com/activity?user=${address}&limit=5`);
-                    if (res.data && Array.isArray(res.data)) {
-                        for (const act of res.data) {
-                            if (act.type !== 'TRADE' && act.type !== 'ORDER_FILLED') continue;
-                            
-                            const hash = `${address}-${act.asset}-${act.timestamp}`;
-                            if (this.processedHashes.has(hash)) continue;
-                            this.processedHashes.set(hash, Date.now());
-
-                            const whaleEvent: WhaleTradeEvent = {
-                                trader: address,
-                                tokenId: act.asset,
-                                side: act.side.toUpperCase() as 'BUY' | 'SELL',
-                                price: act.price,
-                                size: act.size,
-                                timestamp: act.timestamp * 1000,
-                                question: act.question
-                            };
-
-                            this.logger.success(`🐋 [WHALE HUB] Detected Trade from ${address.slice(0, 10)}...`);
-                            this.emit('whale_trade', whaleEvent);
-                        }
-                    }
-                } catch (e) {
-                    this.logger.debug(`Whale poll failed for ${address}`);
-                }
-                // Small sleep to avoid hitting rate limits
-                await new Promise(r => setTimeout(r, 200));
-            }
-        }, 10000); // Poll every 10 seconds
-    }
-
-    /**
-     * Janitor: Automatically prunes stale data.
-     */
     private startJanitor(): void {
         setInterval(() => {
             if (!this.isRunning) return;
-            const now = Date.now();
-            
-            // Prune update track
-            let prunedTrack = 0;
-            for (const [tokenId, lastTs] of this.lastUpdateTrack.entries()) {
-                if (now - lastTs > 15 * 60 * 1000) {
-                    this.lastUpdateTrack.delete(tokenId);
-                    prunedTrack++;
-                }
-            }
-
-            // Prune hashes
-            let prunedHashes = 0;
-            for (const [hash, ts] of this.processedHashes.entries()) {
-                if (now - ts > 60 * 60 * 1000) {
-                    this.processedHashes.delete(hash);
-                    prunedHashes++;
-                }
-            }
-            
-            if (prunedTrack > 0 || prunedHashes > 0) {
-                this.logger.debug(`[Janitor] Memory reclaimed: ${prunedTrack} tracks, ${prunedHashes} hashes.`);
-            }
+            // Clean up stale subscription tracking if needed
         }, this.JANITOR_INTERVAL_MS);
     }
 
@@ -195,18 +133,12 @@ export class MarketIntelligenceService extends EventEmitter {
         if (this.isRunning) return;
         this.isRunning = true;
         this.connect();
-        this.startWhaleWatcher();
     }
 
     private connect() {
-        this.logger.info("🔌 Initializing Master Intelligence Pipeline...");
-        
         if (this.wsManager) {
-            this.logger.success('✅ [GLOBAL HUB] Using centralized WebSocket manager');
-            this.wsManager.start().then(() => {
-                this.logger.success('🚀 [GLOBAL HUB] WebSocket manager started - connected to Polymarket');
-            }).catch((error) => {
-                this.logger.error(`❌ [GLOBAL HUB] Failed to start WebSocket manager: ${error}`);
+            this.wsManager.start().catch((error) => {
+                this.logger.error(`❌ [GLOBAL HUB] WebSocket manager failed: ${error}`);
             });
         }
     }
@@ -236,8 +168,7 @@ export class MarketIntelligenceService extends EventEmitter {
 
     public stop(): void {
         this.isRunning = false;
-        if (this.whaleWatcherInterval) clearInterval(this.whaleWatcherInterval);
-        this.lastUpdateTrack.clear();
+        this.tokenSubscriptionRefs.clear();
         this.logger.info("🔌 Global Hub Shutdown: OFFLINE.");
     }
 }

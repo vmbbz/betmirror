@@ -1,3 +1,4 @@
+
 import { RuntimeEnv } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 import { TradeSignal } from '../domain/trade.types.js';
@@ -141,18 +142,5 @@ export class TradeMonitorService {
         }
       }
     }
-  }
-  
-  /**
-   * LEGACY COMPATIBILITY: The following methods are preserved but effectively
-   * bypassed by the high-performance WebSocket implementation.
-   */
-  private async checkUserActivity(user: string) {
-      // Logic moved to handleWhaleSignal via push events
-      this.deps.logger.debug(`Legacy polling bypassed for ${user}. WebSocket active.`);
-  }
-
-  private async processTrade(user: string, activity: any) {
-      // Logic moved to handleWhaleSignal for sub-millisecond execution
   }
 }

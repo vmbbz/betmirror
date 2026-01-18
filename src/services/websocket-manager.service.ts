@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 // FIX: Use named import for WebSocket class. The Node.js 'ws' package exports it this way.
 import { WebSocket } from 'ws';
@@ -479,8 +480,6 @@ export class WebSocketManager extends EventEmitter {
 
         if (assetIds.length !== 2) return;
 
-        this.logger.info(`🆕 NEW MARKET DETECTED: ${question}`);
-
         // Emit new market event for services to handle
         this.emit('new_market', {
             conditionId,
@@ -589,7 +588,7 @@ export class WebSocketManager extends EventEmitter {
                 price: parseFloat(msg.price),
                 size: parseFloat(msg.size),
                 side: msg.side.toUpperCase(),
-                order_id: msg.taker_order_id,
+                order_id: msg.taker_order_id || msg.order_id,
                 timestamp: Date.now()
             };
             

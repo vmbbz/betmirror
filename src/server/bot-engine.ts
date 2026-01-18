@@ -1,3 +1,4 @@
+
 import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
@@ -62,7 +63,6 @@ export class BotEngine extends EventEmitter {
     private portfolioService: PortfolioService;
     private portfolioTracker: PortfolioTrackerService;
     private positionMonitor: PositionMonitorService;
-    private fundWatcher: any; 
     private heartbeatInterval: NodeJS.Timeout | null = null;
     private activePositions: any[] = [];
     private stats = {
@@ -77,11 +77,6 @@ export class BotEngine extends EventEmitter {
         portfolioValue: 0,
         cashBalance: 0
     };
-    private lastPositionSync = 0;
-    private lastKnownBalance = 0;
-    private readonly POSITION_SYNC_INTERVAL = 300000; // 5 minute standard cycle
-    private marketMetadataCache = new Map(); 
-    private readonly MARKET_METADATA_CACHE_TTL = 24 * 60 * 60 * 1000;
     
     // Flash Move Integration
     private flashMoveService: FlashMoveService;
@@ -97,7 +92,6 @@ export class BotEngine extends EventEmitter {
         this.callbacks = callbacks;
         
         // --- SCOPED LOGGER FACTORY ---
-        // Every log from this bot's sub-services will pipe to DB and Socket simultaneously
         this.logger = {
             info: (m) => this.addLog('info', m),
             warn: (m) => this.addLog('warn', m),
@@ -199,7 +193,6 @@ export class BotEngine extends EventEmitter {
         // Connect scanner to global intelligence feed
         this.arbScanner.setWebSocketManager(this.intelligence.wsManager!);
 
-                // --- ARBITRAGE / MM EXECUTION LOOP ---
         this.arbScanner.on('opportunity', async (opp) => {
             if (this.isRunning && this.config.enableMoneyMarkets) {
                 // Throttle: Don't execute MM quotes if we just placed one for this token in last 5s
@@ -261,11 +254,14 @@ export class BotEngine extends EventEmitter {
         if (!this.isRunning) return;
         this.isRunning = false;
         try {
+            // CRITICAL: Explicit cleanup to prevent memory leaks in shared intelligence hub
             await this.monitor.stop();
             await this.arbScanner.stop();
             await this.executor.stop();
             await this.privateWsManager.stop();
             this.flashMoveService.setEnabled(false);
+            this.flashMoveService.cleanup(); // Fixes listener leak
+            
             this.logger.warn(`🛑 Bot engine paused.`);
             this.emit('stopped');
         } catch (error) {
@@ -273,9 +269,6 @@ export class BotEngine extends EventEmitter {
         }
     }
 
-    /**
-     * Runtime Service Toggle - Enables or disables strategy modules dynamically
-     */
     public async toggleService(service: string, enabled: boolean): Promise<{ success: boolean; message: string }> {
         try {
             this.logger.info(`⚙️ Toggling service ${service} to ${enabled}`);
@@ -354,14 +347,8 @@ export class BotEngine extends EventEmitter {
         }
     }
 
-    /**
-     * PERSISTENT LOGGING: Saves log to DB and notifies UI listeners.
-     * This fixes the "detached logs" issue where logs were not persisted.
-     */
     private async addLog(type: 'info' | 'warn' | 'error' | 'success', message: string): Promise<void> {
         const timestamp = new Date();
-        
-        // 1. Persist to MongoDB for detached retrieval across sessions
         try {
             await BotLog.create({
                 userId: this.config.userId.toLowerCase(),
@@ -373,7 +360,6 @@ export class BotEngine extends EventEmitter {
             console.error("Failed to persist bot log to DB", e);
         }
 
-        // 2. Push to UI socket via callback for real-time streaming
         if (this.callbacks?.onLog) {
             this.callbacks.onLog({
                 id: crypto.randomUUID(),
@@ -385,9 +371,6 @@ export class BotEngine extends EventEmitter {
         }
     }
 
-    /**
-     * LEGACY COMPATIBILITY: Method from original code used for post-funding activation
-     */
     public async proceedWithPostFundingSetup(): Promise<void> {
         try {
             this.addLog('info', 'Funding detected. Activating bot modules...');
@@ -415,14 +398,8 @@ export class BotEngine extends EventEmitter {
             ...this.stats,
             isRunning: this.isRunning,
             activePositions: this.activePositions.length,
-            flashMoveService: this.flashMoveService.getStatus(),
             uptime: this.isRunning ? Date.now() : 0
         };
-    }
-
-    public getActiveSnipes(): any[] {
-        const positions = this.flashMoveService?.getActivePositions();
-        return positions ? Array.from(positions.values()) : [];
     }
 
     public getFlashMoveService(): FlashMoveService {
@@ -482,23 +459,12 @@ export class BotEngine extends EventEmitter {
         this.arbScanner?.unbookmarkMarket(marketId);
     }
 
-    public getOpportunitiesByCategory(category: string): any[] {
-        if (!this.arbScanner) return [];
-        const allOpps = this.arbScanner.getOpportunities();
-        return allOpps.filter((opp: any) => opp.category?.toLowerCase() === category.toLowerCase());
-    }
-
     public getArbOpportunities(): any[] {
         return this.arbScanner?.getOpportunities() || [];
     }
 
-    public getActiveFomoChases(): any[] {
-        return this.getActiveSnipes();
-    }
-
     public dispatchManualMM(marketId: string): boolean {
         this.logger.warn(`Manual arb execution triggered for market: ${marketId}`);
-        // Dispatch logic would go here if specific manual override is required
         return true;
     }
 

@@ -1,7 +1,7 @@
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { Logger } from '../utils/logger.util.js';
 import { WS_URLS } from '../config/env.js';
-import { MoneyMarketOpportunity } from '../database/index.js';
+import { MoneyMarketOpportunity, MarketMetadata as DBMarketMetadata } from '../database/index.js';
 import EventEmitter from 'events';
 // FIX: Use named import for WebSocket to ensure it is constructable as a class in ESM environment
 import { WebSocket } from 'ws';
@@ -335,7 +335,7 @@ export class MarketMakingScanner extends EventEmitter {
             
             // Store ALL tags by their slug - catches everything dynamically
             for (const tag of tags) {
-                const slug = (tag.slug || '').toLowerCase();
+                const slug = (tag.slug || tag.label || '').toLowerCase();
                 const id = parseInt(tag.id);
                 
                 if (slug && id && !isNaN(id)) {
@@ -362,8 +362,8 @@ export class MarketMakingScanner extends EventEmitter {
             let samplingTokens = new Set<string>();
             try {
                 const sampling = await this.adapter.getSamplingMarkets?.();
-                if (sampling && Array.isArray(sampling)) {
-                    sampling.forEach(m => samplingTokens.add(m.token_id));
+                if (sampling && Array.isArray(sampling.data)) {
+                    sampling.data.forEach(m => samplingTokens.add(m.condition_id));
                     this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools.`);
                 }
             } catch (e) {}
@@ -488,6 +488,18 @@ export class MarketMakingScanner extends EventEmitter {
         const status = this.computeMarketStatus(market);
         const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
         const category = this.extractCategory(event, market);
+
+        // SEED DB: Save metadata so adapter can be passive
+        DBMarketMetadata.findOneAndUpdate({ conditionId }, {
+            conditionId,
+            question: market.question || event.title || 'Unknown',
+            image: market.image || market.icon || event.image || '',
+            marketSlug: market.slug || '',
+            closed: market.closed || false,
+            active: market.active || true,
+            acceptingOrders: market.acceptingOrders || true,
+            updatedAt: new Date()
+        }, { upsert: true }).catch(() => {});
 
         // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {

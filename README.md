@@ -31,6 +31,41 @@ Developed by **PolyCafe** | *Empowering the Future of Prediction Markets*
 
 ---
 
+## 🏗 High-Performance Architecture
+
+Bet Mirror Pro utilizes a proprietary **Single-Firehose, Multi-Tenant Execution Engine**. This architecture is specifically engineered to handle the high throughput of Polymarket's 5,000+ active tokens while remaining strictly immune to API rate limits (429 errors).
+
+### The 4-Tier Intelligence Pipeline
+
+1.  **The Discovery Authority (Scanner):** The `MarketMakingScanner` acts as the primary "hunter." It utilizes the bulk Gamma API to discover new markets and seed the global `MarketMetadata` database. It is the only service permitted to fetch metadata, ensuring a single point of truth.
+2.  **The Nervous System (Intelligence Hub):** The `MarketIntelligenceService` is a shared singleton. It maintains **one** primary WebSocket firehose to the exchange. It parses raw data into refined events (whale trades, price spikes, order fills) and broadcasts them to all active bot instances in-memory.
+3.  **The Tactical Brain (Bot Engine):** Each user is assigned a dedicated `BotEngine`. To ensure 429 resilience, the brain is **strictly passive** regarding metadata. It enriches whale signals by querying the local database or L1 memory cache, never triggering a redundant external API call.
+4.  **The Execution Arm (Adapter & Safe):** The `PolymarketAdapter` manages the cryptographic signing. Using **Account Abstraction (Gnosis Safe)**, it executes trades gaslessly via the Polymarket Builder Relayer, handling nonce management and batch approvals automatically.
+
+---
+
+## 🏦 The Three Primary Trading Engines
+
+### 1. Alpha Mirror (Copy-Trading)
+The **Alpha Mirror** engine replicates the high-conviction moves of elite prediction market participants (Whales).
+*   **Real-Time Replication:** Listens to the Intelligence Hub for specific wallet addresses. When a target enters a position, the bot executes a proportional trade within milliseconds.
+*   **Smart Sizing:** Positions are scaled based on the user's `multiplier` and current vault liquidity.
+*   **Fee Capture:** Users who discover and list successful whales in the Alpha Registry earn a 1% "Hunter Fee" from all followers who mirror that wallet.
+
+### 2. Liquidity Engine (Market Making)
+The **Liquidity Engine** provides depth to the market while capturing the bid-ask spread and protocol rewards.
+*   **GTC Maker Orders:** Unlike aggressive "taker" bots, this engine places resting **Good-Til-Cancelled** orders. These orders qualify for Polymarket's liquidity mining rewards.
+*   **Inventory Skew Management:** Automatically adjusts bid and ask prices based on current holdings. If the vault is "Long" (holds too many YES shares), it lowers the bid and raises the ask to incentivize a rebalancing trade.
+*   **Spread Capture:** Dynamically identifies wide spreads to "scalp" the cent-difference between participants.
+
+### 3. Fomo Runner (Flash Moves / HFT)
+The **Fomo Runner** is a high-frequency momentum engine designed to capture explosive price spikes.
+*   **Velocity Detection:** Analyzes sub-second price updates to identify "Flash Moves"—significant price changes within a narrow time window.
+*   **High-Confidence Sniping:** When velocity exceeds a pre-defined threshold (e.g., 3% move in 10 seconds), the engine attempts to "chase" the momentum with a market-priced limit order.
+*   **Combat Sequences:** Designed for volatile events where price discovery happens too fast for manual traders.
+
+---
+
 ## 🏦 Money Market Features
 
 ### Dynamic Position Management
@@ -49,7 +84,7 @@ Developed by **PolyCafe** | *Empowering the Future of Prediction Markets*
 - **Scenario Analysis**: Stress tests positions against historical and hypothetical market conditions
 - **Liquidity Risk Monitoring**: Tracks market depth and adjusts position sizes accordingly
 - **Counterparty Risk Assessment**: Monitors exchange and counterparty credit risk
-- **Regulatory Compliance**: Built-in controls for position limits and reporting requirements
+- **Regulatory Compliance**: Built with compliance and audit trails for institutional requirements
 
 ## 🚀 How It Works
 
@@ -63,9 +98,11 @@ Bet Mirror Pro transforms complex algorithmic trading into a simple 3-step proce
 
 ### 2. The Cloud Engine (Server-Side)
 - **Persistence:** Once the bot is started, it runs on our Node.js cloud cluster backed by **MongoDB**.
-- **Dual-Strategy Execution:** 
-    - **Mirror Trading:** Monitors whales in real-time and replicates their positions proportionally.
-    - **Market Making:** Analyzes orderbook spreads via WebSockets. When gaps are found, it posts two-sided GTC limit orders to capture the "Cent-Spread" and earn **Polymarket Liquidity Rewards**.
+- **Triple-Engine Autonomous Execution:** 
+    - **Alpha Mirror:** Replicates high-win-rate whales from the registry.
+    - **Liquidity Engine:** Captures orderbook spreads via GTC maker orders.
+    - **Fomo Runner:** Snipes high-velocity price spikes using HFT algorithms.
+- **Passive Metadata Strategy:** The engine never hammers the CLOB API for market details. It uses the `MarketMetadataService` to pull data from a locally cached database seeded by the Discovery Scanner, ensuring zero-latency enrichment and 429-immunity.
 - **AI Analysis:** Before every trade, the **Google Gemini 2.5** Agent analyzes the market question to ensure it aligns with the user's risk profile (Conservative, Balanced, or Degen).
 - **Liquidity Intelligence:** The bot uses an **Absolute Spread Approach** (measuring cents vs percentages). This is specifically optimized for binary prediction markets where traditional percentage spread metrics fail at extreme price points.
 
@@ -207,7 +244,8 @@ graph TD
         API["⚙️ Node.js API Cluster"]
         DB[("🗄️ MongoDB Atlas")]
         Gemini["🧠 Gemini 3 Pro AI"]
-        Scanner["🔍 Intelligence Engine"]
+        Scanner["🔍 Intelligence Engine (Gamma)"]
+        Hub["📡 Market Intelligence (WebSocket Singleton)"]
     end
 
     subgraph "Blockchain & Execution"
@@ -225,13 +263,14 @@ graph TD
     Browser -->|"3. Request Activation"| API
     API -->|"4. Deploy Safe & Encrypt Signer"| DB
     
-    API -->|"5. Risk Analysis"| Gemini
-    Scanner -->|"6. Yield/Velocity Signals"| API
+    Scanner -->|"5. Bulk Meta-Seed"| DB
+    Hub -->|"6. Shared Logic Broadcast"| API
+    API -->|"7. Risk Analysis"| Gemini
     
-    API -->|"7. Sign Intent (Encrypted EOA Key)"| API
-    API -->|"8. Submit Meta-Tx"| Relayer
-    Relayer -->|"9. Execute Meta-Tx via Safe"| Safe
-    Safe -->|"10. Settle Trade"| CLOB
+    API -->|"8. Sign Intent (Encrypted EOA Key)"| API
+    API -->|"9. Submit Meta-Tx"| Relayer
+    Relayer -->|"10. Execute Meta-Tx via Safe"| Safe
+    Safe -->|"11. Settle Trade"| CLOB
 ```
 
 ---

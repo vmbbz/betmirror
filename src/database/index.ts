@@ -44,6 +44,7 @@ export interface IUser extends Document {
   stats: UserStats;
   cashoutHistory: any[];
   bookmarkedMarkets: string[];
+  whalePreferences?: string[]; // User's whale wallet watchlist
   createdAt: Date;
   lastActive: Date;
 }
@@ -313,6 +314,7 @@ const UserSchema = new Schema<IUser>({
     cashBalance: { type: Number, default: 0 }
   },
   bookmarkedMarkets: { type: [String], default: [] },
+  whalePreferences: { type: [String], default: [] }, // User's whale wallet watchlist
   cashoutHistory: [Schema.Types.Mixed],
   lastActive: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now }

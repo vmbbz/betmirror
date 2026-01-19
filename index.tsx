@@ -2142,12 +2142,45 @@ const [isDepositModalOpen, setIsDepositModalOpen] = useState(false);
 const [isWithdrawing, setIsWithdrawing] = useState(false);
 const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
 const [withdrawalTxHash, setWithdrawalTxHash] = useState<string | null>(null); 
-
 const [isActivating, setIsActivating] = useState(false);
 const [targetInput, setTargetInput] = useState('');
 const [newWalletInput, setNewWalletInput] = useState('');
 const [showSecrets, setShowSecrets] = useState(false);
 const [isAddingWallet, setIsAddingWallet] = useState(false);
+const [whaleWalletInput, setWhaleWalletInput] = useState('');
+const [whaleWallets, setWhaleWallets] = useState<string[]>([]);
+
+// --- Whale Wallet Management Functions ---
+const loadWhaleWatchlist = async () => {
+    try {
+        const response = await fetch(`/api/whale/watchlist/${userAddress}`);
+        const data = await response.json();
+        if (data.success) {
+            setWhaleWallets(data.wallets || []);
+        }
+    } catch (error) {
+        console.error('Failed to load whale watchlist:', error);
+    }
+};
+
+const saveWhaleWatchlist = async () => {
+    try {
+        const response = await fetch('/api/whale/watchlist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: userAddress, wallets: whaleWallets })
+        });
+        const data = await response.json();
+        if (data.success) {
+            toast.success(`Whale watchlist updated: ${whaleWallets.length} wallets`);
+        } else {
+            toast.error('Failed to update whale watchlist');
+        }
+    } catch (error) {
+        toast.error('Failed to save whale watchlist');
+    }
+};
+
 const [selectedTrader, setSelectedTrader] = useState<TraderProfile | null>(null);
 
 // --- ORDER MANAGEMENT STATE ---
@@ -2155,24 +2188,16 @@ const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
 const [selectedPosition, setSelectedPosition] = useState<ActivePosition | null>(null);
 const [openOrders, setOpenOrders] = useState<any[]>([]);
 const [exitingPositionId, setExitingPositionId] = useState<string | null>(null); // Track manual exit loading state
-const [isSyncingPositions, setIsSyncingPositions] = useState(false); //  Sync positions state
+const [isSyncingPositions, setIsSyncingPositions] = useState(false); // Sync positions state
 // --- CONFIGURATION ---
 const [config, setConfig] = useState<AppConfig>({
     targets: [],
+    multiplier: 1,
+    riskProfile: 'balanced',
     rpcUrl: '',
     geminiApiKey: '',
-    multiplier: 1.0,
-    riskProfile: 'balanced',
-    minLiquidityFilter: 'MEDIUM',
-    autoTp: 0.20,
-    enableNotifications: false,
-    userPhoneNumber: '',
-    enableAutoCashout: false,
-    maxRetentionAmount: 1000,
-    maxTradeAmount: 100,
     coldWalletAddress: '',
-    enableSounds: true,
-    enableAutoArb: false,
+    l2ApiCredentials: { key: '', secret: '', passphrase: '' },
     enableCopyTrading: true,
     enableMoneyMarkets: false,
     enableFlashMoves: false
@@ -3626,6 +3651,10 @@ return (
                                 <span className="text-gray-500 dark:text-gray-400">Targets</span>
                                 <span className="font-mono text-gray-900 dark:text-white">{config.targets.length}</span>
                             </div>
+                            <div className="flex justify-between text-xs p-2 bg-gray-50 dark:bg-white/5 rounded border border-gray-200 dark:border-white/5">
+                                <span className="text-gray-500 dark:text-gray-400">Whale Watchlist</span>
+                                <span className="font-mono text-gray-900 dark:text-white">{whaleWallets.length}</span>
+                            </div>
                         </div>
                     </div>
                         <div className="glass-panel p-5 rounded-xl space-y-4 flex-1 flex flex-col bg-white dark:bg-zinc-900/50 border border-gray-200 dark:border-zinc-800 shadow-sm min-h-[600px]">
@@ -4657,6 +4686,31 @@ return (
                                     ))}
                                 </div>
                                 <p className="text-[9px] text-gray-500 font-bold leading-relaxed italic">Conservative: Rejects high volatility. Balanced: Standard management. Degen: High-risk appetite.</p>
+                            </div>
+                            
+                            {/* Whale Wallet Management */}
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2"><Users size={16} className="text-blue-600 dark:text-terminal-accent"/> Whale Watchlist</h4>
+                                    <button onClick={() => setActiveTab('vault')} className="text-[10px] text-blue-600 dark:text-terminal-accent hover:underline">MANAGE</button>
+                                </div>
+                                <div className="flex gap-2">
+                                    <input 
+                                        value={whaleWalletInput}
+                                        onChange={(e) => setWhaleWalletInput(e.target.value)}
+                                        placeholder="Enter whale wallet 0x..." 
+                                        className="flex-1 bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono text-white outline-none focus:border-blue-500/50"
+                                    />
+                                    <button onClick={() => { if (whaleWalletInput) { setWhaleWallets([...whaleWallets, whaleWalletInput]); setWhaleWalletInput(''); }}} className="px-6 bg-white text-black font-black text-[9px] uppercase rounded-xl hover:bg-gray-200 transition-colors">Add</button>
+                                </div>
+                                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar p-1">
+                                    {whaleWallets.map(w => (
+                                        <div key={w} className="flex items-center gap-2 px-3 py-2 bg-white/5 rounded-xl border border-white/10 text-[10px] font-mono text-gray-300">
+                                            {w.slice(0,6)}...{w.slice(-4)}
+                                            <button onClick={() => setWhaleWallets(whaleWallets.filter(x => x !== w))} className="hover:text-rose-500 ml-1"><X size={12}/></button>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>

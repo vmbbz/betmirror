@@ -2,11 +2,10 @@
  * LOGIC LAYER: TradeMonitorService
  *
  * Performance: O(1) Discovery.
- * This service used to poll the Polymarket Activity API for every followed whale.
- * It has been refactored to subscribe to the MarketIntelligenceService Singleton.
+ * This service monitors user trades via WebSocket for real-time fill tracking.
+ * Whale tracking has been moved to GlobalWhalePollerService.
  *
- * It filters the global "trades" firehose for specific targets, deduplicates
- * stuttering socket events, and converts raw trade data into executable TradeSignals.
+ * It handles user-specific trade events and converts them into executable TradeSignals.
  */
 export class TradeMonitorService {
     deps;
@@ -24,7 +23,7 @@ export class TradeMonitorService {
         this.updateTargets(deps.userAddresses);
         // Store bound handler reference to allow clean removal of event listeners
         this.boundHandler = (event) => {
-            this.handleWhaleSignal(event);
+            this.handleUserTrade(event);
         };
     }
     /**
@@ -34,17 +33,16 @@ export class TradeMonitorService {
         return this.running;
     }
     /**
-     * Synchronizes the local target list and notifies the global Intelligence Singleton
-     * to expand its filtering set.
+     * Synchronizes the local target list for user trade monitoring.
+     * Note: Whale tracking is now handled by GlobalWhalePollerService.
      *
      * @param newTargets Array of wallet addresses to monitor.
      */
     updateTargets(newTargets) {
         this.deps.userAddresses = newTargets;
         this.targetWallets = new Set(newTargets.map(t => t.toLowerCase()));
-        // Notify the Singleton to update the global WebSocket filter
-        this.deps.intelligence.updateWatchlist(newTargets);
-        this.deps.logger.info(`🎯 Monitor targets synced: ${this.targetWallets.size} whales.`);
+        // Note: No need to notify intelligence service for whale tracking anymore
+        this.deps.logger.info(`🎯 Monitor targets synced: ${this.targetWallets.size} user wallets.`);
     }
     /**
      * Connects the monitor to the global intelligence event bus.
@@ -62,16 +60,15 @@ export class TradeMonitorService {
         this.processedTrades.clear();
     }
     /**
-     * CORE LOGIC: handleWhaleSignal
+     * CORE LOGIC: handleUserTrade
      *
-     * This method replaces the legacy 'checkUserActivity' polling.
-     * It is triggered instantly when the MarketIntelligence Singleton detects a
-     * trade from a whale on the global WebSocket.
+     * This method handles user-specific trade events from WebSocket.
+     * Note: Whale tracking is now handled by GlobalWhalePollerService using Data API.
      */
-    async handleWhaleSignal(event) {
+    async handleUserTrade(event) {
         if (!this.running)
             return;
-        // Normalization check
+        // Only process trades from our target wallets (user trades)
         if (!this.targetWallets.has(event.trader.toLowerCase()))
             return;
         const tradeKey = `${event.trader}-${event.tokenId}-${event.side}-${Math.floor(event.timestamp / 5000)}`;
@@ -79,10 +76,7 @@ export class TradeMonitorService {
             return;
         this.processedTrades.set(tradeKey, Date.now());
         this.pruneCache();
-        this.deps.logger.success(`🚨 [SIGNAL] ${event.trader.slice(0, 10)}... ${event.side} @ ${event.price}`);
-        // CRITICAL: Bridging the Intelligence Gap
-        // Tell the central WS manager to subscribe to this token immediately so we have sub-second book data
-        this.deps.intelligence.subscribeToToken(event.tokenId);
+        this.deps.logger.success(`🚨 [USER TRADE] ${event.trader.slice(0, 10)}... ${event.side} @ ${event.price}`);
         const signal = {
             trader: event.trader,
             marketId: "resolved_by_adapter",

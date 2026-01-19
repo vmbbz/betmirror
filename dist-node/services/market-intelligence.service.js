@@ -54,26 +54,12 @@ export class MarketIntelligenceService extends EventEmitter {
     setupEventRouting() {
         if (!this.wsManager)
             return;
-        // ENRICHMENT ROUTER: Capture whale trades and attach metadata
+        // ENRICHMENT ROUTER: Whale trade events now handled by GlobalWhalePollerService
+        // This event listener is kept for backward compatibility but no longer processes whale trades
         this.wsManager.on('whale_trade', async (event) => {
-            let enrichedEvent = { ...event };
-            // LAZY ENRICHMENT: Only try to add metadata if we have it locally (skipApi = true)
-            // This prevents the bot from hitting Polymarket API for every whale signal
-            if (this.marketMetadataService) {
-                try {
-                    const meta = await this.marketMetadataService.getMetadata(event.tokenId, true);
-                    if (meta) {
-                        enrichedEvent.question = meta.question;
-                        enrichedEvent.marketSlug = meta.marketSlug;
-                        enrichedEvent.eventSlug = meta.eventSlug;
-                        enrichedEvent.conditionId = meta.conditionId;
-                    }
-                }
-                catch (e) {
-                    this.logger.debug(`Metadata enrichment skipped for ${event.tokenId} (Cache Miss)`);
-                }
-            }
-            this.emit('whale_trade', enrichedEvent);
+            // Whale tracking moved to GlobalWhalePollerService using Data API
+            // This event is no longer emitted by WebSocketManager
+            this.logger.debug(`[MarketIntelligence] Received whale_trade event (deprecated)`);
         });
         // Route raw price and trade events
         this.wsManager.on('price_update', (event) => this.emit('price_update', event));

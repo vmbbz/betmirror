@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { Logger } from '../utils/logger.util.js';
 import { TradeMonitorService } from '../services/trade-monitor.service.js';
 import { GlobalWhalePollerService } from '../services/global-whale-poller.service.js';
+import { WhaleFilterService } from '../services/whale-filter.service.js';
 import { TradeExecutorService } from '../services/trade-executor.service.js';
 import { PortfolioService } from '../services/portfolio.service.js';
 import { BotLog, Trade, User } from '../database/index.js';
@@ -58,6 +59,7 @@ export class BotEngine extends EventEmitter {
     public isRunning = false;
     private monitor: TradeMonitorService;
     private globalWhalePoller: GlobalWhalePollerService;
+    private whaleFilterService: WhaleFilterService;
     private executor: TradeExecutorService;
     private arbScanner: MarketMakingScanner;
     private exchange: PolymarketAdapter;
@@ -85,12 +87,13 @@ export class BotEngine extends EventEmitter {
     private marketMetadataService: MarketMetadataService;
     private logger: Logger;
 
-    constructor(config: any, intelligence: MarketIntelligenceService, registryService: any, callbacks: BotEngineCallbacks = {}) {
+    constructor(config: any, intelligence: MarketIntelligenceService, registryService: any, callbacks: BotEngineCallbacks = {}, whaleFilterService: WhaleFilterService) {
         super();
         this.config = config;
         this.intelligence = intelligence;
         this.registryService = registryService;
         this.callbacks = callbacks;
+        this.whaleFilterService = whaleFilterService; // Use passed instance
         
         // --- SCOPED LOGGER FACTORY ---
         this.logger = {
@@ -175,10 +178,21 @@ export class BotEngine extends EventEmitter {
         
         // GLOBAL Whale Data Poller - Shared instance for all bots
         this.globalWhalePoller = GlobalWhalePollerService.getInstance(this.logger);
+        // whaleFilterService is now passed as parameter, not created here
         
         // Listen for global whale events
         this.globalWhalePoller.on('whale_trade_detected', async (signal) => {
-            if (this.isRunning && this.config.enableCopyTrading) {
+            // Only process if this user has whale filters configured
+            if (!this.whaleFilterService.hasUserFilters(this.config.userId)) {
+                return;
+            }
+            
+            // Check if signal matches user's whale filters
+            const userFilters = this.whaleFilterService.getUserFilters(this.config.userId);
+            const trader = signal.trader.toLowerCase();
+            const isMatch = userFilters.includes(trader);
+            
+            if (this.isRunning && this.config.enableCopyTrading && isMatch) {
                 this.logger.info(`🐋 Whale Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
                 
                 // Emit whale event for WebSocket clients

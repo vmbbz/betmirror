@@ -11,6 +11,7 @@ export class FlashMoveService extends EventEmitter {
     config;
     tradeExecutor;
     logger;
+    marketMetadataService;
     isEnabled = false;
     detectionEngine;
     executionEngine;
@@ -19,14 +20,15 @@ export class FlashMoveService extends EventEmitter {
     priceUpdateHandler;
     tradeEventHandler;
     sportsEventHandler;
-    constructor(marketIntelligence, config, tradeExecutor, logger) {
+    constructor(marketIntelligence, config, tradeExecutor, logger, marketMetadataService) {
         super();
         this.marketIntelligence = marketIntelligence;
         this.config = config;
         this.tradeExecutor = tradeExecutor;
         this.logger = logger;
+        this.marketMetadataService = marketMetadataService;
         // Initialize components
-        this.detectionEngine = new FlashDetectionEngine(config, logger);
+        this.detectionEngine = new FlashDetectionEngine(config, logger, marketMetadataService);
         this.executionEngine = new FlashExecutionEngine(config, tradeExecutor, logger);
         this.riskManager = new FlashRiskManager(config, logger);
         // Prepare handlers for lifecycle management

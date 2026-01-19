@@ -15,6 +15,7 @@ import { DbRegistryService } from '../services/db-registry.service.js';
 import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
+import { GlobalWhalePollerService } from '../services/global-whale-poller.service.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import { WebSocketManager } from '../services/websocket-manager.service.js';
 import { FlashMoveService } from '../services/flash-move.service.js';
@@ -60,10 +61,28 @@ const wsManager = new WebSocketManager(serverLogger, null);
 const globalIntelligence = new MarketIntelligenceService(serverLogger, wsManager, undefined, serverMetadataService);
 // Create global FlashMoveService for server-level flash detection
 const globalFlashMoveService = new FlashMoveService(globalIntelligence, DEFAULT_FLASH_MOVE_CONFIG, null, // No trade executor needed at server level
-serverLogger);
+serverLogger, serverMetadataService);
 // Wire global services
 globalIntelligence.setFlashMoveService(globalFlashMoveService);
 globalFlashMoveService.setEnabled(true);
+// GLOBAL Whale Poller - Single instance for all bots
+const globalWhalePoller = GlobalWhalePollerService.getInstance(serverLogger);
+// Listen for global whale events and broadcast to all clients
+globalWhalePoller.on('whale_trade_detected', (whaleEvent) => {
+    io.emit('WHALE_DETECTED', {
+        trader: whaleEvent.trader,
+        tokenId: whaleEvent.tokenId,
+        side: whaleEvent.side,
+        price: whaleEvent.price,
+        size: whaleEvent.sizeUsd / whaleEvent.price,
+        timestamp: whaleEvent.timestamp,
+        question: 'Unknown Market',
+        marketSlug: null,
+        eventSlug: null,
+        conditionId: null
+    });
+    serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.sizeUsd / whaleEvent.price} @ ${whaleEvent.price}`);
+});
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map();
 app.use(cors());
@@ -175,6 +194,11 @@ async function startUserBot(userId, config) {
     }
     catch (e) { }
     ACTIVE_BOTS.set(normId, engine);
+    // Listen for whale events from this bot engine
+    engine.on('whale_detected', (whaleEvent) => {
+        io.emit('WHALE_DETECTED', whaleEvent);
+        serverLogger.info(`[WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+    });
     await engine.start();
 }
 // Socket.io Room Management
@@ -1178,25 +1202,31 @@ async function bootstrap() {
         }
     }
     // Attach core hub events once at startup (CRITICAL: Fixes the listener leak)
-    globalIntelligence.on('whale_trade', (whaleEvent) => {
-        io.emit('WHALE_DETECTED', {
-            trader: whaleEvent.trader,
-            tokenId: whaleEvent.tokenId,
-            side: whaleEvent.side,
-            price: whaleEvent.price,
-            size: whaleEvent.size,
-            timestamp: whaleEvent.timestamp,
-            question: whaleEvent.question || 'Unknown Market',
-            marketSlug: whaleEvent.marketSlug,
-            eventSlug: whaleEvent.eventSlug,
-            conditionId: whaleEvent.conditionId
-        });
-        serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
-    });
+    // Note: whale_trade events are deprecated - now handled by GlobalWhalePollerService
     globalIntelligence.on('flash_move_detected', (flashEvent) => {
         io.emit('flash_move_detected', flashEvent);
         serverLogger.info(`[GLOBAL FLASH] ${flashEvent.event.velocity > 0 ? 'Spike' : 'Crash'} detected: ${flashEvent.event.question?.slice(0, 30)}...`);
     });
+    // Listen for whale events from individual bot engines
+    for (const [userId, engine] of ACTIVE_BOTS.entries()) {
+        engine.on('whale_detected', (whaleEvent) => {
+            io.emit('WHALE_DETECTED', whaleEvent);
+            serverLogger.info(`[WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.size} @ ${whaleEvent.price}`);
+        });
+    }
+    // Collect all whale targets from all bots
+    const allWhaleTargets = new Set();
+    for (const u of walletGroups.values()) {
+        if (u.activeBotConfig?.userAddresses) {
+            u.activeBotConfig.userAddresses.forEach((addr) => allWhaleTargets.add(addr.toLowerCase()));
+        }
+    }
+    // Start global whale poller with all targets
+    if (allWhaleTargets.size > 0) {
+        globalWhalePoller.updateTargets(Array.from(allWhaleTargets));
+        await globalWhalePoller.start();
+        serverLogger.success(`🐋 Global whale poller started for ${allWhaleTargets.size} wallets`);
+    }
     for (const u of walletGroups.values()) {
         if (!u.activeBotConfig || !u.tradingWallet)
             continue;

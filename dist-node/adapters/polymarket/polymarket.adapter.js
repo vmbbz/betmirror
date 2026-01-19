@@ -107,8 +107,8 @@ export class PolymarketAdapter {
         await this.safeManager.enableApprovals();
         let apiCreds = this.config.l2ApiCredentials;
         if (!apiCreds || !apiCreds.key || !apiCreds.secret) {
-            await this.deriveAndSaveKeys();
-            apiCreds = this.config.l2ApiCredentials;
+            this.logger.error('❌ No L2 API credentials found in database config');
+            throw new Error('Missing L2 API credentials from database');
         }
         this.initClobClient(apiCreds);
     }

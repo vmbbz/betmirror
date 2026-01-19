@@ -148,7 +148,13 @@ export class GlobalWhalePollerService extends EventEmitter {
             });
             
             if (!response.data || !Array.isArray(response.data)) {
+                this.logger.warn(`🐋 [GLOBAL] Invalid API response for ${wallet}: ${JSON.stringify(response.data)}`);
                 return 0;
+            }
+            
+            // Debug: Log first trade structure to understand API format
+            if (response.data.length > 0) {
+                this.logger.debug(`🐋 [GLOBAL] Sample trade structure for ${wallet}: ${JSON.stringify(response.data[0])}`);
             }
             
             let processedCount = 0;
@@ -172,7 +178,13 @@ export class GlobalWhalePollerService extends EventEmitter {
     /**
      * Process a single whale trade
      */
-    private async processTrade(trade: WhaleTrade, wallet: string): Promise<boolean> {
+    private async processTrade(trade: any, wallet: string): Promise<boolean> {
+        // Validate trade structure
+        if (!trade || !trade.token || !trade.token.tokenId) {
+            this.logger.warn(`🐋 [GLOBAL] Invalid trade structure for ${wallet}: ${JSON.stringify(trade)}`);
+            return false;
+        }
+        
         const tradeKey = `${trade.transactionHash}_${trade.token.tokenId}`;
         const now = Date.now();
 
@@ -189,7 +201,7 @@ export class GlobalWhalePollerService extends EventEmitter {
 
         // Create trade signal
         const signal: TradeSignal = {
-            trader: trade.user.address,
+            trader: trade.user?.address || wallet,
             marketId: '', // Will be filled by bot engine
             tokenId: trade.token.tokenId,
             outcome: trade.token.outcome as 'YES' | 'NO',

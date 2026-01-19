@@ -59,6 +59,11 @@ app.use(express.static(distPath) as any);
 async function startUserBot(userId: string, config: BotConfig) {
     const normId = userId.toLowerCase();
     
+    // Add random delay to prevent RPC rate limiting when starting bots
+    const randomDelay = Math.random() * 2000 + 1000; // 1-3s random delay
+    console.log(`⏳ ${normId}: Waiting ${Math.round(randomDelay / 1000)}s before initialization to avoid RPC rate limits...`);
+    await new Promise(r => setTimeout(r, randomDelay));
+    
     if (ACTIVE_BOTS.has(normId)) {
         ACTIVE_BOTS.get(normId)?.stop();
     }
@@ -1158,7 +1163,14 @@ async function restoreBots() {
         
         console.log(`Found ${activeUsers.length} bots to restore.`);
 
-        for (const user of activeUsers) {
+        for (let i = 0; i < activeUsers.length; i++) {
+            const user = activeUsers[i];
+            
+            // Add delay between bot initializations to prevent RPC rate limiting
+            if (i > 0) {
+                console.log(`⏳ Waiting ${3 + i * 2}s before starting next bot to avoid RPC rate limits...`);
+                await new Promise(r => setTimeout(r, 3000 + (i * 2000))); // Progressive delay: 3s, 5s, 7s...
+            }
             if (user.activeBotConfig && user.tradingWallet) {
                  const normId = user.address.toLowerCase();
                  const correctSafeAddr = await SafeManagerService.computeAddress(user.tradingWallet.address);

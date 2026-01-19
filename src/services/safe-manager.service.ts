@@ -100,7 +100,11 @@ export class SafeManagerService {
         
         this.viemPublicClient = createPublicClient({
             chain: polygon,
-            transport: http(process.env.RPC_URL || 'https://polygon-rpc.com')
+            transport: http(process.env.RPC_URL || 'https://polygon-rpc.com', {
+                retryCount: 3,
+                retryDelay: 1000, // Fixed 1s delay between retries
+                timeout: 10000
+            })
         });
 
         this.relayClient = new RelayClient(
@@ -195,6 +199,9 @@ export class SafeManagerService {
      */
     public async checkAllowance(token: string, spender: string): Promise<bigint> {
         try {
+            // Add random delay to prevent rate limiting
+            await new Promise(r => setTimeout(r, Math.random() * 200 + 100)); // 0.1-0.3s random delay
+            
             const allowance = await this.viemPublicClient.readContract({
                 address: token as `0x${string}`,
                 abi: parseAbi(ERC20_ABI),
@@ -210,6 +217,9 @@ export class SafeManagerService {
 
     public async checkBalance(token: string): Promise<bigint> {
         try {
+            // Add random delay to prevent rate limiting
+            await new Promise(r => setTimeout(r, Math.random() * 200 + 100)); // 0.1-0.3s random delay
+            
             const balance = await this.viemPublicClient.readContract({
                 address: token as `0x${string}`,
                 abi: parseAbi(ERC20_ABI),
@@ -285,7 +295,15 @@ export class SafeManagerService {
             ? currentBalance * 2n 
             : DEFAULT_MAX_ALLOWANCE;
 
-        for (const spender of usdcSpenders) {
+        // Add delay between allowance checks to prevent rate limiting
+        for (let i = 0; i < usdcSpenders.length; i++) {
+            const spender = usdcSpenders[i];
+            
+            // Add delay between checks (except first one)
+            if (i > 0) {
+                await new Promise(r => setTimeout(r, 1000)); // 1s delay
+            }
+            
             const allowance = await this.checkAllowance(TOKENS.USDC_BRIDGED, spender.addr);
 
             if (allowance < minAllowance) {
@@ -306,7 +324,15 @@ export class SafeManagerService {
             { addr: NEG_RISK_ADAPTER_ADDRESS, name: "NegRiskAdapter" }
         ];
 
-        for (const operator of ctfOperators) {
+        // Add delay between CTF operator checks to prevent rate limiting
+        for (let i = 0; i < ctfOperators.length; i++) {
+            const operator = ctfOperators[i];
+            
+            // Add delay between checks (except first one)
+            if (i > 0) {
+                await new Promise(r => setTimeout(r, 800)); // 0.8s delay
+            }
+            
             const isApproved = await this.viemPublicClient.readContract({
                 address: CTF_CONTRACT_ADDRESS,
                 abi: parseAbi(ERC1155_ABI),

@@ -179,13 +179,13 @@ export class GlobalWhalePollerService extends EventEmitter {
      * Process a single whale trade
      */
     private async processTrade(trade: any, wallet: string): Promise<boolean> {
-        // Validate trade structure
-        if (!trade || !trade.token || !trade.token.tokenId) {
+        // Validate trade structure based on actual API format
+        if (!trade || !trade.asset || !trade.proxyWallet) {
             this.logger.warn(`🐋 [GLOBAL] Invalid trade structure for ${wallet}: ${JSON.stringify(trade)}`);
             return false;
         }
         
-        const tradeKey = `${trade.transactionHash}_${trade.token.tokenId}`;
+        const tradeKey = `${trade.transactionHash}_${trade.asset}`;
         const now = Date.now();
 
         // Deduplication check
@@ -199,12 +199,12 @@ export class GlobalWhalePollerService extends EventEmitter {
         // Mark as processed
         this.processedTrades.set(tradeKey, now);
 
-        // Create trade signal
+        // Create trade signal using actual API format
         const signal: TradeSignal = {
-            trader: trade.user?.address || wallet,
-            marketId: '', // Will be filled by bot engine
-            tokenId: trade.token.tokenId,
-            outcome: trade.token.outcome as 'YES' | 'NO',
+            trader: trade.proxyWallet,
+            marketId: trade.conditionId || '',
+            tokenId: trade.asset, // This is the correct field name
+            outcome: trade.outcome as 'YES' | 'NO',
             side: trade.side,
             price: trade.price,
             sizeUsd: trade.size * trade.price,
@@ -213,7 +213,7 @@ export class GlobalWhalePollerService extends EventEmitter {
 
         // Emit to ALL listening bot engines
         this.emit('whale_trade_detected', signal);
-        this.logger.info(`🐋 [GLOBAL] Whale detected: ${trade.user.address.slice(0, 8)}... ${trade.side} ${trade.size} @ ${trade.price}`);
+        this.logger.info(`🐋 [GLOBAL] Whale detected: ${trade.proxyWallet.slice(0, 8)}... ${trade.side} ${trade.size} @ ${trade.price}`);
 
         return true;
     }

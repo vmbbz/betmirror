@@ -5,6 +5,7 @@ import { EvmWalletService } from '../../services/evm-wallet.service.js';
 import { SafeManagerService } from '../../services/safe-manager.service.js';
 import { User, Trade, MarketMetadata as DBMarketMetadata } from '../../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
+import { MARKET_RATE_LIMITER } from '../../utils/rate-limiter.util.js';
 import { TOKENS } from '../../config/env.js';
 import axios from 'axios';
 const HOST_URL = 'https://clob.polymarket.com';
@@ -235,7 +236,7 @@ export class PolymarketAdapter {
                 return null;
             }
             const client = this.client || this.getPublicClient();
-            const market = await client.getMarket(marketId);
+            const market = await MARKET_RATE_LIMITER.add(() => client.getMarket(marketId));
             if (market) {
                 // Seed DB cache if missing
                 await DBMarketMetadata.findOneAndUpdate({ conditionId: marketId }, {
@@ -422,7 +423,7 @@ export class PolymarketAdapter {
             else if (!PolymarketAdapter.isThrottled) {
                 // Active fetch only if not throttled
                 const client = this.client || this.getPublicClient();
-                const marketData = await client.getMarket(conditionId);
+                const marketData = await MARKET_RATE_LIMITER.add(() => client.getMarket(conditionId));
                 if (marketData) {
                     result.marketSlug = marketData.market_slug || '';
                     result.question = marketData.question || '';
@@ -599,10 +600,14 @@ export class PolymarketAdapter {
         return [];
     }
     async createOrder(params, retryCount = 0) {
-        if (!this.client)
+        const client = this.client;
+        if (!client)
             throw new Error("Client not authenticated");
         try {
-            const market = await this.client.getMarket(params.marketId);
+            const market = await MARKET_RATE_LIMITER.add(() => client.getMarket(params.marketId));
+            if (!market) {
+                return { success: false, error: "Market not found", sharesFilled: 0, priceFilled: 0 };
+            }
             const tickSize = Number(market.minimum_tick_size) || 0.01;
             const minOrderSize = Number(market.minimum_order_size) || 5;
             if (params.side === 'BUY') {
@@ -617,7 +622,7 @@ export class PolymarketAdapter {
             if (size < minOrderSize) {
                 return { success: false, error: "BELOW_MIN_SIZE", sharesFilled: 0, priceFilled: 0 };
             }
-            const signedOrder = await this.client.createOrder({
+            const signedOrder = await client.createOrder({
                 tokenID: params.tokenId,
                 price: price,
                 side: side,
@@ -631,7 +636,7 @@ export class PolymarketAdapter {
             let orderType = params.orderType === 'GTC' ? OrderType.GTC :
                 params.orderType === 'FAK' ? OrderType.FAK :
                     OrderType.FOK;
-            const res = await this.client.postOrder(signedOrder, orderType);
+            const res = await client.postOrder(signedOrder, orderType);
             if (res && res.success && !res.errorMsg) {
                 return {
                     success: true,

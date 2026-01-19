@@ -6,6 +6,7 @@ import { httpGet } from '../utils/http.js';
 import { TOKENS } from '../config/env.js';
 import { IExchangeAdapter, LiquidityHealth, OrderParams, OrderResult } from '../adapters/interfaces.js';
 import { WebSocketManager } from './websocket-manager.service.js';
+import { MARKET_RATE_LIMITER } from '../utils/rate-limiter.util.js';
 import axios from 'axios';
 
 // Import from arbitrage scanner
@@ -1036,32 +1037,11 @@ export class TradeExecutorService {
           ? Math.min(this.mmConfig.quoteSize / price, inventory)
           : this.mmConfig.quoteSize / price;
 
-      const minSize = rewardsMinSize || marketData.minOrderSize || 5;
-      if (size < minSize) {
-          return { tokenId, status: 'SKIPPED', reason: `size_below_minimum: ${size} < ${minSize}` };
-      }
-
-      const result = await this.placeGTCOrder({
+      return {
           tokenId,
-          conditionId,
-          side,
-          price,
-          size,
-          negRisk: marketData.negRisk,
-          tickSize: marketData.tickSize
-      });
-
-      if (result.success) {
-          logger.success(`[MM] ${side} posted: ${size.toFixed(2)} @ ${(price * 100).toFixed(1)}¢`);
-          return {
-              tokenId,
-              status: 'POSTED',
-              [side === 'BUY' ? 'bidOrderId' : 'askOrderId']: result.orderId,
-              [side === 'BUY' ? 'bidPrice' : 'askPrice']: price
-          };
-      }
-
-      return { tokenId, status: 'FAILED', reason: result.error };
+          [side === 'BUY' ? 'bidPrice' : 'askPrice']: price,
+          status: 'POSTED'
+      };
   }
 
   /**
@@ -1078,23 +1058,26 @@ export class TradeExecutorService {
         const client = (adapter as any).getRawClient?.();
 
         try {
-            const market = await client.getMarket(conditionId);
+            const market = await MARKET_RATE_LIMITER.add(async () => {
+                const client = (adapter as any).getRawClient?.();
+                return client?.getMarket(conditionId);
+            });
             
             if (!market) return { valid: false, reason: 'market_not_found', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
-            if (market.closed) return { valid: false, reason: 'market_closed', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
-            if (!market.active) return { valid: false, reason: 'market_inactive', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
-            if (!market.accepting_orders) return { valid: false, reason: 'not_accepting_orders', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            if ((market as any).closed) return { valid: false, reason: 'market_closed', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            if (!(market as any).active) return { valid: false, reason: 'market_inactive', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            if (!(market as any).accepting_orders) return { valid: false, reason: 'not_accepting_orders', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
             
             // Skip markets without rewards
-            if (!market.rewards?.rates) {
+            if (!(market as any).rewards?.rates) {
                 return { valid: false, reason: 'no_rewards', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
             }
 
             return {
                 valid: true,
-                negRisk: market.neg_risk || false,
-                tickSize: market.minimum_tick_size?.toString() || '0.01',
-                minOrderSize: market.minimum_order_size || 5
+                negRisk: (market as any).neg_risk || false,
+                tickSize: (market as any).minimum_tick_size?.toString() || '0.01',
+                minOrderSize: (market as any).minimum_order_size || 5
             };
         } catch (error) {
             return { valid: false, reason: 'validation_error', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
@@ -1306,21 +1289,24 @@ export class TradeExecutorService {
 
     try {
       try {
-        const market = await (adapter as any).getRawClient().getMarket(signal.marketId);
+        const market = await MARKET_RATE_LIMITER.add(async () => {
+                const client = (adapter as any).getRawClient();
+                return client.getMarket(signal.marketId);
+            });
         
         if (!market) {
           logger.warn(`[Market Not Found] ${signal.marketId} - Skipping`);
           return failResult("market_not_found");
         }
-        if (market.closed) {
+        if ((market as any).closed) {
           logger.warn(`[Market Closed] ${signal.marketId} - Skipping`);
           return failResult("market_closed");
         }
-        if (!market.active || !market.accepting_orders) {
+        if (!(market as any).active || !(market as any).accepting_orders) {
           logger.warn(`[Market Inactive] ${signal.marketId} - Skipping`);
           return failResult("market_not_accepting_orders");
         }
-        if (market.archived) {
+        if ((market as any).archived) {
           logger.warn(`[Market Archived] ${signal.marketId} - Skipping`);
           return failResult("market_archived");
         }

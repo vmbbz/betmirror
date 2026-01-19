@@ -112,7 +112,12 @@ export class GlobalWhalePollerService extends EventEmitter {
                 }
             });
             if (!response.data || !Array.isArray(response.data)) {
+                this.logger.warn(`🐋 [GLOBAL] Invalid API response for ${wallet}: ${JSON.stringify(response.data)}`);
                 return 0;
+            }
+            // Debug: Log first trade structure to understand API format
+            if (response.data.length > 0) {
+                this.logger.debug(`🐋 [GLOBAL] Sample trade structure for ${wallet}: ${JSON.stringify(response.data[0])}`);
             }
             let processedCount = 0;
             for (const trade of response.data) {
@@ -134,7 +139,12 @@ export class GlobalWhalePollerService extends EventEmitter {
      * Process a single whale trade
      */
     async processTrade(trade, wallet) {
-        const tradeKey = `${trade.transactionHash}_${trade.token.tokenId}`;
+        // Validate trade structure based on actual API format
+        if (!trade || !trade.asset || !trade.proxyWallet) {
+            this.logger.warn(`🐋 [GLOBAL] Invalid trade structure for ${wallet}: ${JSON.stringify(trade)}`);
+            return false;
+        }
+        const tradeKey = `${trade.transactionHash}_${trade.asset}`;
         const now = Date.now();
         // Deduplication check
         if (this.processedTrades.has(tradeKey)) {
@@ -145,12 +155,12 @@ export class GlobalWhalePollerService extends EventEmitter {
         }
         // Mark as processed
         this.processedTrades.set(tradeKey, now);
-        // Create trade signal
+        // Create trade signal using actual API format
         const signal = {
-            trader: trade.user.address,
-            marketId: '', // Will be filled by bot engine
-            tokenId: trade.token.tokenId,
-            outcome: trade.token.outcome,
+            trader: trade.proxyWallet,
+            marketId: trade.conditionId || '',
+            tokenId: trade.asset, // This is the correct field name
+            outcome: trade.outcome,
             side: trade.side,
             price: trade.price,
             sizeUsd: trade.size * trade.price,
@@ -158,7 +168,7 @@ export class GlobalWhalePollerService extends EventEmitter {
         };
         // Emit to ALL listening bot engines
         this.emit('whale_trade_detected', signal);
-        this.logger.info(`🐋 [GLOBAL] Whale detected: ${trade.user.address.slice(0, 8)}... ${trade.side} ${trade.size} @ ${trade.price}`);
+        this.logger.info(`🐋 [GLOBAL] Whale detected: ${trade.proxyWallet.slice(0, 8)}... ${trade.side} ${trade.size} @ ${trade.price}`);
         return true;
     }
     /**

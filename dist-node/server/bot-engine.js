@@ -21,6 +21,7 @@ export class BotEngine extends EventEmitter {
     isRunning = false;
     monitor;
     globalWhalePoller;
+    whaleFilterService;
     executor;
     arbScanner;
     exchange;
@@ -46,12 +47,13 @@ export class BotEngine extends EventEmitter {
     privateWsManager; // Private WS for fills only
     marketMetadataService;
     logger;
-    constructor(config, intelligence, registryService, callbacks = {}) {
+    constructor(config, intelligence, registryService, callbacks = {}, whaleFilterService) {
         super();
         this.config = config;
         this.intelligence = intelligence;
         this.registryService = registryService;
         this.callbacks = callbacks;
+        this.whaleFilterService = whaleFilterService; // Use passed instance
         // --- SCOPED LOGGER FACTORY ---
         this.logger = {
             info: (m) => this.addLog('info', m),
@@ -107,9 +109,18 @@ export class BotEngine extends EventEmitter {
         });
         // GLOBAL Whale Data Poller - Shared instance for all bots
         this.globalWhalePoller = GlobalWhalePollerService.getInstance(this.logger);
+        // whaleFilterService is now passed as parameter, not created here
         // Listen for global whale events
         this.globalWhalePoller.on('whale_trade_detected', async (signal) => {
-            if (this.isRunning && this.config.enableCopyTrading) {
+            // Only process if this user has whale filters configured
+            if (!this.whaleFilterService.hasUserFilters(this.config.userId)) {
+                return;
+            }
+            // Check if signal matches user's whale filters
+            const userFilters = this.whaleFilterService.getUserFilters(this.config.userId);
+            const trader = signal.trader.toLowerCase();
+            const isMatch = userFilters.includes(trader);
+            if (this.isRunning && this.config.enableCopyTrading && isMatch) {
                 this.logger.info(`🐋 Whale Trade Signal: ${signal.side} ${signal.tokenId} @ ${signal.price}`);
                 // Emit whale event for WebSocket clients
                 this.emit('whale_detected', {

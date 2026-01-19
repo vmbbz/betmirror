@@ -172,7 +172,7 @@ export class MarketMakingScanner extends EventEmitter {
         minSpreadCents: 1, 
         maxSpreadCents: 15,
         minVolume: 5000,
-        minLiquidity: 1000,
+        minLiquidity: 10000, // $10k minimum for safe money market arbitrage - prevents liquidity risks in smaller markets
         preferRewardMarkets: true,
         preferNewMarkets: true,
         newMarketAgeMinutes: 60,
@@ -1220,7 +1220,7 @@ export class MarketMakingScanner extends EventEmitter {
             this.config.minVolume;
             
         const effectiveMinLiquidity = isStillNew ? 
-            Math.max(50, this.config.minLiquidity * 0.1) : // At least $50 for new markets
+            Math.max(1000, this.config.minLiquidity * 0.1) : // At least $1,000 for new markets
             this.config.minLiquidity;
             
         // We always add to monitored list, but only opportunities get special treatment
@@ -1255,28 +1255,6 @@ export class MarketMakingScanner extends EventEmitter {
             featured: market.featured,
             isBookmarked: this.bookmarkedMarkets.has(market.conditionId)
         };
-
-        // Always update monitored list
-        this.monitoredMarkets.set(market.tokenId, opportunity);
-
-        // Check strict MM filters for the actionable opportunities array
-        if (market.volume < effectiveMinVolume) return;
-        if (market.liquidity < effectiveMinLiquidity) return;
-        
-        // NEW: Filter out markets with tiny order sizes (low liquidity)
-        // This prevents the "Bid size below minimum" spam
-        const minOrderSizeThreshold = 500; // $500 minimum order size for good liquidity
-        if (market.bestBidSize < minOrderSizeThreshold && market.bestAskSize < minOrderSizeThreshold) {
-            this.logger.debug(`[MM] Skipping low liquidity market: ${market.question.slice(0, 30)}... (Bid: $${market.bestBidSize}, Ask: $${market.bestAskSize})`);
-            return;
-        }
-        
-        // NEW: Filter out markets with tiny spreads (not profitable)
-        const minSpreadCents = 2; // Minimum 2 cent spread for profitability
-        if (spreadCents < minSpreadCents) {
-            this.logger.debug(`[MM] Skipping low spread market: ${market.question.slice(0, 30)}... (Spread: ${spreadCents.toFixed(1)}¢)`);
-            return;
-        }
         
         // 9. Update opportunities
         this.updateOpportunitiesInternal(opportunity);

@@ -70,14 +70,6 @@ export class MarketIntelligenceService extends EventEmitter {
      */
     private setupEventRouting() {
         if (!this.wsManager) return;
-
-        // ENRICHMENT ROUTER: Whale trade events now handled by GlobalWhalePollerService
-        // This event listener is kept for backward compatibility but no longer processes whale trades
-        this.wsManager.on('whale_trade', async (event: WhaleTradeEvent) => {
-            // Whale tracking moved to GlobalWhalePollerService using Data API
-            // This event is no longer emitted by WebSocketManager
-            this.logger.debug(`[MarketIntelligence] Received whale_trade event (deprecated)`);
-        });
         
         // Route raw price and trade events
         this.wsManager.on('price_update', (event) => this.emit('price_update', event));

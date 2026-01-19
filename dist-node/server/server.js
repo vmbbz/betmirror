@@ -16,6 +16,7 @@ import { registryAnalytics } from '../services/registry-analytics.service.js';
 import { EvmWalletService } from '../services/evm-wallet.service.js';
 import { SafeManagerService } from '../services/safe-manager.service.js';
 import { GlobalWhalePollerService } from '../services/global-whale-poller.service.js';
+import { WhaleFilterService } from '../services/whale-filter.service.js';
 import { MarketIntelligenceService } from '../services/market-intelligence.service.js';
 import { WebSocketManager } from '../services/websocket-manager.service.js';
 import { FlashMoveService } from '../services/flash-move.service.js';
@@ -67,8 +68,12 @@ globalIntelligence.setFlashMoveService(globalFlashMoveService);
 globalFlashMoveService.setEnabled(true);
 // GLOBAL Whale Poller - Single instance for all bots
 const globalWhalePoller = GlobalWhalePollerService.getInstance(serverLogger);
-// Listen for global whale events and broadcast to all clients
-globalWhalePoller.on('whale_trade_detected', (whaleEvent) => {
+// Whale Filter Service - Centralized filtering hub
+const whaleFilterService = new WhaleFilterService(serverLogger);
+// Listen for global whale events and route through filter
+globalWhalePoller.on('whale_trade_detected', async (whaleEvent) => {
+    const filteredResults = await whaleFilterService.filterAndRoute(whaleEvent);
+    // Broadcast to WebSocket clients (all users see all whale events)
     io.emit('WHALE_DETECTED', {
         trader: whaleEvent.trader,
         tokenId: whaleEvent.tokenId,
@@ -81,7 +86,9 @@ globalWhalePoller.on('whale_trade_detected', (whaleEvent) => {
         eventSlug: null,
         conditionId: null
     });
-    serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... ${whaleEvent.side} ${whaleEvent.sizeUsd / whaleEvent.price} @ ${whaleEvent.price}`);
+    if (filteredResults.length > 0) {
+        serverLogger.info(`[GLOBAL WHALE] ${whaleEvent.trader.slice(0, 10)}... routed to ${filteredResults.length} users`);
+    }
 });
 // In-Memory Bot Instances (Runtime State)
 const ACTIVE_BOTS = new Map();
@@ -107,6 +114,28 @@ setInterval(async () => {
         io.emit('FOMO_VELOCITY_UPDATE', moves);
     currentTickIndex++;
 }, 500);
+// --- Whale Wallet Management ---
+app.post('/api/whale/watchlist', async (req, res) => {
+    const { userId, wallets } = req.body;
+    try {
+        await whaleFilterService.updateUserFilters(userId, wallets);
+        res.json({ success: true, message: `Updated whale watchlist: ${wallets.length} wallets` });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: 'Failed to update whale watchlist' });
+    }
+});
+app.get('/api/whale/watchlist/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        await whaleFilterService.initializeUserFilters(userId);
+        const userFilters = whaleFilterService.getUserFilters(userId);
+        res.json({ success: true, wallets: userFilters });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: 'Failed to load whale watchlist' });
+    }
+});
 // --- HELPER: Start Bot Instance ---
 async function startUserBot(userId, config) {
     const normId = userId.toLowerCase();
@@ -119,6 +148,15 @@ async function startUserBot(userId, config) {
         onPositionsUpdate: async (positions) => {
             await User.updateOne({ address: normId }, { activePositions: positions });
             io.to(normId).emit('POSITIONS_UPDATE', positions);
+        },
+        onLog: (log) => io.to(normId).emit('BOT_LOG', log),
+        onStatsUpdate: async (stats) => {
+            await User.updateOne({ address: normId }, {
+                'stats.portfolioValue': stats.portfolioValue,
+                'stats.cashBalance': stats.cashBalance,
+                'stats.allowanceApproved': stats.allowanceApproved
+            });
+            io.to(normId).emit('STATS_UPDATE', stats);
         },
         onTradeComplete: async (trade) => {
             try {
@@ -162,17 +200,6 @@ async function startUserBot(userId, config) {
                 serverLogger.error(`Failed to save trade for ${normId}: ${err.message}`);
             }
         },
-        onStatsUpdate: async (stats) => {
-            await User.updateOne({ address: normId }, {
-                $set: {
-                    'stats.portfolioValue': stats.portfolioValue,
-                    'stats.cashBalance': stats.cashBalance,
-                    'stats.allowanceApproved': stats.allowanceApproved
-                }
-            });
-            io.to(normId).emit('STATS_UPDATE', stats);
-        },
-        onLog: (log) => io.to(normId).emit('BOT_LOG', log),
         onFeePaid: async (event) => {
             const lister = await Registry.findOne({ address: { $regex: new RegExp(`^${event.listerAddress}$`, "i") } });
             if (lister) {
@@ -181,7 +208,7 @@ async function startUserBot(userId, config) {
                 await lister.save();
             }
         }
-    });
+    }, whaleFilterService);
     // Load bookmarks
     try {
         const user = await User.findOne({ address: normId }).select('bookmarkedMarkets').lean();
@@ -194,6 +221,8 @@ async function startUserBot(userId, config) {
     }
     catch (e) { }
     ACTIVE_BOTS.set(normId, engine);
+    // Initialize user whale filters
+    await whaleFilterService.initializeUserFilters(userId);
     // Listen for whale events from this bot engine
     engine.on('whale_detected', (whaleEvent) => {
         io.emit('WHALE_DETECTED', whaleEvent);
@@ -1223,9 +1252,18 @@ async function bootstrap() {
     }
     // Start global whale poller with all targets
     if (allWhaleTargets.size > 0) {
-        globalWhalePoller.updateTargets(Array.from(allWhaleTargets));
-        await globalWhalePoller.start();
-        serverLogger.success(`🐋 Global whale poller started for ${allWhaleTargets.size} wallets`);
+        try {
+            globalWhalePoller.updateTargets(Array.from(allWhaleTargets));
+            await globalWhalePoller.start();
+            serverLogger.success(`🐋 Global whale poller started for ${allWhaleTargets.size} wallets`);
+        }
+        catch (error) {
+            serverLogger.error(`Failed to start global whale poller: ${error}`);
+            // Continue startup even if whale poller fails
+        }
+    }
+    else {
+        serverLogger.info('No whale targets configured, skipping whale poller startup');
     }
     for (const u of walletGroups.values()) {
         if (!u.activeBotConfig || !u.tradingWallet)

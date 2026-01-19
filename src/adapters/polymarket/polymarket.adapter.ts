@@ -22,6 +22,7 @@ import { TradingWalletConfig, L2ApiCredentials } from '../../domain/wallet.types
 import { User, Trade, MoneyMarketOpportunity, MarketMetadata as DBMarketMetadata } from '../../database/index.js';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { Logger } from '../../utils/logger.util.js';
+import { MARKET_RATE_LIMITER } from '../../utils/rate-limiter.util.js';
 import { TOKENS } from '../../config/env.js';
 import axios from 'axios';
 
@@ -351,7 +352,7 @@ export class PolymarketAdapter implements IExchangeAdapter {
             }
 
             const client = this.client || this.getPublicClient();
-            const market = await client.getMarket(marketId);
+            const market = await MARKET_RATE_LIMITER.add(() => client.getMarket(marketId));
             if (market) {
                 // Seed DB cache if missing
                 await DBMarketMetadata.findOneAndUpdate(
@@ -555,7 +556,7 @@ private getEmptySamplingPayload(): PaginationPayload<Market> {
             } else if (!PolymarketAdapter.isThrottled) {
                 // Active fetch only if not throttled
                 const client = this.client || this.getPublicClient();
-                const marketData = await client.getMarket(conditionId);
+                const marketData = await MARKET_RATE_LIMITER.add(() => client.getMarket(conditionId));
                 if (marketData) {
                     result.marketSlug = marketData.market_slug || '';
                     result.question = marketData.question || '';
@@ -740,10 +741,14 @@ private getEmptySamplingPayload(): PaginationPayload<Market> {
     }
 
     async createOrder(params: OrderParams, retryCount = 0): Promise<OrderResult> {
-        if (!this.client) throw new Error("Client not authenticated");
+        const client = this.client;
+        if (!client) throw new Error("Client not authenticated");
 
         try {
-            const market = await this.client.getMarket(params.marketId);
+            const market = await MARKET_RATE_LIMITER.add(() => client.getMarket(params.marketId));
+            if (!market) {
+                return { success: false, error: "Market not found", sharesFilled: 0, priceFilled: 0 };
+            }
             const tickSize = Number(market.minimum_tick_size) || 0.01;
             const minOrderSize = Number(market.minimum_order_size) || 5;
 
@@ -761,7 +766,7 @@ private getEmptySamplingPayload(): PaginationPayload<Market> {
                 return { success: false, error: "BELOW_MIN_SIZE", sharesFilled: 0, priceFilled: 0 };
             }
 
-            const signedOrder = await this.client.createOrder({
+            const signedOrder = await client.createOrder({
                 tokenID: params.tokenId,
                 price: price,
                 side: side,
@@ -777,7 +782,7 @@ private getEmptySamplingPayload(): PaginationPayload<Market> {
                            params.orderType === 'FAK' ? OrderType.FAK : 
                            OrderType.FOK;
             
-            const res = await this.client.postOrder(signedOrder, orderType);
+            const res = await client.postOrder(signedOrder, orderType);
 
             if (res && res.success && !res.errorMsg) {
                 return { 

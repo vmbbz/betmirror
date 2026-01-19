@@ -149,6 +149,7 @@ const UserSchema = new Schema({
         cashBalance: { type: Number, default: 0 }
     },
     bookmarkedMarkets: { type: [String], default: [] },
+    whalePreferences: { type: [String], default: [] }, // User's whale wallet watchlist
     cashoutHistory: [Schema.Types.Mixed],
     lastActive: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }

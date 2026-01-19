@@ -731,6 +731,17 @@ export class BotEngine {
                 this.startFundWatcher();
                 return; 
             }
+            
+            // Log current balance status
+            const funderAddr = this.exchange?.getFunderAddress();
+            if (funderAddr) {
+                const balance = await this.exchange.fetchBalance(funderAddr);
+                if (balance < 1.0) {
+                    await this.addLog('info', `Bot started with $${balance.toFixed(2)} - monitoring mode (will trade when funded)`);
+                } else {
+                    await this.addLog('success', `Bot funded with $${balance.toFixed(2)} - trading mode active`);
+                }
+            }
 
             await this.proceedWithPostFundingSetup(engineLogger);
 
@@ -824,8 +835,18 @@ export class BotEngine {
             const funderAddr = this.exchange.getFunderAddress();
             if (!funderAddr) return false;
             const balanceUSDC = await this.exchange.fetchBalance(funderAddr);
+            
+            // Allow trading if:
+            // 1. Has active positions (can manage exits), OR
+            // 2. Has minimum balance for new trades ($1.00), OR
+            // 3. Allow zero-balance trading (monitor mode)
             if (this.activePositions.length > 0) return true;
-            return balanceUSDC >= 1.0; 
+            if (balanceUSDC >= 1.0) return true;
+            
+            // NEW: Allow trading with zero balance for monitoring/exit management
+            // This enables the bot to start and monitor markets without requiring initial deposit
+            await this.addLog('info', `Starting with $${balanceUSDC.toFixed(2)} balance - monitoring mode enabled`);
+            return true; // Allow start even with zero balance
         } catch (e) { return false; }
     }
 

@@ -19,9 +19,8 @@ const NEG_RISK_ADAPTER_ADDRESS = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296";
 
 // Gnosis Safe Factories
 const POLYMARKET_SAFE_FACTORY = "0xaacfeea03eb1561c4e67d661e40682bd20e3541b"; 
-const STANDARD_SAFE_FACTORY = "0xa6b71e26c5e0845f74c812102ca7114b6a896ab2"; // Legacy/Standard Gnosis
+const STANDARD_SAFE_FACTORY = "0xa6b71e26c5e0845f74c812102ca7114b6a896ab2";
 
-// Use Polymarket as default for new deployments, but check both
 const SAFE_SINGLETON_ADDRESS = "0x3e5c63644e683549055b9be8653de26e0b4cd36e";
 const FALLBACK_HANDLER_ADDRESS = "0xf48f2b2d2a534e40247ecb36350021948091179d";
 
@@ -39,8 +38,6 @@ const PROXY_FACTORY_ABI = [
     "function createProxyWithNonce(address _singleton, bytes memory initializer, uint256 saltNonce) returns (address proxy)"
 ];
 
-const MAX_UINT256 = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
-
 // ABIs
 const ERC20_ABI = [
     "function approve(address spender, uint256 amount) returns (bool)",
@@ -53,13 +50,109 @@ const ERC1155_ABI = [
     "function isApprovedForAll(address account, address operator) view returns (bool)"
 ];
 
+// --- Rate Limiting & Retry Utilities ---
+class RateLimiter {
+    private queue: Array<() => Promise<any>> = [];
+    private processing = false;
+    private lastRequestTime = 0;
+    private minInterval: number;
+
+    constructor(requestsPerSecond: number = 2) {
+        this.minInterval = 1000 / requestsPerSecond;
+    }
+
+    async execute<T>(fn: () => Promise<T>): Promise<T> {
+        return new Promise((resolve, reject) => {
+            this.queue.push(async () => {
+                try {
+                    const result = await fn();
+                    resolve(result);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+            this.processQueue();
+        });
+    }
+
+    private async processQueue() {
+        if (this.processing || this.queue.length === 0) return;
+        this.processing = true;
+
+        while (this.queue.length > 0) {
+            const now = Date.now();
+            const timeSinceLastRequest = now - this.lastRequestTime;
+            
+            if (timeSinceLastRequest < this.minInterval) {
+                await new Promise(r => setTimeout(r, this.minInterval - timeSinceLastRequest));
+            }
+
+            const fn = this.queue.shift();
+            if (fn) {
+                this.lastRequestTime = Date.now();
+                await fn();
+            }
+        }
+
+        this.processing = false;
+    }
+}
+
+async function withRetry<T>(
+    fn: () => Promise<T>,
+    options: {
+        maxRetries?: number;
+        baseDelay?: number;
+        maxDelay?: number;
+        onRetry?: (error: any, attempt: number) => void;
+    } = {}
+): Promise<T> {
+    const { maxRetries = 5, baseDelay = 1000, maxDelay = 30000, onRetry } = options;
+    
+    let lastError: any;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            const errorMsg = (error.message || '').toLowerCase();
+            
+            // Check if it's a rate limit error
+            const isRateLimited = errorMsg.includes('rate limit') || 
+                                  errorMsg.includes('too many requests') ||
+                                  error.code === -32090;
+            
+            if (attempt === maxRetries || !isRateLimited) {
+                throw error;
+            }
+
+            // Exponential backoff with jitter
+            const delay = Math.min(
+                baseDelay * Math.pow(2, attempt) + Math.random() * 1000,
+                maxDelay
+            );
+            
+            if (onRetry) {
+                onRetry(error, attempt + 1);
+            }
+            
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+    throw lastError;
+}
+
+// Global rate limiter instance (shared across all SafeManager instances)
+const globalRateLimiter = new RateLimiter(2); // 2 requests per second max
+
 export class SafeManagerService {
     private relayClient: RelayClient;
-    private safeAddress: string; // Source of Truth
+    private safeAddress: string;
     private viemPublicClient: any;
+    private rateLimiter: RateLimiter;
 
     constructor(
-        private signer: Wallet, // Ethers V6 Wallet
+        private signer: Wallet,
         private builderApiKey: string | undefined,
         private builderApiSecret: string | undefined,
         private builderApiPassphrase: string | undefined,
@@ -70,6 +163,7 @@ export class SafeManagerService {
             throw new Error("SafeManagerService initialized without a valid Safe Address.");
         }
         this.safeAddress = knownSafeAddress;
+        this.rateLimiter = globalRateLimiter;
         
         this.logger.info(`ℹ️ Active Safe: ${knownSafeAddress}`);
 
@@ -91,19 +185,28 @@ export class SafeManagerService {
             }
         }
 
+        const rpcUrl = process.env.RPC_URL;
+        if (!rpcUrl || rpcUrl.includes('polygon-rpc.com')) {
+            this.logger.warn(`⚠️ Using public RPC. Set RPC_URL env var to a dedicated provider (Alchemy, QuickNode, Infura) for production.`);
+        }
+
         const account = privateKeyToAccount(signer.privateKey as `0x${string}`);
         const viemClient = createWalletClient({
             account,
             chain: polygon,
-            transport: http(process.env.RPC_URL || 'https://polygon-rpc.com')
+            transport: http(rpcUrl || 'https://polygon-rpc.com')
         });
         
+        // Configure viem client with aggressive retry settings
         this.viemPublicClient = createPublicClient({
             chain: polygon,
-            transport: http(process.env.RPC_URL || 'https://polygon-rpc.com', {
-                retryCount: 3,
-                retryDelay: 1000, // Fixed 1s delay between retries
-                timeout: 10000
+            transport: http(rpcUrl || 'https://polygon-rpc.com', {
+                retryCount: 5,
+                retryDelay: 2000,
+                timeout: 30000,
+                batch: {
+                    wait: 100 // Batch requests within 100ms window
+                }
             })
         });
 
@@ -119,24 +222,44 @@ export class SafeManagerService {
         return this.safeAddress;
     }
 
+    /**
+     * Rate-limited RPC call wrapper with exponential backoff retry
+     */
+    private async rpcCall<T>(fn: () => Promise<T>, context: string = 'RPC call'): Promise<T> {
+        return this.rateLimiter.execute(() => 
+            withRetry(fn, {
+                maxRetries: 5,
+                baseDelay: 2000,
+                maxDelay: 30000,
+                onRetry: (error, attempt) => {
+                    this.logger.warn(`   ⏳ ${context} rate limited, retry ${attempt}/5...`);
+                }
+            })
+        );
+    }
+
     public static async computeAddress(ownerAddress: string): Promise<string> {
         const polySafe = await deriveSafe(ownerAddress, POLYMARKET_SAFE_FACTORY);
         const stdSafe = await deriveSafe(ownerAddress, STANDARD_SAFE_FACTORY);
 
         try {
             const network = { chainId: 137, name: 'polygon' };
-            const provider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com', network, { 
+            const rpcUrl = process.env.RPC_URL || 'https://polygon-rpc.com';
+            const provider = new JsonRpcProvider(rpcUrl, network, { 
                 staticNetwork: true,
-                batchMaxCount: 10,
+                batchMaxCount: 1, // Reduce batching to avoid rate limits
                 polling: false,
-                cacheTimeout: 10000
+                cacheTimeout: 30000
             });
             
+            // Add delay between checks
             const stdCode = await provider.getCode(stdSafe);
             if (stdCode && stdCode !== '0x') {
                 console.log(`[SafeManager] Found existing Legacy Safe at ${stdSafe}`);
                 return stdSafe;
             }
+
+            await new Promise(r => setTimeout(r, 500)); // Small delay between calls
 
             const polyCode = await provider.getCode(polySafe);
             if (polyCode && polyCode !== '0x') {
@@ -151,15 +274,14 @@ export class SafeManagerService {
     }
 
     public async isDeployed(): Promise<boolean> {
-        try {
-            const code = await this.signer.provider?.getCode(this.safeAddress);
-            return code !== undefined && code !== '0x';
-        } catch(rpcErr) { 
-             try {
+        return this.rpcCall(async () => {
+            try {
                 const code = await this.viemPublicClient.getBytecode({ address: this.safeAddress });
                 return (code && code !== '0x');
-             } catch(e) { return false; }
-        }
+            } catch(e) { 
+                return false; 
+            }
+        }, 'isDeployed check');
     }
 
     public async deploySafe(): Promise<string> {
@@ -192,16 +314,8 @@ export class SafeManagerService {
         }
     }
 
-    /**
-     * ATOMIC BATCH APPROVAL ENGINE
-     * Bundles all missing USDC allowances and CTF operator permissions into one single multi-send transaction.
-     * This prevents the "Bad Request" (nonce collision) errors from the Polymarket relayer.
-     */
     public async checkAllowance(token: string, spender: string): Promise<bigint> {
-        try {
-            // Add random delay to prevent rate limiting
-            await new Promise(r => setTimeout(r, Math.random() * 200 + 100)); // 0.1-0.3s random delay
-            
+        return this.rpcCall(async () => {
             const allowance = await this.viemPublicClient.readContract({
                 address: token as `0x${string}`,
                 abi: parseAbi(ERC20_ABI),
@@ -209,17 +323,11 @@ export class SafeManagerService {
                 args: [this.safeAddress, spender]
             }) as bigint;
             return allowance;
-        } catch (e) {
-            this.logger.error(`Error checking allowance: ${e}`);
-            return 0n;
-        }
+        }, `checkAllowance(${spender.slice(0,8)})`);
     }
 
     public async checkBalance(token: string): Promise<bigint> {
-        try {
-            // Add random delay to prevent rate limiting
-            await new Promise(r => setTimeout(r, Math.random() * 200 + 100)); // 0.1-0.3s random delay
-            
+        return this.rpcCall(async () => {
             const balance = await this.viemPublicClient.readContract({
                 address: token as `0x${string}`,
                 abi: parseAbi(ERC20_ABI),
@@ -227,20 +335,16 @@ export class SafeManagerService {
                 args: [this.safeAddress]
             }) as bigint;
             return balance;
-        } catch (e) {
-            this.logger.error(`Error checking balance: ${e}`);
-            return 0n;
-        }
+        }, 'checkBalance');
     }
 
     public async setDynamicAllowance(token: string, spender: string, requiredAmount: bigint): Promise<boolean> {
         try {
             const currentAllowance = await this.checkAllowance(token, spender);
             if (currentAllowance >= requiredAmount) {
-                return true; // Already approved enough
+                return true;
             }
 
-            // Get current balance to ensure we don't approve more than we have
             const balance = await this.checkBalance(token);
             const approvalAmount = balance > 0 ? balance * 2n : requiredAmount * 2n;
 
@@ -261,13 +365,17 @@ export class SafeManagerService {
         }
     }
 
+    /**
+     * PRODUCTION-READY APPROVAL ENGINE
+     * Uses rate limiting and retry logic to handle RPC limits gracefully
+     */
     public async enableApprovals(): Promise<void> {
         const usdcInterface = new Interface(ERC20_ABI);
         const ctfInterface = new Interface(ERC1155_ABI);
 
         this.logger.info(`   Synchronizing permissions for ${this.safeAddress.slice(0,8)}...`);
 
-        // FIX: Wait for Safe deployment confirmation indexing before requesting nonce or executing
+        // Wait for Safe deployment confirmation
         let retries = 10;
         while (retries > 0 && !(await this.isDeployed())) {
             this.logger.info(`   Waiting for Safe deployment indexing...`);
@@ -277,7 +385,7 @@ export class SafeManagerService {
 
         const batch: SafeTransaction[] = [];
 
-        // 1. COLLECT USDC APPROVALS
+        // 1. COLLECT USDC APPROVALS (sequentially with rate limiting)
         const usdcSpenders = [
             { addr: CTF_CONTRACT_ADDRESS, name: "CTF" },
             { addr: NEG_RISK_ADAPTER_ADDRESS, name: "NegRiskAdapter" },
@@ -285,29 +393,37 @@ export class SafeManagerService {
             { addr: NEG_RISK_CTF_EXCHANGE_ADDRESS, name: "NegRiskExchange" }
         ];
 
-        // Get current balance to determine reasonable allowance
-        // Using 10,000 USDC as default max allowance (10,000 * 1e6 = 10,000,000,000)
-        const DEFAULT_MAX_ALLOWANCE = 10_000_000_000n; // 10,000 USDC in wei (6 decimals)
-        const currentBalance = await this.checkBalance(TOKENS.USDC_BRIDGED);
+        const DEFAULT_MAX_ALLOWANCE = 10_000_000_000n; // 10,000 USDC
         
-        // If balance is 0, use default max allowance, otherwise use 2x current balance
+        // Get balance first (rate limited)
+        let currentBalance = 0n;
+        try {
+            currentBalance = await this.checkBalance(TOKENS.USDC_BRIDGED);
+        } catch (e) {
+            this.logger.warn(`   Could not fetch balance, using default allowance`);
+        }
+        
         const minAllowance = currentBalance > 0n 
             ? currentBalance * 2n 
             : DEFAULT_MAX_ALLOWANCE;
 
-        // Add delay between allowance checks to prevent rate limiting
-        for (let i = 0; i < usdcSpenders.length; i++) {
-            const spender = usdcSpenders[i];
-            
-            // Add delay between checks (except first one)
-            if (i > 0) {
-                await new Promise(r => setTimeout(r, 1000)); // 1s delay
-            }
-            
-            const allowance = await this.checkAllowance(TOKENS.USDC_BRIDGED, spender.addr);
-
-            if (allowance < minAllowance) {
-                this.logger.info(`     + Batching USDC approval for ${spender.name} (${ethers.formatUnits(minAllowance, 6)} USDC)`);
+        // Check allowances sequentially (rate limiter handles timing)
+        for (const spender of usdcSpenders) {
+            try {
+                const allowance = await this.checkAllowance(TOKENS.USDC_BRIDGED, spender.addr);
+                
+                if (allowance < minAllowance) {
+                    this.logger.info(`     + Batching USDC approval for ${spender.name}`);
+                    batch.push({ 
+                        to: TOKENS.USDC_BRIDGED as `0x${string}`, 
+                        value: "0", 
+                        data: usdcInterface.encodeFunctionData("approve", [spender.addr, minAllowance]) as `0x${string}`, 
+                        operation: OperationType.Call 
+                    });
+                }
+            } catch (e) {
+                // If we can't check, add to batch anyway (safe to re-approve)
+                this.logger.warn(`     ⚠️ Could not check ${spender.name} allowance, adding to batch`);
                 batch.push({ 
                     to: TOKENS.USDC_BRIDGED as `0x${string}`, 
                     value: "0", 
@@ -317,31 +433,36 @@ export class SafeManagerService {
             }
         }
 
-        // 2. COLLECT CTF OPERATOR PERMISSIONS
+        // 2. COLLECT CTF OPERATOR PERMISSIONS (sequentially with rate limiting)
         const ctfOperators = [
             { addr: CTF_EXCHANGE_ADDRESS, name: "CTFExchange" },
             { addr: NEG_RISK_CTF_EXCHANGE_ADDRESS, name: "NegRiskExchange" },
             { addr: NEG_RISK_ADAPTER_ADDRESS, name: "NegRiskAdapter" }
         ];
 
-        // Add delay between CTF operator checks to prevent rate limiting
-        for (let i = 0; i < ctfOperators.length; i++) {
-            const operator = ctfOperators[i];
-            
-            // Add delay between checks (except first one)
-            if (i > 0) {
-                await new Promise(r => setTimeout(r, 800)); // 0.8s delay
-            }
-            
-            const isApproved = await this.viemPublicClient.readContract({
-                address: CTF_CONTRACT_ADDRESS,
-                abi: parseAbi(ERC1155_ABI),
-                functionName: 'isApprovedForAll',
-                args: [this.safeAddress, operator.addr]
-            }) as boolean;
+        for (const operator of ctfOperators) {
+            try {
+                const isApproved = await this.rpcCall(async () => {
+                    return await this.viemPublicClient.readContract({
+                        address: CTF_CONTRACT_ADDRESS,
+                        abi: parseAbi(ERC1155_ABI),
+                        functionName: 'isApprovedForAll',
+                        args: [this.safeAddress, operator.addr]
+                    }) as boolean;
+                }, `isApprovedForAll(${operator.name})`);
 
-            if (!isApproved) {
-                this.logger.info(`     + Batching Operator set for ${operator.name}`);
+                if (!isApproved) {
+                    this.logger.info(`     + Batching Operator set for ${operator.name}`);
+                    batch.push({ 
+                        to: CTF_CONTRACT_ADDRESS as `0x${string}`, 
+                        value: "0", 
+                        data: ctfInterface.encodeFunctionData("setApprovalForAll", [operator.addr, true]) as `0x${string}`, 
+                        operation: OperationType.Call 
+                    });
+                }
+            } catch (e) {
+                // If we can't check, add to batch anyway
+                this.logger.warn(`     ⚠️ Could not check ${operator.name} approval, adding to batch`);
                 batch.push({ 
                     to: CTF_CONTRACT_ADDRESS as `0x${string}`, 
                     value: "0", 
@@ -377,24 +498,22 @@ export class SafeManagerService {
             operation: OperationType.Call 
         };
         
-        try {
-            const task = await this.relayClient.execute([tx]);
-            const result = await task.wait();
-            return (result as any).transactionHash || "0x...";
-        } catch (e: any) {
-            throw e;
-        }
+        const task = await this.relayClient.execute([tx]);
+        const result = await task.wait();
+        return (result as any).transactionHash || "0x...";
     }
 
     public async addOwner(newOwnerAddress: string): Promise<string> {
         this.logger.info(`🛡️ Adding Recovery Owner: ${newOwnerAddress} to Safe ${this.safeAddress}`);
 
-        const isOwner = await this.viemPublicClient.readContract({
-            address: this.safeAddress as `0x${string}`,
-            abi: parseAbi(SAFE_ABI),
-            functionName: 'isOwner',
-            args: [newOwnerAddress]
-        }) as boolean;
+        const isOwner = await this.rpcCall(async () => {
+            return await this.viemPublicClient.readContract({
+                address: this.safeAddress as `0x${string}`,
+                abi: parseAbi(SAFE_ABI),
+                functionName: 'isOwner',
+                args: [newOwnerAddress]
+            }) as boolean;
+        }, 'isOwner check');
 
         if (isOwner) {
             this.logger.info("   Address is already an owner.");
@@ -424,7 +543,7 @@ export class SafeManagerService {
         if (!this.signer.provider) throw new Error("No provider for deployment");
 
         const gasBal = await this.signer.provider.getBalance(this.signer.address);
-        if (gasBal < 100000000000000000n) { // 0.1 POL
+        if (gasBal < 100000000000000000n) {
             throw new Error("Insufficient POL (Matic) in Signer wallet to deploy Safe. Please send ~0.2 POL to " + this.signer.address);
         }
 
@@ -463,11 +582,6 @@ export class SafeManagerService {
         return await this.executeOnChain(to, amountInWei, "0x");
     }
 
-    /**
-     * Executes a transaction on-chain via the Safe.
-     * FIX FOR EMPTY DATA: Uses safeInterface.encodeFunctionData to manually construct
-     * the call to execTransaction, ensuring 'data' is never empty in the transaction object.
-     */
     private async executeOnChain(to: string, value: bigint | number | string, data: string): Promise<string> {
         const safeAddr = this.safeAddress;
         this.logger.warn(`🚨 RESCUE MODE: Executing direct on-chain transaction from ${safeAddr}...`);
@@ -481,22 +595,14 @@ export class SafeManagerService {
         const safeContract = new Contract(safeAddr, SAFE_ABI, this.signer);
         const nonce = await safeContract.nonce();
 
-        // 1. Get the hash to sign (EIP-712 hash)
         const txHash = await safeContract.getTransactionHash(
             to, value, data, 0, 0, 0, 0,
             ZERO_ADDRESS, ZERO_ADDRESS, nonce
         );
 
-        // 2. Sign the RAW hash (unprefixed)
         const signingKey = new ethers.SigningKey(this.signer.privateKey);
         const rawSig = signingKey.sign(txHash);
 
-        /**
-         * 3. Format signature for Gnosis Safe (r + s + v)
-         * ADJUST V: We use standard v (27/28).
-         * Note: If GS026 persist, consider v + 4 (31/32) which is a Gnosis-specific 
-         * flag for EOA signatures on EIP-712 hashes.
-         */
         const vValue = rawSig.v >= 27 ? rawSig.v : rawSig.v + 27;
         const signature = ethers.concat([
             rawSig.r,
@@ -504,20 +610,17 @@ export class SafeManagerService {
             ethers.toBeHex(vValue, 1)
         ]);
 
-        // 4. EXPLICITLY ENCODE execTransaction CALL DATA
-        // This ensures the 'data' field of the Ethers transaction is not empty.
         const execData = safeInterface.encodeFunctionData("execTransaction", [
             to, value, data, 0, 0, 0, 0, ZERO_ADDRESS, ZERO_ADDRESS, signature
         ]);
 
-        // 5. Execute with manual gas parameters to bypass automated eth_estimateGas
         const feeData = await this.signer.provider.getFeeData();
         
         this.logger.info(`   🚀 Sending Rescue Transaction (Manual Data Encoding)...`);
         const tx = await this.signer.sendTransaction({
             to: safeAddr,
             data: execData,
-            gasLimit: 600000, // Higher limit for Safe exec
+            gasLimit: 600000,
             gasPrice: feeData.gasPrice 
         });
         
@@ -527,42 +630,32 @@ export class SafeManagerService {
     }
 
     public async checkOutcomeTokenApproval(safeAddress: string, operatorAddress: string): Promise<boolean> {
-        try {
+        return this.rpcCall(async () => {
             const isApproved = await this.viemPublicClient.readContract({
                 address: CTF_CONTRACT_ADDRESS,
                 abi: parseAbi(ERC1155_ABI),
                 functionName: 'isApprovedForAll',
                 args: [safeAddress as `0x${string}`, operatorAddress as `0x${string}`]
             }) as boolean;
-            
             return isApproved;
-        } catch (e: any) {
-            this.logger.error(`Failed to check outcome token approval: ${e.message}`);
-            return false;
-        }
+        }, 'checkOutcomeTokenApproval');
     }
 
     public async approveOutcomeTokens(operatorAddress: string, isNegRisk: boolean): Promise<void> {
-        try {
-            const ctfInterface = new Interface(ERC1155_ABI);
-            
-            const data = ctfInterface.encodeFunctionData("setApprovalForAll", [operatorAddress, true]);
-            
-            const tx: SafeTransaction = { 
-                to: CTF_CONTRACT_ADDRESS as `0x${string}`, 
-                value: "0", 
-                data: data as `0x${string}`, 
-                operation: OperationType.Call 
-            };
-            
-            const task = await this.relayClient.execute([tx]);
-            await task.wait();
-            
-            this.logger.success(`   ✅ Approved ${isNegRisk ? 'Neg Risk' : 'CTF'} Exchange for outcome tokens`);
-        } catch (e: any) {
-            this.logger.error(`Failed to approve outcome tokens: ${e.message}`);
-            throw e;
-        }
+        const ctfInterface = new Interface(ERC1155_ABI);
+        const data = ctfInterface.encodeFunctionData("setApprovalForAll", [operatorAddress, true]);
+        
+        const tx: SafeTransaction = { 
+            to: CTF_CONTRACT_ADDRESS as `0x${string}`, 
+            value: "0", 
+            data: data as `0x${string}`, 
+            operation: OperationType.Call 
+        };
+        
+        const task = await this.relayClient.execute([tx]);
+        await task.wait();
+        
+        this.logger.success(`   ✅ Approved ${isNegRisk ? 'Neg Risk' : 'CTF'} Exchange for outcome tokens`);
     }
 
     public async executeTransaction(tx: { to: string; data: string; value: string }): Promise<string> {
@@ -573,12 +666,8 @@ export class SafeManagerService {
             operation: OperationType.Call 
         };
         
-        try {
-            const task = await this.relayClient.execute([safeTx]);
-            const result = await task.wait();
-            return (result as any).transactionHash || "0x...";
-        } catch (e: any) {
-            throw e;
-        }
+        const task = await this.relayClient.execute([safeTx]);
+        const result = await task.wait();
+        return (result as any).transactionHash || "0x...";
     }
 }

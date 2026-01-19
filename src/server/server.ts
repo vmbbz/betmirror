@@ -60,7 +60,8 @@ async function startUserBot(userId: string, config: BotConfig) {
     const normId = userId.toLowerCase();
     
     // Add random delay to prevent RPC rate limiting when starting bots
-    const randomDelay = Math.random() * 2000 + 1000; // 1-3s random delay
+    // This works with the SafeManager's global rate limiter (2 req/s)
+    const randomDelay = Math.random() * 3000 + 2000; // 2-5s random delay
     console.log(`⏳ ${normId}: Waiting ${Math.round(randomDelay / 1000)}s before initialization to avoid RPC rate limits...`);
     await new Promise(r => setTimeout(r, randomDelay));
     
@@ -1166,10 +1167,12 @@ async function restoreBots() {
         for (let i = 0; i < activeUsers.length; i++) {
             const user = activeUsers[i];
             
-            // Add delay between bot initializations to prevent RPC rate limiting
+            // Add progressive delay between bot initializations to prevent RPC rate limiting
+            // This gives the global rate limiter time to reset between bot startups
             if (i > 0) {
-                console.log(`⏳ Waiting ${3 + i * 2}s before starting next bot to avoid RPC rate limits...`);
-                await new Promise(r => setTimeout(r, 3000 + (i * 2000))); // Progressive delay: 3s, 5s, 7s...
+                const delaySeconds = 8 + (i * 3); // 8s, 11s, 14s...
+                console.log(`⏳ Waiting ${delaySeconds}s before starting bot ${i+1}/${activeUsers.length} to avoid RPC rate limits...`);
+                await new Promise(r => setTimeout(r, delaySeconds * 1000));
             }
             if (user.activeBotConfig && user.tradingWallet) {
                  const normId = user.address.toLowerCase();

@@ -10,31 +10,6 @@ import { DatabaseEncryptionService } from '../services/database-encryption.servi
 // Initialize the encryption service immediately with the environment key
 DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
 
-// --- NEW: Flash Move Schema for Global Intelligence ---
-export interface IFlashMove extends Document {
-    tokenId: string;
-    conditionId: string;
-    oldPrice: number;
-    newPrice: number;
-    velocity: number;
-    timestamp: Date;
-    question?: string;
-    image?: string;
-    marketSlug?: string;
-}
-
-const FlashMoveSchema = new Schema<IFlashMove>({
-    tokenId: { type: String, required: true, index: true },
-    conditionId: String,
-    oldPrice: Number,
-    newPrice: Number,
-    velocity: Number,
-    timestamp: { type: Date, default: Date.now, index: true },
-    question: String,
-    image: String,
-    marketSlug: String
-});
-
 export interface IUser extends Document {
   address: string;
   tradingWallet?: TradingWalletConfig; 
@@ -44,7 +19,6 @@ export interface IUser extends Document {
   stats: UserStats;
   cashoutHistory: any[];
   bookmarkedMarkets: string[];
-  whalePreferences?: string[]; // User's whale wallet watchlist
   createdAt: Date;
   lastActive: Date;
 }
@@ -68,8 +42,6 @@ export interface ITrade extends Document {
   timestamp: Date;
   marketSlug?: string;
   eventSlug?: string;
-  // Added serviceOrigin to support origin tracking for trades
-  serviceOrigin?: string;
 }
 
 export interface IRegistry extends Document, TraderProfile {
@@ -134,79 +106,6 @@ export interface IMoneyMarketOpportunity extends Document {
   capacityUsd: number;
 }
 
-export interface IMarketMetadata extends Document {
-    conditionId: string;
-    question: string;
-    image: string;
-    marketSlug: string;
-    eventSlug: string;
-    acceptingOrders: boolean;
-    closed: boolean;
-    rewards: {
-        max_spread: number;
-        min_size: number;
-        rates: any;
-    };
-    tags: any[];
-    minimum_order_size: number;
-    minimum_tick_size: number;
-    lastPrice?: number;
-    volume24h?: number;
-    liquidity?: number;
-    updatedAt: Date;
-    createdAt: Date;
-}
-
-/**
- * Sports Mapping Persistence
- */
-export interface ISportsMatch extends Document {
-    matchId: string;
-    conditionId: string;
-    homeTeam: string;
-    awayTeam: string;
-    league: string;
-    lastScore: [number, number];
-    lastMinute: number;
-    status: string;
-    updatedAt: Date;
-}
-
-const MarketMetadataSchema = new Schema({
-    conditionId: { type: String, required: true, unique: true, index: true },
-    question: { type: String, required: true },
-    image: String,
-    marketSlug: String,
-    eventSlug: String,
-    acceptingOrders: { type: Boolean, default: true },
-    closed: { type: Boolean, default: false },
-    rewards: {
-        max_spread: { type: Number, default: 15 },
-        min_size: { type: Number, default: 10 },
-        rates: Schema.Types.Mixed
-    },
-    tags: [Schema.Types.Mixed],
-    minimum_order_size: { type: Number, default: 5 },
-    minimum_tick_size: { type: Number, default: 0.01 },
-    lastPrice: Number,
-    volume24h: Number,
-    liquidity: Number,
-    updatedAt: { type: Date, default: Date.now },
-    createdAt: { type: Date, default: Date.now }
-});
-
-const SportsMatchSchema = new Schema({
-    matchId: { type: String, required: true, unique: true },
-    conditionId: { type: String, required: true, index: true },
-    homeTeam: String,
-    awayTeam: String,
-    league: String,
-    lastScore: { type: [Number], default: [0, 0] },
-    lastMinute: { type: Number, default: 0 },
-    status: String,
-    updatedAt: { type: Date, default: Date.now }
-});
-
 const MoneyMarketOpportunitySchema = new Schema({
   marketId: { type: String, required: true, index: true },
   tokenId: { type: String, required: true, unique: true },
@@ -230,7 +129,6 @@ const ActivePositionSchema = new Schema<ActivePosition>({
   tradeId: String,
   clobOrderId: String,
   marketId: String,
-  conditionId: String,
   tokenId: String,
   outcome: String,
   entryPrice: Number,
@@ -314,7 +212,6 @@ const UserSchema = new Schema<IUser>({
     cashBalance: { type: Number, default: 0 }
   },
   bookmarkedMarkets: { type: [String], default: [] },
-  whalePreferences: { type: [String], default: [] }, // User's whale wallet watchlist
   cashoutHistory: [Schema.Types.Mixed],
   lastActive: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now }
@@ -356,9 +253,7 @@ const TradeSchema = new Schema<ITrade>({
         },
         message: 'eventSlug must be lowercase with hyphens only'
     }
-},
-  // Added serviceOrigin to the schema for DB persistence
-  serviceOrigin: { type: String, index: true }
+}
 });
 
 const RegistrySchema = new Schema<IRegistry>({
@@ -425,10 +320,7 @@ export { CopiedTrade, HunterEarning, WalletAnalytics } from './trade-tracking.sc
 export const BridgeTransaction = mongoose.model<IBridgeTransaction>('BridgeTransaction', BridgeTransactionSchema);
 export const DepositLog = mongoose.model<IDepositLog>('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model<IBotLog>('BotLog', BotLogSchema);
-export const FlashMove = mongoose.model<IFlashMove>('FlashMove', FlashMoveSchema);
 export const MoneyMarketOpportunity = mongoose.model<IMoneyMarketOpportunity>('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
-export const MarketMetadata = mongoose.model<IMarketMetadata>('MarketMetadata', MarketMetadataSchema);
-export const SportsMatch = mongoose.model<ISportsMatch>('SportsMatch', SportsMatchSchema);
 
 // --- Connection ---
 

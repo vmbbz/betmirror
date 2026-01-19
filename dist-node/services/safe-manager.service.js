@@ -101,13 +101,7 @@ export class SafeManagerService {
         const polySafe = await deriveSafe(ownerAddress, POLYMARKET_SAFE_FACTORY);
         const stdSafe = await deriveSafe(ownerAddress, STANDARD_SAFE_FACTORY);
         try {
-            const network = { chainId: 137, name: 'polygon' };
-            const provider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com', network, {
-                staticNetwork: true,
-                batchMaxCount: 10,
-                polling: false,
-                cacheTimeout: 10000
-            });
+            const provider = new JsonRpcProvider(process.env.RPC_URL || 'https://polygon-rpc.com');
             const stdCode = await provider.getCode(stdSafe);
             if (stdCode && stdCode !== '0x') {
                 console.log(`[SafeManager] Found existing Legacy Safe at ${stdSafe}`);
@@ -245,13 +239,8 @@ export class SafeManagerService {
             { addr: NEG_RISK_CTF_EXCHANGE_ADDRESS, name: "NegRiskExchange" }
         ];
         // Get current balance to determine reasonable allowance
-        // Using 10,000 USDC as default max allowance (10,000 * 1e6 = 10,000,000,000)
-        const DEFAULT_MAX_ALLOWANCE = 10000000000n; // 10,000 USDC in wei (6 decimals)
         const currentBalance = await this.checkBalance(TOKENS.USDC_BRIDGED);
-        // If balance is 0, use default max allowance, otherwise use 2x current balance
-        const minAllowance = currentBalance > 0n
-            ? currentBalance * 2n
-            : DEFAULT_MAX_ALLOWANCE;
+        const minAllowance = currentBalance > 0n ? currentBalance * 2n : 1000000n; // 1 USDC minimum if balance is 0
         for (const spender of usdcSpenders) {
             const allowance = await this.checkAllowance(TOKENS.USDC_BRIDGED, spender.addr);
             if (allowance < minAllowance) {

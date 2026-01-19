@@ -7,34 +7,15 @@ export class PositionMonitorService {
     positionMonitors = new Map();
     priceCheckers = new Map();
     activePositions = new Map();
-    orderBookValidationInterval;
-    onPositionInvalid;
-    constructor(adapter, walletAddress, config, logger, onAutoCashout, onPositionInvalid) {
+    constructor(adapter, walletAddress, config, logger, onAutoCashout) {
         this.adapter = adapter;
         this.walletAddress = walletAddress;
         this.config = config;
         this.logger = logger;
         this.onAutoCashout = onAutoCashout;
-        this.onPositionInvalid = onPositionInvalid;
-        // Start order book validation if interval is configured
-        if (this.config.orderBookValidationInterval) {
-            this.startOrderBookValidation();
-        }
     }
     async startMonitoring(position) {
         this.stopMonitoring(position.marketId);
-        // First verify the order book exists
-        try {
-            const orderBookExists = await this.validateOrderBookExists(position.tokenId);
-            if (!orderBookExists) {
-                throw new Error(`No order book exists for token ${position.tokenId}`);
-            }
-        }
-        catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Failed to verify order book';
-            this.logger.error(`[Monitor] Cannot monitor position ${position.marketId}: ${errorMessage}`);
-            throw new Error(`Cannot monitor position: ${errorMessage}`);
-        }
         // Store the position
         this.activePositions.set(position.marketId, position);
         // Start position value monitoring
@@ -79,13 +60,6 @@ export class PositionMonitorService {
                 this.logger.info(`[Monitor] Position closed: ${position.marketId}`);
                 this.stopMonitoring(position.marketId);
                 return;
-            }
-            // LIQUIDITY HEALTH CHECK
-            if (updatedPosition.managedByMM) {
-                const metrics = await this.adapter.getLiquidityMetrics?.(updatedPosition.tokenId, 'SELL');
-                if (metrics && metrics.health === 'CRITICAL') {
-                    this.logger.warn(`[Monitor] Liquidity for MM position ${position.marketId} is CRITICAL. System oversight active.`);
-                }
             }
             // Update position data
             this.activePositions.set(position.marketId, {
@@ -140,75 +114,5 @@ export class PositionMonitorService {
     }
     getActivePositions() {
         return Array.from(this.activePositions.values());
-    }
-    async validateOrderBookExists(tokenId) {
-        try {
-            // Just try to get the order book - we don't need the actual data
-            await this.adapter.getOrderBook(tokenId);
-            return true;
-        }
-        catch (error) {
-            // Check if this is a 404 error for missing order book
-            if (error.response?.status === 404 ||
-                error.message?.includes('No orderbook exists') ||
-                error.message?.includes('404')) {
-                return false;
-            }
-            // For other errors, assume the order book exists but there was a different issue
-            return true;
-        }
-    }
-    async cleanupInvalidPositions() {
-        const positionsToRemove = [];
-        // Check each active position
-        for (const [marketId, position] of this.activePositions.entries()) {
-            try {
-                const orderBookExists = await this.validateOrderBookExists(position.tokenId);
-                if (!orderBookExists) {
-                    this.logger.warn(`[Monitor] Order book not found for position: ${marketId}, cleaning up...`);
-                    positionsToRemove.push(marketId);
-                }
-            }
-            catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                this.logger.error(`[Monitor] Error validating order book for ${marketId}: ${errorMessage}`);
-            }
-        }
-        // Clean up invalid positions
-        for (const marketId of positionsToRemove) {
-            await this.handleInvalidPosition(marketId, 'Order book no longer exists');
-        }
-    }
-    async handleInvalidPosition(marketId, reason) {
-        const position = this.activePositions.get(marketId);
-        if (!position)
-            return;
-        // Notify about the invalid position
-        if (this.onPositionInvalid) {
-            await this.onPositionInvalid(marketId, reason).catch(err => {
-                this.logger.error(`[Monitor] Error in onPositionInvalid callback: ${err.message}`);
-            });
-        }
-        // Stop monitoring and clean up
-        this.stopMonitoring(marketId);
-        this.activePositions.delete(marketId);
-        this.logger.info(`[Monitor] Removed invalid position: ${marketId} - ${reason}`);
-    }
-    startOrderBookValidation() {
-        if (this.orderBookValidationInterval) {
-            clearInterval(this.orderBookValidationInterval);
-        }
-        // Default to 1 hour if not specified
-        const interval = this.config.orderBookValidationInterval || 60 * 60 * 1000;
-        this.orderBookValidationInterval = setInterval(async () => {
-            try {
-                await this.cleanupInvalidPositions();
-            }
-            catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-                this.logger.error(`[Monitor] Error during order book validation: ${errorMessage}`);
-            }
-        }, interval);
-        this.logger.info(`[Monitor] Started order book validation with ${interval / 1000}s interval`);
     }
 }

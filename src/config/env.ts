@@ -190,11 +190,11 @@ export function loadEnv(): RuntimeEnv {
     // Li.Fi
     lifiIntegrator: process.env.LIFI_INTEGRATOR || 'BetMirror',
     lifiApiKey: process.env.LIFI_API_KEY,
-    solanaRpcUrl: process.env.SOLANA_RPC_URL || 'myQuicknodeRPCurl',
+    solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://little-thrilling-layer.solana-mainnet.quiknode.pro/378fe82ae3cb5d38e4ac79c202990ad508e1c4c6',
 
     // Database
     mongoUri: process.env.MONGODB_URI || defaultMongoUri,
-    mongoEncryptionKey: process.env.MONGO_ENCRYPTION_KEY || 'myencryptionKey'
+    mongoEncryptionKey: process.env.MONGO_ENCRYPTION_KEY || 'MmExQl8lTwgxA40wxbL5k5m+UCPb/0YvO5CDjypmiT0='
   };
 
   return env;

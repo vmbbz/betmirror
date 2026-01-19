@@ -1,6 +1,5 @@
-import { Wallet, Contract, parseEther, parseUnits } from 'ethers';
+import { Wallet, JsonRpcProvider, Contract, parseEther, parseUnits } from 'ethers';
 import { Wallet as WalletV5, providers as providersV5 } from 'ethers-v5';
-import { ProviderFactory } from './provider-factory.service.js';
 import { DatabaseEncryptionService } from './database-encryption.service.js';
 // Basic standard ABI for ERC20
 const USDC_ABI = [
@@ -12,11 +11,11 @@ const USDC_ABI = [
  * Includes Shim for Ethers v6 compatibility with Polymarket SDK (v5).
  */
 export class EvmWalletService {
-    provider = null;
+    provider;
     rpcUrl;
     constructor(rpcUrl, encryptionKey) {
         this.rpcUrl = rpcUrl;
-        // Note: Provider will be initialized lazily when needed
+        this.provider = new JsonRpcProvider(rpcUrl);
         // Ensure centralized encryption service is initialized
         if (!DatabaseEncryptionService.validateEncryptionKey()) {
             DatabaseEncryptionService.init(encryptionKey);
@@ -41,9 +40,6 @@ export class EvmWalletService {
      */
     async getWalletInstance(encryptedPrivateKey) {
         const privateKey = DatabaseEncryptionService.decrypt(encryptedPrivateKey);
-        if (!this.provider) {
-            this.provider = await ProviderFactory.getSharedProvider(this.rpcUrl);
-        }
         const wallet = new Wallet(privateKey, this.provider);
         // --- COMPATIBILITY SHIM START (Legacy Support) ---
         if (typeof wallet._signTypedData === 'undefined' && typeof wallet.signTypedData === 'function') {
@@ -74,12 +70,9 @@ export class EvmWalletService {
         const isNative = tokenAddress === '0x0000000000000000000000000000000000000000';
         if (isNative) {
             // Native Withdrawal (POL)
-            if (!wallet.provider) {
-                throw new Error("Wallet provider is not initialized");
-            }
-            const balance = await wallet.provider.getBalance(wallet.address);
+            const balance = await this.provider.getBalance(wallet.address);
             // Ethers v6 FeeData
-            const feeData = await wallet.provider.getFeeData();
+            const feeData = await this.provider.getFeeData();
             // Fallback to 30 gwei if null
             const gasPrice = feeData.gasPrice ?? 30000000000n;
             const gasLimit = 21000n;

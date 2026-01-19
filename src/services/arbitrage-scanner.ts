@@ -1,11 +1,11 @@
 import { IExchangeAdapter } from '../adapters/interfaces.js';
 import { Logger } from '../utils/logger.util.js';
 import { WS_URLS } from '../config/env.js';
-import { MoneyMarketOpportunity, MarketMetadata as DBMarketMetadata } from '../database/index.js';
-import { MarketMetadataService } from './market-metadata.service.js';
+import { MoneyMarketOpportunity } from '../database/index.js';
 import EventEmitter from 'events';
-// FIX: Use named import for WebSocket to ensure it is constructable as a class in ESM environment
-import { WebSocket } from 'ws';
+// Use default import for WebSocket
+import WebSocket from 'ws';
+import type RawData from 'ws';
 
 // Rate limiter utility
 class RateLimiter {
@@ -81,8 +81,6 @@ interface TrackedMarket {
     marketSlug?: string;
     bestBid: number;
     bestAsk: number;
-    bestBidSize: number;  // Order size at best bid
-    bestAskSize: number;  // Order size at best ask
     spread: number;
     volume: number;
     liquidity: number;
@@ -140,6 +138,7 @@ interface TickSizeInfo {
 // ============================================================
 
 export class MarketMakingScanner extends EventEmitter {
+    // Core state
     private isScanning = false;
     private isConnected = false;
     private ws?: WebSocket;
@@ -149,16 +148,13 @@ export class MarketMakingScanner extends EventEmitter {
     private opportunities: MarketOpportunity[] = [];
     private pingInterval?: NodeJS.Timeout;
     private refreshInterval?: NodeJS.Timeout;
-    private heartbeatInterval?: NodeJS.Timeout;
     private reconnectAttempts = 0;
     private reconnectTimeout?: NodeJS.Timeout;
     private readonly maxReconnectAttempts = 10;
     private readonly maxReconnectDelay = 30000;
     private rateLimiter = new RateLimiter(1500); // 1.5 seconds between requests
-    private externalWsManager?: any; // Store external WebSocket manager
 
     // Risk management state
-    private readonly MAX_TRACKED_MARKETS = 1000;
     private lastMidpoints: Map<string, number> = new Map();
     private inventoryBalances: Map<string, InventoryBalance> = new Map();
     private tickSizes: Map<string, TickSizeInfo> = new Map();
@@ -167,16 +163,25 @@ export class MarketMakingScanner extends EventEmitter {
     private bookmarkedMarkets: Set<string> = new Set(); 
     private activeQuoteTokens: Set<string> = new Set();
 
+    /**
+     * Initialize bookmarks from storage
+     * @param bookmarks Array of market IDs to bookmark
+     */
+    public initializeBookmarks(bookmarks: string[]): void {
+        this.bookmarkedMarkets = new Set(bookmarks);
+        this.logger.info(`Initialized ${this.bookmarkedMarkets.size} bookmarked markets`);
+    }
+
     // Default config (EXTENDED)
     private config: MarketMakerConfig = {
         minSpreadCents: 1, 
         maxSpreadCents: 15,
         minVolume: 5000,
-        minLiquidity: 10000, // $10k minimum for safe money market arbitrage - prevents liquidity risks in smaller markets
+        minLiquidity: 1000,
         preferRewardMarkets: true,
         preferNewMarkets: true,
         newMarketAgeMinutes: 60,
-        refreshIntervalMs: 300000,
+        refreshIntervalMs: 5 * 60 * 1000,
         // Risk defaults
         priceMoveThresholdPct: 5,
         maxInventoryPerToken: 500,
@@ -187,55 +192,10 @@ export class MarketMakingScanner extends EventEmitter {
     constructor(
         private adapter: IExchangeAdapter,
         private logger: Logger,
-        private metadataService: MarketMetadataService,
         config?: Partial<MarketMakerConfig>
     ) {
         super();
         if (config) this.config = { ...this.config, ...config };
-    }
-
-    /**
-     * Public getter for scanning status
-     */
-    public getIsScanning(): boolean {
-        return this.isScanning;
-    }
-
-    /**
-     * Set external WebSocket manager to prevent multiple connections
-     */
-    public setWebSocketManager(wsManager: any): void {
-        // Remove existing WebSocket if any
-        if (this.ws) {
-            const wsAny = this.ws as any;
-            wsAny.removeAllListeners();
-            if (this.ws.readyState === 1) {
-                wsAny.terminate();
-            }
-            this.ws = undefined;
-        }
-        
-        // Store and use the provided WebSocket manager
-        this.externalWsManager = wsManager;
-        this.logger.info('🔌 Using global WebSocket manager for market data');
-    }
-
-    /**
-     * Override connect method to use external WebSocket manager
-     */
-    private connect() {
-        if (!this.isScanning) return;
-        if (!this.externalWsManager) {
-            this.logger.warn('⚠️ No external WebSocket manager provided');
-            return;
-        }
-
-        // Use external WebSocket manager instead of creating own
-        this.logger.info('🔌 Using external WebSocket manager for market data');
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        this.subscribeToAllTrackedTokens();
-        this.startPing();
     }
 
     async start() {
@@ -261,12 +221,6 @@ export class MarketMakingScanner extends EventEmitter {
             this.connect();
             this.connectUserChannel(); // NEW: Hook into private fill feed
             
-            // Heartbeat for MM Ticking visibility (Ensures logs prove engine is alive)
-            this.heartbeatInterval = setInterval(() => {
-                const activeOpps = this.getOpportunities().length;
-                this.logger.info(`[MM HEARTBEAT] Tracking ${this.trackedMarkets.size} tokens | Active Opps: ${activeOpps} | Status: ${this.killSwitchActive ? 'KILLED' : 'ACTIVE'}`);
-            }, 60000);
-
             this.refreshInterval = setInterval(async () => {
                 try {
                     this.logger.info('🔄 Refreshing markets...');
@@ -339,7 +293,7 @@ export class MarketMakingScanner extends EventEmitter {
             
             // Store ALL tags by their slug - catches everything dynamically
             for (const tag of tags) {
-                const slug = (tag.slug || tag.label || '').toLowerCase();
+                const slug = (tag.slug || '').toLowerCase();
                 const id = parseInt(tag.id);
                 
                 if (slug && id && !isNaN(id)) {
@@ -366,8 +320,8 @@ export class MarketMakingScanner extends EventEmitter {
             let samplingTokens = new Set<string>();
             try {
                 const sampling = await this.adapter.getSamplingMarkets?.();
-                if (sampling && Array.isArray(sampling.data)) {
-                    sampling.data.forEach(m => samplingTokens.add(m.condition_id));
+                if (sampling && Array.isArray(sampling)) {
+                    sampling.forEach(m => samplingTokens.add(m.token_id));
                     this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools.`);
                 }
             } catch (e) {}
@@ -423,7 +377,7 @@ export class MarketMakingScanner extends EventEmitter {
 
             this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new)`);
 
-            if (newTokenIds.length > 0 && this.externalWsManager) {
+            if (newTokenIds.length > 0 && this.ws?.readyState === 1) {
                 this.subscribeToTokens(newTokenIds);
             }
 
@@ -493,30 +447,6 @@ export class MarketMakingScanner extends EventEmitter {
         const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
         const category = this.extractCategory(event, market);
 
-        // SEED DB: Save metadata so adapter can be passive
-        DBMarketMetadata.findOneAndUpdate({ conditionId }, {
-            conditionId,
-            question: market.question || event.title || 'Unknown',
-            image: market.image || market.icon || event.image || '',
-            marketSlug: market.slug || '',
-            closed: market.closed || false,
-            active: market.active || true,
-            acceptingOrders: market.acceptingOrders || true,
-            updatedAt: new Date()
-        }, { upsert: true }).catch(() => {});
-
-        // PROACTIVE HYDRATION: Map Market ID AND Token IDs so lookups work regardless of trigger type
-        if (this.metadataService) {
-            this.metadataService.hydrate(conditionId, {
-                conditionId,
-                question: market.question || event.title || 'Unknown',
-                tokenId: tokenIds[0], // Primary token
-                tokenIds: tokenIds, // All tokens for unified mapping
-                marketSlug: market.slug || '',
-                image: market.image || market.icon || event.image || ''
-            });
-        }
-
         // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];
@@ -563,8 +493,6 @@ export class MarketMakingScanner extends EventEmitter {
                 marketSlug: market.slug || '',
                 bestBid: initialBid,
                 bestAsk: initialAsk,
-                bestBidSize: 0,  // Initialize with 0, will be updated from price feed
-                bestAskSize: 0,  // Initialize with 0, will be updated from price feed
                 spread: initialAsk - initialBid,
                 volume,
                 liquidity,
@@ -918,6 +846,51 @@ export class MarketMakingScanner extends EventEmitter {
         return this.bookmarkedMarkets.has(conditionId);
     }
 
+    private connect() {
+        if (!this.isScanning) return;
+
+        const wsUrl = `${WS_URLS.CLOB}/ws/market`;
+        this.logger.info(`🔌 Connecting to ${wsUrl}`);
+        // Use named imports for WebSocket to resolve constructor error in TS
+        this.ws = new WebSocket(wsUrl);
+
+        const wsAny = this.ws as any;
+
+        wsAny.on('open', () => {
+            this.isConnected = true;
+            this.reconnectAttempts = 0;
+            this.logger.success('✅ WebSocket connected');
+            this.subscribeToAllTrackedTokens();
+            this.startPing();
+        });
+
+        wsAny.on('message', (data: any) => {
+            try {
+                const msg = data.toString();
+                if (msg === 'PONG') return;
+                
+                const parsed = JSON.parse(msg);
+                if (Array.isArray(parsed)) {
+                    parsed.forEach(m => this.processMessage(m));
+                } else {
+                    this.processMessage(parsed);
+                }
+            } catch (error) {
+            }
+        });
+
+        wsAny.on('close', (code: number, reason: string) => {
+            this.isConnected = false;
+            this.logger.warn(`📡 WebSocket closed: ${code}`);
+            this.stopPing();
+            if (this.isScanning) this.handleReconnect();
+        });
+
+        wsAny.on('error', (error: Error) => {
+            this.logger.error(`❌ WebSocket error: ${error.message}`);
+        });
+    }
+
     /**
      * HFT UPGRADE: Connect to the private User Channel
      * Listen for ORDER_FILLED events to trigger immediate re-quotes.
@@ -929,7 +902,7 @@ export class MarketMakingScanner extends EventEmitter {
         
         // This requires standard WebSocket logic with Auth Headers or Token
         // Assuming the adapter has the current valid Auth token
-        // FIX: Use named imports for WebSocket to resolve constructor error in TS
+        // Fix: Use named imports for WebSocket to resolve constructor error in TS
         this.userWs = new WebSocket(userWsUrl);
         const wsAny = this.userWs as any;
 
@@ -958,26 +931,29 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     private subscribeToAllTrackedTokens() {
-        if (!this.externalWsManager) return;
+        if (!this.ws || this.ws.readyState !== 1) return;
 
         const assetIds = Array.from(this.trackedMarkets.keys());
         if (assetIds.length === 0) return;
         
-        // Subscribe to each token individually using the correct method
-        assetIds.forEach(tokenId => {
-            this.externalWsManager.subscribeToToken(tokenId);
-        });
-        
+        const subscribeMsg = {
+            type: 'market',
+            assets_ids: assetIds,
+            custom_feature_enabled: true,
+            initial_dump: true  // Request initial orderbook state
+        };
+
+        this.ws.send(JSON.stringify(subscribeMsg));
         this.logger.info(`📡 Subscribed to ${assetIds.length} tokens with initial orderbook dump`);
     }
 
     private subscribeToTokens(tokenIds: string[]) {
-        if (!this.externalWsManager || tokenIds.length === 0) return;
+        if (!this.ws || this.ws.readyState !== 1 || tokenIds.length === 0) return;
 
-        // Subscribe to each token individually using the correct method
-        tokenIds.forEach(tokenId => {
-            this.externalWsManager.subscribeToToken(tokenId);
-        });
+        this.ws.send(JSON.stringify({
+            assets_ids: tokenIds,
+            operation: 'subscribe'
+        }));
         
         this.logger.debug(`📡 Subscribed to ${tokenIds.length} additional tokens`);
     }
@@ -1009,6 +985,24 @@ export class MarketMakingScanner extends EventEmitter {
                 this.handleBestBidAsk(msg);
                 break;
             case 'book':
+                this.handleBookUpdate(msg);
+                break;
+            case 'new_market':
+                this.handleNewMarket(msg);
+                break;
+            case 'price_change':
+                this.handlePriceChange(msg);
+                break;
+            case 'last_trade_price':
+                this.handleLastTradePrice(msg);
+                break;
+            case 'market_resolved':
+                this.handleMarketResolved(msg);
+                break;
+            case 'tick_size_change':
+                this.handleTickSizeChange(msg);
+                break;
+            default:
                 this.logger.debug(`Unhandled message type: ${msg.event_type || 'unknown'} - ${JSON.stringify(msg)}`);
         }
     }
@@ -1022,8 +1016,6 @@ export class MarketMakingScanner extends EventEmitter {
 
         const bestBid = parseFloat(msg.best_bid || '0');
         const bestAsk = parseFloat(msg.best_ask || '1');
-        const bestBidSize = parseFloat(msg.best_bid_size || '0');
-        const bestAskSize = parseFloat(msg.best_ask_size || '0');
         
         // Calculate spread if not provided
         const spread = msg.spread !== undefined ? parseFloat(msg.spread) : (bestAsk - bestBid);
@@ -1038,13 +1030,8 @@ export class MarketMakingScanner extends EventEmitter {
         if (bestBid > 0 && bestAsk > 0 && bestAsk > bestBid) {
             market.bestBid = bestBid;
             market.bestAsk = bestAsk;
-            market.bestBidSize = bestBidSize;
-            market.bestAskSize = bestAskSize;
             market.spread = spread;
             
-            const midpoint = (bestBid + bestAsk) / 2;
-            this.logger.debug(`[MM TICK] ${market.question.slice(0, 30)}... | Midpoint: ${midpoint.toFixed(4)} | Spread: ${(spread * 100).toFixed(2)}¢`);
-
             // If this is the first price update after discovery, log it
             if (market.discoveredAt && (Date.now() - market.discoveredAt) < 10000) {
                 this.logger.debug(`Initial price for ${market.question?.substring(0, 30)}...: ${bestBid.toFixed(4)} / ${bestAsk.toFixed(4)}`);
@@ -1069,13 +1056,9 @@ export class MarketMakingScanner extends EventEmitter {
 
         const bestBid = parseFloat(bids[0]?.price || '0');
         const bestAsk = parseFloat(asks[0]?.price || '1');
-        const bestBidSize = parseFloat(bids[0]?.size || bids[0]?.amount || '0');
-        const bestAskSize = parseFloat(asks[0]?.size || asks[0]?.amount || '0');
 
         market.bestBid = bestBid;
         market.bestAsk = bestAsk;
-        market.bestBidSize = bestBidSize;
-        market.bestAskSize = bestAskSize;
         market.spread = bestAsk - bestBid;
 
         this.evaluateOpportunity(market);
@@ -1100,8 +1083,6 @@ export class MarketMakingScanner extends EventEmitter {
                     question,
                     bestBid: 0,
                     bestAsk: 0,
-                    bestBidSize: 0,
-                    bestAskSize: 0,
                     spread: 0,
                     volume: 0,
                     liquidity: 0,
@@ -1115,7 +1096,7 @@ export class MarketMakingScanner extends EventEmitter {
             }
         }
 
-        if (assetIds.length > 0 && this.externalWsManager) {
+        if (assetIds.length > 0 && this.ws?.readyState === 1) {
             this.subscribeToTokens(assetIds);
             this.logger.success(`✨ Subscribed to new market: ${question.slice(0, 50)}...`);
         }
@@ -1135,6 +1116,44 @@ export class MarketMakingScanner extends EventEmitter {
 
             this.evaluateOpportunity(market);
         }
+    }
+
+    private handleLastTradePrice(msg: any) {
+        const tokenId = msg.asset_id;
+        const price = parseFloat(msg.price);
+        const market = this.trackedMarkets.get(tokenId);
+        
+        if (!market) return;
+
+        const lastMid = this.lastMidpoints.get(tokenId);
+        
+        if (lastMid && lastMid > 0) {
+            const movePct = Math.abs(price - lastMid) / lastMid * 100;
+
+            // Update market volatility state
+            (market as any).lastPriceMovePct = movePct;
+            (market as any).isVolatile = movePct > this.config.priceMoveThresholdPct;
+
+            if (movePct > this.config.priceMoveThresholdPct) {
+                this.logger.warn(`🔴 FLASH MOVE DETECTED: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
+                
+                // Instead of killing the bot, we emit a specific alert event
+                this.emit('volatilityAlert', { 
+                    tokenId: market.tokenId, 
+                    question: market.question,
+                    movePct, 
+                    timestamp: Date.now() 
+                });
+
+                // We only trigger kill switch if move is extreme (e.g. > 25%) 
+                // and user has enabled the safety feature
+                if (this.config.enableKillSwitch && movePct > 25) {
+                    this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
+                }
+            }
+        }
+
+        this.lastMidpoints.set(tokenId, price);
     }
 
     private handleMarketResolved(msg: any) {
@@ -1220,7 +1239,7 @@ export class MarketMakingScanner extends EventEmitter {
             this.config.minVolume;
             
         const effectiveMinLiquidity = isStillNew ? 
-            Math.max(1000, this.config.minLiquidity * 0.1) : // At least $1,000 for new markets
+            Math.max(50, this.config.minLiquidity * 0.1) : // At least $50 for new markets
             this.config.minLiquidity;
             
         // We always add to monitored list, but only opportunities get special treatment
@@ -1255,6 +1274,13 @@ export class MarketMakingScanner extends EventEmitter {
             featured: market.featured,
             isBookmarked: this.bookmarkedMarkets.has(market.conditionId)
         };
+
+        // Always update monitored list
+        this.monitoredMarkets.set(market.tokenId, opportunity);
+
+        // Check strict MM filters for the actionable opportunities array
+        if (market.volume < effectiveMinVolume) return;
+        if (market.liquidity < effectiveMinLiquidity) return;
         
         // 9. Update opportunities
         this.updateOpportunitiesInternal(opportunity);
@@ -1281,7 +1307,6 @@ export class MarketMakingScanner extends EventEmitter {
             return b.spreadCents - a.spreadCents;
         });
 
-        this.logger.success(`⚡ [MM SIGNAL] Triggering quote for ${opp.question.slice(0, 30)}... (Spread: ${opp.spreadCents.toFixed(1)}¢)`);
         this.emit('opportunity', opp);
     }
 
@@ -1292,14 +1317,18 @@ export class MarketMakingScanner extends EventEmitter {
     }
 
     private startPing() {
-        if (!this.externalWsManager) return;
-        // Use external WebSocket manager's ping functionality
-        this.logger.debug('Using external WebSocket manager for ping');
+        this.pingInterval = setInterval(() => {
+            if (this.ws?.readyState === 1) {
+                this.ws.send('PING');
+            }
+        }, 10000);
     }
 
     private stopPing() {
-        // External WebSocket manager handles its own ping
-        this.logger.debug('Stopping ping (handled by external manager)');
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = undefined;
+        }
     }
 
     private handleReconnect() {
@@ -1329,13 +1358,14 @@ export class MarketMakingScanner extends EventEmitter {
             this.refreshInterval = undefined;
         }
 
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = undefined;
+        if (this.ws) {
+            const wsAny = this.ws as any;
+            wsAny.removeAllListeners();
+            if (this.ws.readyState === 1) {
+                wsAny.terminate();
+            }
+            this.ws = undefined;
         }
-
-        // External WebSocket manager handles cleanup
-        this.logger.debug('WebSocket cleanup handled by external manager');
 
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);

@@ -18,8 +18,23 @@ export class Web3Service {
         if (!window.ethereum) {
             throw new Error("No wallet found. Please install MetaMask, Rabbit, or Coinbase Wallet.");
         }
+        // FIX: Use native EIP-1193 request instead of Ethers provider.send() for initial connection.
+        // This prevents "Could not coalesce error" (-32603) when Ethers tries to wrap JSON-RPC errors.
+        try {
+            await window.ethereum.request({ method: "eth_requestAccounts" });
+        }
+        catch (e) {
+            // Handle common wallet errors explicitly
+            if (e.code === -32002) {
+                throw new Error("Connection request already pending. Please check your wallet extension.");
+            }
+            if (e.code === 4001) {
+                throw new Error("Connection rejected by user.");
+            }
+            throw e;
+        }
+        // Initialize Ethers provider after successful permission grant
         this.provider = new BrowserProvider(window.ethereum);
-        await this.provider.send("eth_requestAccounts", []);
         this.signer = await this.provider.getSigner();
         // Auto-switch to Polygon on connect for best UX
         try {
@@ -147,9 +162,9 @@ export class Web3Service {
             throw this.parseError(e);
         }
     }
-    // Legacy wrapper for backward compatibility (defaults to USDC.e for Polymarket)
+    // Legacy wrapper for backward compatibility (defaults to Native USDC)
     async deposit(toAddress, amount) {
-        return this.depositErc20(toAddress, amount, USDC_BRIDGED_POLYGON);
+        return this.depositErc20(toAddress, amount, USDC_POLYGON);
     }
     /**
      * Special handling for Solana wallets (Phantom/Backpack)
@@ -182,7 +197,7 @@ export class Web3Service {
                 chainId: "0x89",
                 chainName: "Polygon Mainnet",
                 nativeCurrency: { name: "POL", symbol: "POL", decimals: 18 },
-                rpcUrls: ["https://polygon-rpc.com/"],
+                rpcUrls: [process.env.RPC_URL || "https://polygon-rpc.com/"],
                 blockExplorerUrls: ["https://polygonscan.com/"]
             };
         if (chainId === 56)

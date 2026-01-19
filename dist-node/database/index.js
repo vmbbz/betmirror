@@ -2,50 +2,6 @@ import mongoose, { Schema } from 'mongoose';
 import { DatabaseEncryptionService } from '../services/database-encryption.service.js';
 // Initialize the encryption service immediately with the environment key
 DatabaseEncryptionService.init(process.env.MONGO_ENCRYPTION_KEY || '');
-const FlashMoveSchema = new Schema({
-    tokenId: { type: String, required: true, index: true },
-    conditionId: String,
-    oldPrice: Number,
-    newPrice: Number,
-    velocity: Number,
-    timestamp: { type: Date, default: Date.now, index: true },
-    question: String,
-    image: String,
-    marketSlug: String
-});
-const MarketMetadataSchema = new Schema({
-    conditionId: { type: String, required: true, unique: true, index: true },
-    question: { type: String, required: true },
-    image: String,
-    marketSlug: String,
-    eventSlug: String,
-    acceptingOrders: { type: Boolean, default: true },
-    closed: { type: Boolean, default: false },
-    rewards: {
-        max_spread: { type: Number, default: 15 },
-        min_size: { type: Number, default: 10 },
-        rates: Schema.Types.Mixed
-    },
-    tags: [Schema.Types.Mixed],
-    minimum_order_size: { type: Number, default: 5 },
-    minimum_tick_size: { type: Number, default: 0.01 },
-    lastPrice: Number,
-    volume24h: Number,
-    liquidity: Number,
-    updatedAt: { type: Date, default: Date.now },
-    createdAt: { type: Date, default: Date.now }
-});
-const SportsMatchSchema = new Schema({
-    matchId: { type: String, required: true, unique: true },
-    conditionId: { type: String, required: true, index: true },
-    homeTeam: String,
-    awayTeam: String,
-    league: String,
-    lastScore: { type: [Number], default: [0, 0] },
-    lastMinute: { type: Number, default: 0 },
-    status: String,
-    updatedAt: { type: Date, default: Date.now }
-});
 const MoneyMarketOpportunitySchema = new Schema({
     marketId: { type: String, required: true, index: true },
     tokenId: { type: String, required: true, unique: true },
@@ -68,7 +24,6 @@ const ActivePositionSchema = new Schema({
     tradeId: String,
     clobOrderId: String,
     marketId: String,
-    conditionId: String,
     tokenId: String,
     outcome: String,
     entryPrice: Number,
@@ -149,7 +104,6 @@ const UserSchema = new Schema({
         cashBalance: { type: Number, default: 0 }
     },
     bookmarkedMarkets: { type: [String], default: [] },
-    whalePreferences: { type: [String], default: [] }, // User's whale wallet watchlist
     cashoutHistory: [Schema.Types.Mixed],
     lastActive: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }
@@ -190,9 +144,7 @@ const TradeSchema = new Schema({
             },
             message: 'eventSlug must be lowercase with hyphens only'
         }
-    },
-    // Added serviceOrigin to the schema for DB persistence
-    serviceOrigin: { type: String, index: true }
+    }
 });
 const RegistrySchema = new Schema({
     address: { type: String, required: true, unique: true },
@@ -250,10 +202,7 @@ export { CopiedTrade, HunterEarning, WalletAnalytics } from './trade-tracking.sc
 export const BridgeTransaction = mongoose.model('BridgeTransaction', BridgeTransactionSchema);
 export const DepositLog = mongoose.model('DepositLog', DepositLogSchema);
 export const BotLog = mongoose.model('BotLog', BotLogSchema);
-export const FlashMove = mongoose.model('FlashMove', FlashMoveSchema);
 export const MoneyMarketOpportunity = mongoose.model('MoneyMarketOpportunity', MoneyMarketOpportunitySchema);
-export const MarketMetadata = mongoose.model('MarketMetadata', MarketMetadataSchema);
-export const SportsMatch = mongoose.model('SportsMatch', SportsMatchSchema);
 // --- Connection ---
 export const connectDB = async () => {
     const uri = process.env.MONGODB_URI;

@@ -1,8 +1,8 @@
 import { WS_URLS } from '../config/env.js';
-import { MoneyMarketOpportunity, MarketMetadata as DBMarketMetadata } from '../database/index.js';
+import { MoneyMarketOpportunity } from '../database/index.js';
 import EventEmitter from 'events';
-// FIX: Use named import for WebSocket to ensure it is constructable as a class in ESM environment
-import { WebSocket } from 'ws';
+// Use default import for WebSocket
+import WebSocket from 'ws';
 // Rate limiter utility
 class RateLimiter {
     lastRequestTime = 0;
@@ -26,95 +26,57 @@ class RateLimiter {
 export class MarketMakingScanner extends EventEmitter {
     adapter;
     logger;
-    metadataService;
+    // Core state
     isScanning = false;
     isConnected = false;
+    // FIX: Using explicit ws.WebSocket type
     ws;
-    userWs; // NEW: Private User Channel
     trackedMarkets = new Map();
-    monitoredMarkets = new Map(); // All discovered markets for tab filtering
     opportunities = [];
     pingInterval;
     refreshInterval;
-    heartbeatInterval;
     reconnectAttempts = 0;
     reconnectTimeout;
     maxReconnectAttempts = 10;
     maxReconnectDelay = 30000;
     rateLimiter = new RateLimiter(1500); // 1.5 seconds between requests
-    externalWsManager; // Store external WebSocket manager
     // Risk management state
-    MAX_TRACKED_MARKETS = 1000;
     lastMidpoints = new Map();
     inventoryBalances = new Map();
     tickSizes = new Map();
     resolvedMarkets = new Set();
     killSwitchActive = false;
     bookmarkedMarkets = new Set();
-    activeQuoteTokens = new Set();
+    /**
+     * Initialize bookmarks from storage
+     * @param bookmarks Array of market IDs to bookmark
+     */
+    initializeBookmarks(bookmarks) {
+        this.bookmarkedMarkets = new Set(bookmarks);
+        this.logger.info(`Initialized ${this.bookmarkedMarkets.size} bookmarked markets`);
+    }
     // Default config (EXTENDED)
     config = {
         minSpreadCents: 1,
         maxSpreadCents: 15,
         minVolume: 5000,
-        minLiquidity: 10000, // $10k minimum for safe money market arbitrage - prevents liquidity risks in smaller markets
+        minLiquidity: 1000,
         preferRewardMarkets: true,
         preferNewMarkets: true,
         newMarketAgeMinutes: 60,
-        refreshIntervalMs: 300000,
+        refreshIntervalMs: 5 * 60 * 1000,
         // Risk defaults
         priceMoveThresholdPct: 5,
         maxInventoryPerToken: 500,
         autoMergeThreshold: 100,
         enableKillSwitch: true
     };
-    constructor(adapter, logger, metadataService, config) {
+    constructor(adapter, logger, config) {
         super();
         this.adapter = adapter;
         this.logger = logger;
-        this.metadataService = metadataService;
         if (config)
             this.config = { ...this.config, ...config };
-    }
-    /**
-     * Public getter for scanning status
-     */
-    getIsScanning() {
-        return this.isScanning;
-    }
-    /**
-     * Set external WebSocket manager to prevent multiple connections
-     */
-    setWebSocketManager(wsManager) {
-        // Remove existing WebSocket if any
-        if (this.ws) {
-            const wsAny = this.ws;
-            wsAny.removeAllListeners();
-            if (this.ws.readyState === 1) {
-                wsAny.terminate();
-            }
-            this.ws = undefined;
-        }
-        // Store and use the provided WebSocket manager
-        this.externalWsManager = wsManager;
-        this.logger.info('🔌 Using global WebSocket manager for market data');
-    }
-    /**
-     * Override connect method to use external WebSocket manager
-     */
-    connect() {
-        if (!this.isScanning)
-            return;
-        if (!this.externalWsManager) {
-            this.logger.warn('⚠️ No external WebSocket manager provided');
-            return;
-        }
-        // Use external WebSocket manager instead of creating own
-        this.logger.info('🔌 Using external WebSocket manager for market data');
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        this.subscribeToAllTrackedTokens();
-        this.startPing();
     }
     async start() {
         if (this.isScanning) {
@@ -130,14 +92,8 @@ export class MarketMakingScanner extends EventEmitter {
             this.logger.info('🌐 Starting initial market discovery...');
             await this.discoverMarkets();
             this.logger.info(`✅ Initial discovery complete. Tracking ${this.trackedMarkets.size} markets`);
-            this.logger.info('🔌 Connecting to WebSockets (Market + User Channels)...');
+            this.logger.info('🔌 Connecting to WebSocket...');
             this.connect();
-            this.connectUserChannel(); // NEW: Hook into private fill feed
-            // Heartbeat for MM Ticking visibility (Ensures logs prove engine is alive)
-            this.heartbeatInterval = setInterval(() => {
-                const activeOpps = this.getOpportunities().length;
-                this.logger.info(`[MM HEARTBEAT] Tracking ${this.trackedMarkets.size} tokens | Active Opps: ${activeOpps} | Status: ${this.killSwitchActive ? 'KILLED' : 'ACTIVE'}`);
-            }, 60000);
             this.refreshInterval = setInterval(async () => {
                 try {
                     this.logger.info('🔄 Refreshing markets...');
@@ -167,46 +123,38 @@ export class MarketMakingScanner extends EventEmitter {
         }
     }
     /**
-     * Forced refresh for manual sync via UI.
-     */
-    async forceRefresh() {
-        this.logger.info('🔄 [Forced Refresh] Manually triggering market discovery...');
-        await this.discoverMarkets();
-    }
-    /**
-     * Implementation of hasActiveQuotes to solve TypeError in server.ts
-     */
-    hasActiveQuotes(tokenId) {
-        return this.activeQuoteTokens.has(tokenId);
-    }
-    /**
-     * Updates the internal set of tokens that have active quotes
-     */
-    setActiveQuotes(tokenIds) {
-        this.activeQuoteTokens = new Set(tokenIds);
-    }
-    /**
-     * PRODUCTION: Fetch ALL available tag IDs from Gamma API
-     * Dynamically discovers all categories - no hardcoding
+     * PRODUCTION: Fetch available tag IDs from Gamma API
+     * Uses /tags endpoint to get category IDs for filtering
      */
     async fetchTagIds() {
         const tagMap = {};
         try {
             const response = await this.rateLimiter.limit(() => fetch('https://gamma-api.polymarket.com/tags?limit=200'));
             if (!response.ok) {
-                this.logger.warn('Failed to fetch tags');
+                this.logger.warn('Failed to fetch tags, proceeding without category filtering');
                 return tagMap;
             }
             const tags = await response.json();
-            // Store ALL tags by their slug - catches everything dynamically
             for (const tag of tags) {
                 const slug = (tag.slug || tag.label || '').toLowerCase();
                 const id = parseInt(tag.id);
-                if (slug && id && !isNaN(id)) {
-                    tagMap[slug] = id;
+                if (!id || isNaN(id))
+                    continue;
+                // Map primary categories - take first match only
+                if (!tagMap.sports && (slug.includes('sport') || slug === 'nfl' || slug === 'nba' || slug === 'mlb' || slug === 'nhl')) {
+                    tagMap.sports = id;
+                }
+                if (!tagMap.politics && (slug.includes('politic') || slug.includes('election') || slug === 'us-politics')) {
+                    tagMap.politics = id;
+                }
+                if (!tagMap.crypto && (slug.includes('crypto') || slug === 'bitcoin' || slug === 'ethereum' || slug === 'defi')) {
+                    tagMap.crypto = id;
+                }
+                if (!tagMap.business && (slug.includes('business') || slug.includes('economy') || slug.includes('stock') || slug === 'finance')) {
+                    tagMap.business = id;
                 }
             }
-            this.logger.info(`📋 Loaded ${Object.keys(tagMap).length} tags: ${Object.keys(tagMap).join(', ')}`);
+            this.logger.info(`📋 Tag IDs loaded: ${JSON.stringify(tagMap)}`);
             return tagMap;
         }
         catch (error) {
@@ -215,49 +163,62 @@ export class MarketMakingScanner extends EventEmitter {
         }
     }
     /**
-     * PRODUCTION: Multi-source market discovery
+     * PRODUCTION: Multi-source market discovery with pagination
+     * Fetches from multiple endpoints including /events, /markets, and /sports
      */
     async discoverMarkets() {
         this.logger.info('📡 Discovering markets from Gamma API...');
         try {
-            let samplingTokens = new Set();
-            try {
-                const sampling = await this.adapter.getSamplingMarkets?.();
-                if (sampling && Array.isArray(sampling.data)) {
-                    sampling.data.forEach(m => samplingTokens.add(m.condition_id));
-                    this.logger.info(`🎯 Scouted ${samplingTokens.size} reward-eligible pools.`);
-                }
-            }
-            catch (e) { }
+            // Step 1: Fetch available tags to get tag IDs
             const tagIds = await this.fetchTagIds();
-            // Priority categories to fetch (if they exist)
-            const priorityCategories = [
-                'sports', 'politics', 'crypto', 'business', 'climate',
-                'tech', 'elections', 'finance', 'mentions', 'geopolitics',
-                'entertainment', 'science', 'world', 'earnings'
-            ];
-            const categoryEndpoint = (tagId, limit = 100) => `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagId}&related_tags=true&limit=${limit}&order=volume&ascending=false`;
+            // Step 2: Build endpoints for specific categories
             const endpoints = [
-                // Trending & newest
-                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50&order=volume&ascending=false',
-                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=id&ascending=false',
-                // Dynamic category endpoints - only adds if tag exists
-                ...priorityCategories
-                    .filter(cat => tagIds[cat])
-                    .map(cat => categoryEndpoint(tagIds[cat]))
+                // Featured markets (highlighted by Polymarket)
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&featured=true&limit=100',
+                // Sports markets
+                ...(tagIds.sports ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.sports}&limit=100&order=volume&ascending=false`
+                ] : []),
+                // Crypto markets
+                ...(tagIds.crypto ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.crypto}&limit=100&order=volume&ascending=false`
+                ] : []),
+                // Business/Finance markets
+                ...(tagIds.business ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.business}&limit=50&order=volume&ascending=false`
+                ] : []),
+                // Politics markets
+                ...(tagIds.politics ? [
+                    `https://gamma-api.polymarket.com/events?active=true&closed=false&tag_id=${tagIds.politics}&limit=100&order=volume&ascending=false`
+                ] : []),
+                // Get trending markets (high volume, recent)
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=volume&ascending=false',
+                // Get newest markets (for breaking news)
+                'https://gamma-api.polymarket.com/events?active=true&closed=false&limit=30&order=id&ascending=false'
             ];
             let addedCount = 0;
             const newTokenIds = [];
             const seenConditionIds = new Set();
+            // Process each endpoint
             for (const url of endpoints) {
                 try {
+                    this.logger.debug(`Fetching: ${url}`);
                     const response = await this.rateLimiter.limit(() => fetch(url));
-                    if (!response.ok)
+                    if (!response.ok) {
+                        this.logger.debug(`Endpoint returned ${response.status}: ${url}`);
                         continue;
+                    }
                     const data = await response.json();
                     const events = Array.isArray(data) ? data : (data.data || []);
+                    this.logger.debug(`Got ${events.length} events from ${url.split('?')[0]}`);
                     for (const event of events) {
-                        for (const market of (event.markets || [])) {
+                        const markets = event.markets || [];
+                        const isFeatured = url.includes('featured=true');
+                        for (const market of markets) {
+                            // Mark as featured if coming from featured endpoint
+                            if (isFeatured) {
+                                market.featured = true;
+                            }
                             const result = this.processMarketData(market, event, seenConditionIds);
                             if (result.added) {
                                 addedCount++;
@@ -267,19 +228,32 @@ export class MarketMakingScanner extends EventEmitter {
                     }
                 }
                 catch (error) {
-                    this.logger.warn(`Error: ${error}`);
+                    this.logger.warn(`Error in market discovery: ${error}`);
+                    continue;
                 }
             }
-            this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new)`);
-            if (newTokenIds.length > 0 && this.externalWsManager) {
-                this.subscribeToTokens(newTokenIds);
+            this.logger.info(`✅ Tracking ${this.trackedMarkets.size} tokens (${addedCount} new) | Min volume: $${this.config.minVolume}`);
+            // Subscribe to WebSocket for new tokens
+            if (newTokenIds.length > 0) {
+                if (this.ws?.readyState === 1) {
+                    this.subscribeToTokens(newTokenIds);
+                }
+                else {
+                    this.logger.warn('WebSocket not connected, will subscribe on reconnect');
+                }
             }
+            // Trigger initial opportunity evaluation for markets with price data
             this.updateOpportunities();
         }
         catch (error) {
-            this.logger.error('❌ Failed to discover markets:', error instanceof Error ? error : new Error(String(error)));
+            const err = error instanceof Error ? error : new Error(String(error));
+            this.logger.error('❌ Failed to discover markets:', err);
         }
     }
+    /**
+     * Fetch markets for a specific series
+     */
+    // Removed fetchMarketsBySeries as we're not using sports series endpoints anymore
     /**
      * PRODUCTION: Process a single market from API response
      * FIXED: Removed volume/liquidity pre-filtering - only filter on structural requirements
@@ -327,28 +301,6 @@ export class MarketMakingScanner extends EventEmitter {
         const status = this.computeMarketStatus(market);
         const volume24hr = this.parseNumber(market.volume24hr || market.volume24hrClob || 0);
         const category = this.extractCategory(event, market);
-        // SEED DB: Save metadata so adapter can be passive
-        DBMarketMetadata.findOneAndUpdate({ conditionId }, {
-            conditionId,
-            question: market.question || event.title || 'Unknown',
-            image: market.image || market.icon || event.image || '',
-            marketSlug: market.slug || '',
-            closed: market.closed || false,
-            active: market.active || true,
-            acceptingOrders: market.acceptingOrders || true,
-            updatedAt: new Date()
-        }, { upsert: true }).catch(() => { });
-        // PROACTIVE HYDRATION: Map Market ID AND Token IDs so lookups work regardless of trigger type
-        if (this.metadataService) {
-            this.metadataService.hydrate(conditionId, {
-                conditionId,
-                question: market.question || event.title || 'Unknown',
-                tokenId: tokenIds[0], // Primary token
-                tokenIds: tokenIds, // All tokens for unified mapping
-                marketSlug: market.slug || '',
-                image: market.image || market.icon || event.image || ''
-            });
-        }
         // Process each token (YES and NO)
         for (let i = 0; i < tokenIds.length; i++) {
             const tokenId = tokenIds[i];
@@ -391,8 +343,6 @@ export class MarketMakingScanner extends EventEmitter {
                 marketSlug: market.slug || '',
                 bestBid: initialBid,
                 bestAsk: initialAsk,
-                bestBidSize: 0, // Initialize with 0, will be updated from price feed
-                bestAskSize: 0, // Initialize with 0, will be updated from price feed
                 spread: initialAsk - initialBid,
                 volume,
                 liquidity,
@@ -485,48 +435,16 @@ export class MarketMakingScanner extends EventEmitter {
             // Normalize to standard categories
             if (slug.includes('sport') || slug.includes('nfl') || slug.includes('nba') ||
                 slug.includes('mlb') || slug.includes('nhl') || slug.includes('soccer') ||
-                slug.includes('football') || slug.includes('basketball') || slug.includes('tennis')) {
+                slug.includes('football') || slug.includes('basketball')) {
                 return 'sports';
             }
-            if (slug.includes('politic') || slug.includes('election') || slug.includes('president') ||
-                slug.includes('congress') || slug.includes('senate') || slug.includes('governor')) {
-                return 'elections';
+            if (slug.includes('politic') || slug.includes('election')) {
+                return 'politics';
             }
-            if (slug.includes('crypto') || slug.includes('bitcoin') || slug.includes('ethereum') ||
-                slug.includes('btc') || slug.includes('eth') || slug.includes('defi') ||
-                slug.includes('nft') || slug.includes('web3')) {
+            if (slug.includes('crypto') || slug.includes('bitcoin') || slug.includes('ethereum')) {
                 return 'crypto';
             }
-            if (slug.includes('finance') || slug.includes('fed') || slug.includes('interest') ||
-                slug.includes('inflation') || slug.includes('rates') || slug.includes('bank')) {
-                return 'finance';
-            }
-            if (slug.includes('tech') || slug.includes('ai') || slug.includes('artificial') ||
-                slug.includes('software') || slug.includes('hardware') || slug.includes('apple') ||
-                slug.includes('microsoft') || slug.includes('google') || slug.includes('meta')) {
-                return 'tech';
-            }
-            if (slug.includes('climate') || slug.includes('environment') || slug.includes('carbon') ||
-                slug.includes('global warming') || slug.includes('renewable') ||
-                slug.includes('sustainability')) {
-                return 'climate';
-            }
-            if (slug.includes('earnings') || slug.includes('revenue') || slug.includes('profit') ||
-                slug.includes('eps') || slug.includes('income') || slug.includes('quarterly')) {
-                return 'earnings';
-            }
-            if (slug.includes('world') || slug.includes('global') || slug.includes('europe') ||
-                slug.includes('asia') || slug.includes('china') || slug.includes('russia') ||
-                slug.includes('ukraine') || slug.includes('middle east')) {
-                return 'world';
-            }
-            if (slug.includes('mention') || slug.includes('social') || slug.includes('twitter') ||
-                slug.includes('reddit') || slug.includes('discord') || slug.includes('tweet') ||
-                slug.includes('influencer')) {
-                return 'mentions';
-            }
-            if (slug.includes('business') || slug.includes('economy') || slug.includes('company') ||
-                slug.includes('stock') || slug.includes('market') || slug.includes('gdp')) {
+            if (slug.includes('business') || slug.includes('economy') || slug.includes('finance')) {
                 return 'business';
             }
             // Return raw slug if no match
@@ -534,58 +452,20 @@ export class MarketMakingScanner extends EventEmitter {
         }
         // Fallback: infer from event/market slug
         const slug = (event.slug || market?.slug || '').toLowerCase();
-        // Expanded slug-based categorization
         if (slug.includes('nfl') || slug.includes('nba') || slug.includes('super-bowl') ||
-            slug.includes('world-series') || slug.includes('stanley-cup') || slug.includes('tennis') ||
-            slug.includes('soccer') || slug.includes('football') || slug.includes('basketball')) {
+            slug.includes('world-series') || slug.includes('stanley-cup')) {
             return 'sports';
         }
         if (slug.includes('bitcoin') || slug.includes('ethereum') || slug.includes('crypto') ||
-            slug.includes('btc') || slug.includes('eth') || slug.includes('defi') ||
-            slug.includes('nft') || slug.includes('web3')) {
+            slug.includes('btc') || slug.includes('eth')) {
             return 'crypto';
         }
         if (slug.includes('election') || slug.includes('president') || slug.includes('congress') ||
-            slug.includes('senate') || slug.includes('governor') || slug.includes('vote') ||
-            slug.includes('primary') || slug.includes('democrat') || slug.includes('republican')) {
-            return 'elections';
+            slug.includes('senate') || slug.includes('governor')) {
+            return 'politics';
         }
-        if (slug.includes('finance') || slug.includes('fed') || slug.includes('interest') ||
-            slug.includes('inflation') || slug.includes('rates') || slug.includes('bank') ||
-            slug.includes('finance') || slug.includes('stocks') || slug.includes('bonds')) {
-            return 'finance';
-        }
-        if (slug.includes('tech') || slug.includes('ai') || slug.includes('artificial') ||
-            slug.includes('software') || slug.includes('hardware') || slug.includes('apple') ||
-            slug.includes('microsoft') || slug.includes('google') || slug.includes('meta') ||
-            slug.includes('amazon') || slug.includes('tesla')) {
-            return 'tech';
-        }
-        if (slug.includes('climate') || slug.includes('environment') || slug.includes('carbon') ||
-            slug.includes('global-warming') || slug.includes('renewable') ||
-            slug.includes('sustainability') || slug.includes('green') || slug.includes('emission')) {
-            return 'climate';
-        }
-        if (slug.includes('earnings') || slug.includes('revenue') || slug.includes('profit') ||
-            slug.includes('eps') || slug.includes('income') || slug.includes('quarterly') ||
-            slug.includes('q1') || slug.includes('q2') || slug.includes('q3') || slug.includes('q4')) {
-            return 'earnings';
-        }
-        if (slug.includes('world') || slug.includes('global') || slug.includes('europe') ||
-            slug.includes('asia') || slug.includes('china') || slug.includes('russia') ||
-            slug.includes('ukraine') || slug.includes('middle-east') || slug.includes('united-nations') ||
-            slug.includes('nato') || slug.includes('eu') || slug.includes('brexit')) {
-            return 'world';
-        }
-        if (slug.includes('mention') || slug.includes('social') || slug.includes('twitter') ||
-            slug.includes('reddit') || slug.includes('discord') || slug.includes('tweet') ||
-            slug.includes('influencer') || slug.includes('viral') || slug.includes('trending')) {
-            return 'mentions';
-        }
-        if (slug.includes('business') || slug.includes('economy') || slug.includes('company') ||
-            slug.includes('stock') || slug.includes('market') || slug.includes('gdp') ||
-            slug.includes('dow') || slug.includes('s&p') || slug.includes('nasdaq') ||
-            slug.includes('retail') || slug.includes('consumer')) {
+        if (slug.includes('stock') || slug.includes('company') || slug.includes('earnings') ||
+            slug.includes('fed') || slug.includes('gdp')) {
             return 'business';
         }
         return undefined;
@@ -705,12 +585,7 @@ export class MarketMakingScanner extends EventEmitter {
      * Get bookmarked opportunities
      */
     getBookmarkedOpportunities() {
-        return this.opportunities
-            .filter(o => this.bookmarkedMarkets.has(o.conditionId))
-            .map(opp => ({
-            ...opp,
-            isBookmarked: true // Ensure the isBookmarked flag is set
-        }));
+        return this.opportunities.filter(o => this.bookmarkedMarkets.has(o.conditionId));
     }
     /**
      * Check if market is bookmarked
@@ -718,62 +593,69 @@ export class MarketMakingScanner extends EventEmitter {
     isBookmarked(conditionId) {
         return this.bookmarkedMarkets.has(conditionId);
     }
-    /**
-     * HFT UPGRADE: Connect to the private User Channel
-     * Listen for ORDER_FILLED events to trigger immediate re-quotes.
-     */
-    connectUserChannel() {
+    connect() {
         if (!this.isScanning)
             return;
-        const userWsUrl = `${WS_URLS.CLOB}/ws/user`;
-        this.logger.info(`🔌 Connecting to private User Channel: ${userWsUrl}`);
-        // This requires standard WebSocket logic with Auth Headers or Token
-        // Assuming the adapter has the current valid Auth token
-        // FIX: Use named imports for WebSocket to resolve constructor error in TS
-        this.userWs = new WebSocket(userWsUrl);
-        const wsAny = this.userWs;
+        const wsUrl = `${WS_URLS.CLOB}/ws/market`;
+        this.logger.info(`🔌 Connecting to ${wsUrl}`);
+        this.ws = new WebSocket(wsUrl);
+        const wsAny = this.ws;
         wsAny.on('open', () => {
-            this.logger.success('✅ User Channel Connected');
-            // Heartbeat
+            this.isConnected = true;
+            this.reconnectAttempts = 0;
+            this.logger.success('✅ WebSocket connected');
+            this.subscribeToAllTrackedTokens();
+            this.startPing();
         });
         wsAny.on('message', (data) => {
             try {
-                const msg = JSON.parse(data.toString());
-                if (msg.event_type === 'order_filled') {
-                    const tokenId = msg.asset_id;
-                    const market = this.trackedMarkets.get(tokenId);
-                    if (market) {
-                        this.logger.success(`⚡ [HFT FILL] Order filled for ${market.question.slice(0, 20)}... Re-quoting immediately.`);
-                        this.evaluateOpportunity(market);
-                    }
+                const msg = data.toString();
+                if (msg === 'PONG')
+                    return;
+                const parsed = JSON.parse(msg);
+                if (Array.isArray(parsed)) {
+                    parsed.forEach(m => this.processMessage(m));
+                }
+                else {
+                    this.processMessage(parsed);
                 }
             }
-            catch (e) { }
+            catch (error) {
+            }
         });
-        wsAny.on('close', () => {
+        wsAny.on('close', (code, reason) => {
+            this.isConnected = false;
+            this.logger.warn(`📡 WebSocket closed: ${code}`);
+            this.stopPing();
             if (this.isScanning)
-                setTimeout(() => this.connectUserChannel(), 5000);
+                this.handleReconnect();
+        });
+        wsAny.on('error', (error) => {
+            this.logger.error(`❌ WebSocket error: ${error.message}`);
         });
     }
     subscribeToAllTrackedTokens() {
-        if (!this.externalWsManager)
+        if (!this.ws || this.ws.readyState !== 1)
             return;
         const assetIds = Array.from(this.trackedMarkets.keys());
         if (assetIds.length === 0)
             return;
-        // Subscribe to each token individually using the correct method
-        assetIds.forEach(tokenId => {
-            this.externalWsManager.subscribeToToken(tokenId);
-        });
+        const subscribeMsg = {
+            type: 'market',
+            assets_ids: assetIds,
+            custom_feature_enabled: true,
+            initial_dump: true // Request initial orderbook state
+        };
+        this.ws.send(JSON.stringify(subscribeMsg));
         this.logger.info(`📡 Subscribed to ${assetIds.length} tokens with initial orderbook dump`);
     }
     subscribeToTokens(tokenIds) {
-        if (!this.externalWsManager || tokenIds.length === 0)
+        if (!this.ws || this.ws.readyState !== 1 || tokenIds.length === 0)
             return;
-        // Subscribe to each token individually using the correct method
-        tokenIds.forEach(tokenId => {
-            this.externalWsManager.subscribeToToken(tokenId);
-        });
+        this.ws.send(JSON.stringify({
+            assets_ids: tokenIds,
+            operation: 'subscribe'
+        }));
         this.logger.debug(`📡 Subscribed to ${tokenIds.length} additional tokens`);
     }
     processMessage(msg) {
@@ -801,6 +683,24 @@ export class MarketMakingScanner extends EventEmitter {
                 this.handleBestBidAsk(msg);
                 break;
             case 'book':
+                this.handleBookUpdate(msg);
+                break;
+            case 'new_market':
+                this.handleNewMarket(msg);
+                break;
+            case 'price_change':
+                this.handlePriceChange(msg);
+                break;
+            case 'last_trade_price':
+                this.handleLastTradePrice(msg);
+                break;
+            case 'market_resolved':
+                this.handleMarketResolved(msg);
+                break;
+            case 'tick_size_change':
+                this.handleTickSizeChange(msg);
+                break;
+            default:
                 this.logger.debug(`Unhandled message type: ${msg.event_type || 'unknown'} - ${JSON.stringify(msg)}`);
         }
     }
@@ -812,8 +712,6 @@ export class MarketMakingScanner extends EventEmitter {
         }
         const bestBid = parseFloat(msg.best_bid || '0');
         const bestAsk = parseFloat(msg.best_ask || '1');
-        const bestBidSize = parseFloat(msg.best_bid_size || '0');
-        const bestAskSize = parseFloat(msg.best_ask_size || '0');
         // Calculate spread if not provided
         const spread = msg.spread !== undefined ? parseFloat(msg.spread) : (bestAsk - bestBid);
         let market = this.trackedMarkets.get(tokenId);
@@ -825,11 +723,7 @@ export class MarketMakingScanner extends EventEmitter {
         if (bestBid > 0 && bestAsk > 0 && bestAsk > bestBid) {
             market.bestBid = bestBid;
             market.bestAsk = bestAsk;
-            market.bestBidSize = bestBidSize;
-            market.bestAskSize = bestAskSize;
             market.spread = spread;
-            const midpoint = (bestBid + bestAsk) / 2;
-            this.logger.debug(`[MM TICK] ${market.question.slice(0, 30)}... | Midpoint: ${midpoint.toFixed(4)} | Spread: ${(spread * 100).toFixed(2)}¢`);
             // If this is the first price update after discovery, log it
             if (market.discoveredAt && (Date.now() - market.discoveredAt) < 10000) {
                 this.logger.debug(`Initial price for ${market.question?.substring(0, 30)}...: ${bestBid.toFixed(4)} / ${bestAsk.toFixed(4)}`);
@@ -852,12 +746,8 @@ export class MarketMakingScanner extends EventEmitter {
             return;
         const bestBid = parseFloat(bids[0]?.price || '0');
         const bestAsk = parseFloat(asks[0]?.price || '1');
-        const bestBidSize = parseFloat(bids[0]?.size || bids[0]?.amount || '0');
-        const bestAskSize = parseFloat(asks[0]?.size || asks[0]?.amount || '0');
         market.bestBid = bestBid;
         market.bestAsk = bestAsk;
-        market.bestBidSize = bestBidSize;
-        market.bestAskSize = bestAskSize;
         market.spread = bestAsk - bestBid;
         this.evaluateOpportunity(market);
     }
@@ -878,8 +768,6 @@ export class MarketMakingScanner extends EventEmitter {
                     question,
                     bestBid: 0,
                     bestAsk: 0,
-                    bestBidSize: 0,
-                    bestAskSize: 0,
                     spread: 0,
                     volume: 0,
                     liquidity: 0,
@@ -892,7 +780,7 @@ export class MarketMakingScanner extends EventEmitter {
                 });
             }
         }
-        if (assetIds.length > 0 && this.externalWsManager) {
+        if (assetIds.length > 0 && this.ws?.readyState === 1) {
             this.subscribeToTokens(assetIds);
             this.logger.success(`✨ Subscribed to new market: ${question.slice(0, 50)}...`);
         }
@@ -911,6 +799,36 @@ export class MarketMakingScanner extends EventEmitter {
             market.spread = market.bestAsk - market.bestBid;
             this.evaluateOpportunity(market);
         }
+    }
+    handleLastTradePrice(msg) {
+        const tokenId = msg.asset_id;
+        const price = parseFloat(msg.price);
+        const market = this.trackedMarkets.get(tokenId);
+        if (!market)
+            return;
+        const lastMid = this.lastMidpoints.get(tokenId);
+        if (lastMid && lastMid > 0) {
+            const movePct = Math.abs(price - lastMid) / lastMid * 100;
+            // Update market volatility state
+            market.lastPriceMovePct = movePct;
+            market.isVolatile = movePct > this.config.priceMoveThresholdPct;
+            if (movePct > this.config.priceMoveThresholdPct) {
+                this.logger.warn(`🔴 FLASH MOVE DETECTED: ${movePct.toFixed(1)}% on ${market.question.slice(0, 30)}...`);
+                // Instead of killing the bot, we emit a specific alert event
+                this.emit('volatilityAlert', {
+                    tokenId: market.tokenId,
+                    question: market.question,
+                    movePct,
+                    timestamp: Date.now()
+                });
+                // We only trigger kill switch if move is extreme (e.g. > 25%) 
+                // and user has enabled the safety feature
+                if (this.config.enableKillSwitch && movePct > 25) {
+                    this.triggerKillSwitch(`Extreme Volatility Spike (${movePct.toFixed(1)}%) on ${market.tokenId}`);
+                }
+            }
+        }
+        this.lastMidpoints.set(tokenId, price);
     }
     handleMarketResolved(msg) {
         const conditionId = msg.market;
@@ -982,9 +900,19 @@ export class MarketMakingScanner extends EventEmitter {
             Math.max(100, this.config.minVolume * 0.1) : // At least $100 for new markets
             this.config.minVolume;
         const effectiveMinLiquidity = isStillNew ?
-            Math.max(1000, this.config.minLiquidity * 0.1) : // At least $1,000 for new markets
+            Math.max(50, this.config.minLiquidity * 0.1) : // At least $50 for new markets
             this.config.minLiquidity;
-        // We always add to monitored list, but only opportunities get special treatment
+        if (market.volume < effectiveMinVolume) {
+            return;
+        }
+        if (market.liquidity < effectiveMinLiquidity) {
+            return;
+        }
+        // 7. Calculate ROI and capacity
+        const skew = this.getInventorySkew(market.conditionId);
+        const roi = spreadPct; // ROI is just the spread percentage for now
+        const combinedCost = 1 - spread; // Cost to buy both sides
+        // 8. Create opportunity object
         const opportunity = {
             marketId: market.conditionId,
             conditionId: market.conditionId,
@@ -1003,12 +931,11 @@ export class MarketMakingScanner extends EventEmitter {
             isNewMarket: isStillNew,
             rewardsMaxSpread: market.rewardsMaxSpread,
             rewardsMinSize: market.rewardsMinSize,
-            orderMinSize: market.orderMinSize,
             timestamp: Date.now(),
-            roi: spreadPct,
-            combinedCost: 1 - spread,
+            roi: roi,
+            combinedCost: combinedCost,
             capacityUsd: market.liquidity,
-            skew: this.getInventorySkew(market.conditionId),
+            skew: skew,
             status: market.status,
             acceptingOrders: market.acceptingOrders,
             volume24hr: market.volume24hr,
@@ -1036,7 +963,6 @@ export class MarketMakingScanner extends EventEmitter {
                 return a.isNewMarket ? -1 : 1;
             return b.spreadCents - a.spreadCents;
         });
-        this.logger.success(`⚡ [MM SIGNAL] Triggering quote for ${opp.question.slice(0, 30)}... (Spread: ${opp.spreadCents.toFixed(1)}¢)`);
         this.emit('opportunity', opp);
     }
     updateOpportunities() {
@@ -1045,14 +971,17 @@ export class MarketMakingScanner extends EventEmitter {
         }
     }
     startPing() {
-        if (!this.externalWsManager)
-            return;
-        // Use external WebSocket manager's ping functionality
-        this.logger.debug('Using external WebSocket manager for ping');
+        this.pingInterval = setInterval(() => {
+            if (this.ws?.readyState === 1) {
+                this.ws.send('PING');
+            }
+        }, 10000);
     }
     stopPing() {
-        // External WebSocket manager handles its own ping
-        this.logger.debug('Stopping ping (handled by external manager)');
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = undefined;
+        }
     }
     handleReconnect() {
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -1076,35 +1005,25 @@ export class MarketMakingScanner extends EventEmitter {
             clearInterval(this.refreshInterval);
             this.refreshInterval = undefined;
         }
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = undefined;
+        if (this.ws) {
+            const wsAny = this.ws;
+            wsAny.removeAllListeners();
+            if (this.ws.readyState === 1) {
+                wsAny.terminate();
+            }
+            this.ws = undefined;
         }
-        // External WebSocket manager handles cleanup
-        this.logger.debug('WebSocket cleanup handled by external manager');
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = undefined;
         }
         this.logger.warn('🛑 Scanner stopped');
     }
-    getOpportunities(maxAgeMs = 600000) {
+    getOpportunities(maxAgeMs = 60000) {
         const now = Date.now();
-        // Use monitored list as fallback if strict opportunities are few
-        const actionable = this.opportunities.filter(o => now - o.timestamp < maxAgeMs);
-        if (actionable.length < 5) {
-            // Supplement with monitored markets that are active
-            const supplemental = Array.from(this.monitoredMarkets.values())
-                .filter(o => o.status === 'active' && !actionable.some(a => a.tokenId === o.tokenId))
-                .slice(0, 10);
-            return [...actionable, ...supplemental];
-        }
-        return actionable;
+        return this.opportunities.filter(o => now - o.timestamp < maxAgeMs);
     }
     getLatestOpportunities() {
-        return this.getOpportunities();
-    }
-    getMonitoredMarkets() {
         return this.getOpportunities();
     }
     getInventorySkew(conditionId) {

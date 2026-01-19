@@ -3,137 +3,159 @@ import { RuntimeEnv } from '../config/env.js';
 import { Logger } from '../utils/logger.util.js';
 import { TradeSignal } from '../domain/trade.types.js';
 import { IExchangeAdapter } from '../adapters/interfaces.js';
-import { MarketIntelligenceService, WhaleTradeEvent } from './market-intelligence.service.js';
+import axios from 'axios';
 
-/**
- * TradeMonitorDeps: Dependency injection container for the monitor.
- */
 export type TradeMonitorDeps = {
   adapter: IExchangeAdapter;
-  intelligence: MarketIntelligenceService; // Global Singleton for WebSockets
   env: RuntimeEnv;
   logger: Logger;
   userAddresses: string[];
   onDetectedTrade: (signal: TradeSignal) => Promise<void>;
 };
 
-/**
- * LOGIC LAYER: TradeMonitorService
- * 
- * Performance: O(1) Discovery.
- * This service monitors user trades via WebSocket for real-time fill tracking.
- * Whale tracking has been moved to GlobalWhalePollerService.
- * 
- * It handles user-specific trade events and converts them into executable TradeSignals.
- */
+interface PolyActivity {
+    id: string;
+    type: string; // "TRADE" | "ORDER_FILLED"
+    timestamp: number;
+    conditionId: string;
+    asset: string;
+    side: string;
+    size: number;
+    price: number;
+    usdcSize: number;
+    outcomeIndex: number;
+    transactionHash: string;
+}
+
+const HTTP_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json'
+};
+
 export class TradeMonitorService {
   private readonly deps: TradeMonitorDeps;
-  private running = false;
+  private isPolling = false;
+  private pollInterval?: NodeJS.Timeout;
+  
   private targetWallets: Set<string> = new Set();
-  
-  /**
-   * processedTrades: Cache to prevent duplicate trade processing.
-   * Key: unique trade hash, Value: timestamp of processing.
-   */
-  private processedTrades: Map<string, number> = new Map();
-  
-  // Bound handler reference to allow clean removal of event listeners
-  private boundHandler: (event: WhaleTradeEvent) => void;
+  private processedHashes: Map<string, number> = new Map();
 
   constructor(deps: TradeMonitorDeps) {
     this.deps = deps;
     this.updateTargets(deps.userAddresses);
+  }
+
+  updateTargets(newTargets: string[]) {
+      this.deps.userAddresses = newTargets;
+      this.targetWallets = new Set(newTargets.map(t => t.toLowerCase()));
+      this.deps.logger.info(`🎯 Monitor target list updated to ${this.targetWallets.size} wallets.`);
+  }
+
+  async start(startCursor?: number): Promise<void> {
+    if (this.isPolling) return;
+    this.isPolling = true;
     
-    // Store bound handler reference to allow clean removal of event listeners
-    this.boundHandler = (event: WhaleTradeEvent) => {
-        this.handleUserTrade(event);
-    };
-  }
-
-  /**
-   * Returns the current operational status of the monitor.
-   */
-  public isActive(): boolean {
-    return this.running;
-  }
-
-  /**
-   * Synchronizes the local target list for user trade monitoring.
-   * Note: Whale tracking is now handled by GlobalWhalePollerService.
-   * 
-   * @param newTargets Array of wallet addresses to monitor.
-   */
-  public updateTargets(newTargets: string[]) {
-    this.deps.userAddresses = newTargets;
-    this.targetWallets = new Set(newTargets.map(t => t.toLowerCase()));
+    this.deps.logger.info(`🔌 Starting High-Frequency Polling (Data API)...`);
     
-    // Note: No need to notify intelligence service for whale tracking anymore
-    this.deps.logger.info(`🎯 Monitor targets synced: ${this.targetWallets.size} user wallets.`);
+    await this.poll();
+
+    this.pollInterval = setInterval(() => this.poll(), 10000) as unknown as NodeJS.Timeout; // 10 seconds 
   }
 
-  /**
-   * Connects the monitor to the global intelligence event bus.
-   */
-  public async start(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    this.deps.intelligence.on('whale_trade', this.boundHandler);
-    this.deps.logger.info(`🔌 Signal Monitor: ONLINE.`);
-  }
-
-  public stop(): void {
-    this.running = false;
-    this.deps.intelligence.removeListener('whale_trade', this.boundHandler);
-    this.processedTrades.clear();
-  }
-
-  /**
-   * CORE LOGIC: handleUserTrade
-   * 
-   * This method handles user-specific trade events from WebSocket.
-   * Note: Whale tracking is now handled by GlobalWhalePollerService using Data API.
-   */
-  private async handleUserTrade(event: WhaleTradeEvent) {
-    if (!this.running) return;
-    
-    // Only process trades from our target wallets (user trades)
-    if (!this.targetWallets.has(event.trader.toLowerCase())) return;
-
-    const tradeKey = `${event.trader}-${event.tokenId}-${event.side}-${Math.floor(event.timestamp / 5000)}`;
-    if (this.processedTrades.has(tradeKey)) return;
-    
-    this.processedTrades.set(tradeKey, Date.now());
-    this.pruneCache();
-
-    this.deps.logger.success(`🚨 [USER TRADE] ${event.trader.slice(0, 10)}... ${event.side} @ ${event.price}`);
-
-    const signal: TradeSignal = {
-      trader: event.trader,
-      marketId: "resolved_by_adapter",
-      tokenId: event.tokenId,
-      outcome: "YES", 
-      side: event.side as 'BUY' | 'SELL',
-      sizeUsd: event.size * event.price,
-      price: event.price,
-      timestamp: event.timestamp
-    };
-
-    await this.deps.onDetectedTrade(signal);
-  }
-
-  /**
-   * Memory Janitor: Cleans up the deduplication cache.
-   */
-  private pruneCache() {
-    const now = Date.now();
-    const TTL = 10 * 60 * 1000; // 10 minute cache window
-    
-    if (this.processedTrades.size > 2000) {
-      for (const [key, ts] of this.processedTrades.entries()) {
-        if (now - ts > TTL) {
-          this.processedTrades.delete(key);
-        }
-      }
+  stop(): void {
+    this.isPolling = false;
+    if (this.pollInterval) {
+        clearInterval(this.pollInterval);
+        this.pollInterval = undefined;
     }
+    this.deps.logger.info('Cb Monitor Stopped.');
+  }
+
+  private async poll() {
+      if (this.targetWallets.size === 0) return;
+
+      const targets = Array.from(this.targetWallets);
+      
+      for (const user of targets) {
+          await this.checkUserActivity(user);
+          if (targets.length > 5) await new Promise(r => setTimeout(r, 100)); 
+      }
+      
+      this.pruneCache();
+  }
+
+  private async checkUserActivity(user: string) {
+      try {
+          const url = `https://data-api.polymarket.com/activity?user=${user}&limit=5`;
+          // Added User-Agent header
+          const res = await axios.get<PolyActivity[]>(url, { 
+              timeout: 3000,
+              headers: HTTP_HEADERS
+          });
+          
+          if (!res.data || !Array.isArray(res.data)) return;
+
+          const trades = res.data.filter(a => a.type === 'TRADE' || a.type === 'ORDER_FILLED');
+
+          trades.sort((a, b) => a.timestamp - b.timestamp);
+
+          for (const trade of trades) {
+              await this.processTrade(user, trade);
+          }
+      } catch (e) {
+          // Silent fail
+      }
+  }
+
+  private async processTrade(user: string, activity: PolyActivity) {
+      const txHash = activity.transactionHash;
+      
+      if (this.processedHashes.has(txHash)) return;
+      
+      const now = Date.now();
+      const tradeTime = activity.timestamp > 10000000000 ? activity.timestamp : activity.timestamp * 1000;
+      
+      if (now - tradeTime > 5 * 60 * 1000) {
+          this.processedHashes.set(txHash, now);
+          return;
+      }
+
+      this.processedHashes.set(txHash, now);
+
+      const outcomeLabel = activity.outcomeIndex === 0 ? "YES" : "NO";
+      
+      const side = activity.side.toUpperCase() as 'BUY' | 'SELL';
+      
+      const sizeUsd = activity.usdcSize || (activity.size * activity.price);
+      
+      this.deps.logger.info(`🚨 [SIGNAL] ${user.slice(0,6)}... ${side} ${outcomeLabel} @ ${activity.price} ($${sizeUsd.toFixed(2)})`);
+
+      const signal: TradeSignal = {
+          trader: user,
+          marketId: activity.conditionId,
+          tokenId: activity.asset,
+          outcome: outcomeLabel as 'YES' | 'NO',
+          side: side,
+          sizeUsd: sizeUsd,
+          price: activity.price,
+          timestamp: tradeTime
+      };
+
+      this.deps.onDetectedTrade(signal).catch(err => {
+          this.deps.logger.error(`Execution Trigger Failed`, err);
+      });
+  }
+
+  private pruneCache() {
+      const now = Date.now();
+      const TTL = 10 * 60 * 1000; 
+      
+      if (this.processedHashes.size > 2000) {
+          for (const [key, ts] of this.processedHashes.entries()) {
+              if (now - ts > TTL) {
+                  this.processedHashes.delete(key);
+              }
+          }
+      }
   }
 }

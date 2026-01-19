@@ -1,12 +1,11 @@
+
 import type { RuntimeEnv } from '../config/env.js';
 import type { Logger } from '../utils/logger.util.js';
 import type { TradeSignal, ActivePosition } from '../domain/trade.types.js';
 import { computeProportionalSizing } from '../config/copy-strategy.js';
 import { httpGet } from '../utils/http.js';
 import { TOKENS } from '../config/env.js';
-import { IExchangeAdapter, LiquidityHealth, OrderParams, OrderResult } from '../adapters/interfaces.js';
-import { WebSocketManager } from './websocket-manager.service.js';
-import { MARKET_RATE_LIMITER } from '../utils/rate-limiter.util.js';
+import { IExchangeAdapter, LiquidityHealth } from '../adapters/interfaces.js';
 import axios from 'axios';
 
 // Import from arbitrage scanner
@@ -22,7 +21,6 @@ export type TradeExecutorDeps = {
   env: RuntimeEnv;
   logger: Logger;
   proxyWallet: string;
-  wsManager: WebSocketManager;
 };
 
 interface Position {
@@ -78,23 +76,12 @@ export interface QuoteResult {
 
 export class TradeExecutorService {
   private readonly deps: TradeExecutorDeps;
-  private balanceCache: Map<string, { value: number; timestamp: number }> = new Map();
   
-  // ACCOUNTING CORE: Tracks capital in transit
+  private balanceCache: Map<string, { value: number; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; 
+  
   private pendingSpend = 0;
   private pendingOrders: Map<string, { amount: number; timestamp: number }> = new Map();
-  private lastQuoteTime: Map<string, number> = new Map(); 
-  private inventory = new Map<string, number>();
-  private isListening = false;
-  private isWsRunning = false;
-  private fillListener?: (fill: any) => void; // Store listener reference
-  private readonly CACHE_TTL = 5 * 60 * 1000;
-  private readonly PENDING_ORDER_TIMEOUT = 10 * 60 * 1000; // 10 minutes
-  private readonly REQUOTE_THROTTLE_MS = 8000; // 8 seconds per token re-quote
-  private cleanupInterval?: NodeJS.Timeout; 
-  private closedMarkets: Set<string> = new Set(); // Cache of closed markets to avoid repeated API calls
-  private readonly CLOSED_MARKETS_TTL = 30 * 60 * 1000; // 30 minutes TTL for closed markets cache
-  private closedMarketsTimestamps: Map<string, number> = new Map(); // Track when markets were marked closed 
 
   /**
    * Update the pending spend amount for buy orders
@@ -126,6 +113,7 @@ export class TradeExecutorService {
 
   // Market Making state
   private activeQuotes = new Map<string, { bidOrderId?: string; askOrderId?: string }>();
+  private inventory = new Map<string, number>(); // tokenId -> share balance
   
   // Position tracking
   private positionTracking = new Map<string, {
@@ -180,203 +168,6 @@ export class TradeExecutorService {
   constructor(deps: TradeExecutorDeps, mmConfig?: Partial<MarketMakingConfig>) {
     this.deps = deps;
     if (mmConfig) this.mmConfig = { ...this.mmConfig, ...mmConfig };
-    
-    // Initialize inventory sync
-    this.initializeInventory().catch(e => this.deps.logger.error("Inventory Sync Failed", e));
-  }
-
-  /**
-   * Starts the accounting engine by wiring listeners to the Private WebSocket.
-   */
-  public async start(): Promise<void> {
-      if (this.isListening) return;
-      this.isListening = true;
-      
-      // Start fill monitor using centralized WebSocket manager
-      this.connectUserChannel();
-      this.setupFillAccounting();
-      
-      // Start cleanup interval for stale orders
-      this.startCleanupInterval();
-      
-      this.deps.logger.info("💰 Trade Executor: Accounting Heart Activated.");
-  }
-
-  /**
-   * Stops listeners and cleans up.
-   */
-  public async stop(): Promise<void> {
-    this.isListening = false;
-    
-    // Remove only our listener, not all fill listeners
-    if (this.fillListener && this.deps.wsManager) {
-      this.deps.wsManager.removeListener('fill', this.fillListener);
-      this.fillListener = undefined;
-    }
-    
-    // Stop cleanup interval
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = undefined;
-    }
-    
-    // Clear pending orders on stop to prevent capital lock
-    this.pendingOrders.clear();
-    this.pendingSpend = 0;
-    
-    this.deps.logger.warn('💰 Trade Executor: Accounting Heart Paused.');
-  }
-
-  /**
-   * Start periodic cleanup of stale pending orders
-   */
-  private startCleanupInterval(): void {
-    this.cleanupInterval = setInterval(() => {
-      this.cleanupStaleOrders();
-      this.cleanupExpiredClosedMarkets();
-    }, 60000); // Check every minute
-  }
-
-  /**
-   * Remove stale pending orders that have timed out
-   */
-  private cleanupStaleOrders(): void {
-    const now = Date.now();
-    const staleOrders: string[] = [];
-    
-    for (const [orderId, order] of this.pendingOrders.entries()) {
-      if (now - order.timestamp > this.PENDING_ORDER_TIMEOUT) {
-        staleOrders.push(orderId);
-      }
-    }
-    
-    if (staleOrders.length > 0) {
-      let totalReleased = 0;
-      for (const orderId of staleOrders) {
-        const order = this.pendingOrders.get(orderId);
-        if (order) {
-          totalReleased += order.amount;
-          this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
-          this.pendingOrders.delete(orderId);
-        }
-      }
-      
-      this.deps.logger.warn(`⏰ Cleaned up ${staleOrders.length} stale orders, released $${totalReleased.toFixed(2)}`);
-    }
-  }
-
-  /**
-   * Remove expired closed markets from cache
-   */
-  private cleanupExpiredClosedMarkets(): void {
-    const now = Date.now();
-    const expiredMarkets: string[] = [];
-    
-    for (const [conditionId, timestamp] of this.closedMarketsTimestamps.entries()) {
-      if (now - timestamp > this.CLOSED_MARKETS_TTL) {
-        expiredMarkets.push(conditionId);
-      }
-    }
-    
-    for (const conditionId of expiredMarkets) {
-      this.closedMarkets.delete(conditionId);
-      this.closedMarketsTimestamps.delete(conditionId);
-    }
-    
-    if (expiredMarkets.length > 0) {
-      this.deps.logger.debug(`[MM] Cleaned up ${expiredMarkets.length} expired closed markets from cache`);
-    }
-  }
-
-  private async initializeInventory() {
-    this.deps.logger.info("📦 Synchronizing Executor inventory cache...");
-    const positions = await this.deps.adapter.getPositions(this.deps.proxyWallet);
-    positions.forEach(p => {
-        this.inventory.set(p.tokenId, p.balance);
-    });
-    this.deps.logger.success(`✅ Inventory synced: ${this.inventory.size} active positions loaded.`);
-  }
-
-  /**
-   * Connect to user channel using centralized WebSocket manager
-   * Note: WebSocket manager should already be started by BotEngine
-   */
-  private connectUserChannel(): void {
-    if (!this.deps.wsManager) {
-      this.deps.logger.error('❌ WebSocket manager not available');
-      return;
-    }
-    
-    this.isWsRunning = true;
-    this.deps.logger.success('✅ Executor Fill Monitor Connected (Authenticated).');
-  }
-
-  private setupFillAccounting(): void {
-    if (!this.deps.wsManager) {
-      this.deps.logger.error('❌ WebSocket manager not available for fill accounting');
-      return;
-    }
-
-    // Store listener reference for clean removal
-    this.fillListener = (fill: any) => {
-      if (this.isListening) {
-        this.handleLiveFill(fill);
-      }
-    };
-    
-    this.deps.wsManager.on('fill', this.fillListener);
-    this.deps.logger.debug('🔌 Fill accounting listener registered');
-  }
-
-  /**
-   * Handles real-time fill events from WebSocket.
-   * Updates inventory and pending spend immediately.
-   */
-  private handleLiveFill(fill: any): void {
-    try {
-      const { asset_id, price, size, side, order_id } = fill;
-      
-      // Validate required fields
-      if (!asset_id || !price || !size || !side) {
-        this.deps.logger.warn('⚠️ Invalid fill event received');
-        this.deps.logger.debug(`Fill data: ${JSON.stringify(fill)}`);
-        return;
-      }
-      
-      const isBuy = side.toUpperCase() === 'BUY';
-      const tokenId = asset_id;
-      const fillSize = parseFloat(size);
-      const fillPrice = parseFloat(price);
-      
-      if (isNaN(fillSize) || isNaN(fillPrice) || fillSize <= 0 || fillPrice <= 0) {
-        this.deps.logger.warn('⚠️ Invalid fill values');
-        this.deps.logger.debug(`Fill data: ${JSON.stringify({ asset_id, price, size, side })}`);
-        return;
-      }
-      
-      this.deps.logger.success(`⚡ [FILL DETECTED] ${side} ${fillSize} units @ $${fillPrice}`);
-      
-      // 1. Update Inventory Ledger
-      const currentInv = this.inventory.get(tokenId) || 0;
-      this.inventory.set(tokenId, isBuy ? currentInv + fillSize : currentInv - fillSize);
-      
-      // 2. RELEASE Pending Capital if it was a buy
-      if (isBuy && order_id) {
-        const order = this.pendingOrders.get(order_id);
-        if (order) {
-          this.pendingSpend = Math.max(0, this.pendingSpend - order.amount);
-          this.pendingOrders.delete(order_id);
-          this.deps.logger.debug(`💰 Released $${order.amount.toFixed(2)} from pending spend.`);
-        } else {
-          this.deps.logger.debug(`ℹ️ No pending order found for ${order_id}`);
-        }
-      }
-      
-    } catch (error) {
-      const errorObj = error instanceof Error ? error : new Error(String(error));
-      this.deps.logger.error('❌ Error processing fill event', errorObj);
-      this.deps.logger.debug(`Fill data: ${JSON.stringify(fill)}`);
-    }
   }
 
   /**
@@ -398,7 +189,7 @@ export class TradeExecutorService {
       positionPct = Math.min(maxSize, baseSize * volAdjustment);
     }
     
-    // Get portfolio value
+    // Get portfolio value (simplified - you might want to implement this properly)
     const portfolioValue = this.getPortfolioValue();
     
     // Calculate max position value and size
@@ -519,14 +310,7 @@ export class TradeExecutorService {
     if (availableForBid < bidSize * prices.bidPrice) {
       const oldBidSize = bidSize;
       bidSize = availableForBid / prices.bidPrice;
-      
-      // Skip market making if balance is critically low
-      if (bidSize < minSize || availableForBid < 10) { // $10 minimum threshold
-        this.deps.logger.warn(`[MM] Insufficient balance ($${availableForBid.toFixed(2)}) for market making on ${tokenId}`);
-        bidSize = 0;
-      } else {
-        this.deps.logger.info(`[MM] Adjusted bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} for ${tokenId}`);
-      }
+      this.deps.logger.warn(`[MM] Reduced bid size from ${oldBidSize.toFixed(2)} to ${bidSize.toFixed(2)} due to insufficient balance`);
     }
     
     // Ensure minimum size requirements
@@ -570,8 +354,10 @@ export class TradeExecutorService {
     };
   }
   
+  // Helper methods (implement these based on your existing code)
   private getPortfolioValue(): number {
-    return 10000; // Simplified static portfolio size for scoring
+    // Implement based on your portfolio tracking
+    return 10000; // Example: $10,000 portfolio
   }
   
   private async getAverageEntryPrice(tokenId: string): Promise<number | null> {
@@ -645,7 +431,7 @@ export class TradeExecutorService {
       volatility: 0.3
     };
     
-    // Normalize PnL to 0-100 scale
+    // Normalize PnL to 0-100 scale (adjust these thresholds as needed)
     const normalizedPnl = Math.min(100, Math.max(0, 50 + (pnlPct * 10)));
     
     // Calculate weighted score
@@ -666,7 +452,7 @@ export class TradeExecutorService {
     // Calculate average volatility over window
     const avgVolatility = market.volatility.reduce((a, b) => a + b, 0) / market.volatility.length;
     
-    // Calculate volume trend
+    // Calculate volume trend (simple moving average ratio)
     const volumeAvg = market.volume.reduce((a, b) => a + b, 0) / market.volume.length;
     const recentVolume = market.volume[market.volume.length - 1];
     const volumeRatio = volumeAvg > 0 ? recentVolume / volumeAvg : 1.0;
@@ -696,35 +482,19 @@ export class TradeExecutorService {
     return this.deps.adapter;
   }
 
-  /**
-   * Create a direct order through the executor (handles pending spend tracking)
-   */
-  public async createOrder(params: OrderParams): Promise<OrderResult> {
-    const { adapter, logger } = this.deps;
-    
-    try {
-      const result = await adapter.createOrder(params);
-      
-      // Update pending spend if it's a successful buy order to maintain accurate balance tracking
-      if (result.success && params.side === 'BUY') {
-        const amount = result.usdFilled || (result.sharesFilled * (result.priceFilled || 0));
-        if (amount > 0) {
-          this.updatePendingSpend(amount, true, result.orderId);
-        }
-      }
-      
-      return result;
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      logger.error(`[Executor] Direct order failed: ${err.message}`, err);
-      throw err;
-    }
-  }
+  // ============================================================
+  // MARKET MAKING METHODS (NEW)
+  // ============================================================
 
+  /**
+   * Execute two-sided quotes for market making opportunities
+   * Places GTC limit orders on both sides to capture spread
+   * Per docs: GTC orders rest on book and earn liquidity rewards
+   */
   /**
    * Update market state with latest price and volume data
    */
-  private updateMarketStateInternal(
+  private updateMarketState(
     tokenId: string, 
     price: number, 
     volume: number, 
@@ -766,22 +536,10 @@ export class TradeExecutorService {
 
   async executeMarketMakingQuotes(opportunity: MarketOpportunity): Promise<QuoteResult> {
       const { logger, adapter, proxyWallet } = this.deps;
-      const { tokenId, conditionId, midpoint, spread, rewardsMaxSpread, rewardsMinSize } = opportunity;
+      const { tokenId, conditionId, midpoint, spread, question, rewardsMaxSpread, rewardsMinSize, skew = 0, volume = 0 } = opportunity;
       
-      const now = Date.now();
-      
-      // 1. Re-quote Throttle Check (Crucial for Rate Limits & Stability)
-      const last = this.lastQuoteTime.get(tokenId) || 0;
-      if (now - last < this.REQUOTE_THROTTLE_MS) {
-          return { tokenId, status: 'SKIPPED', reason: 'throttled' };
-      }
-      this.lastQuoteTime.set(tokenId, now);
-
-      const vol = (opportunity as any).volatility || 0.05;
-      const volume = opportunity.volume || 0;
-
       // Update market state with latest data
-      this.updateMarketStateInternal(tokenId, midpoint, volume, spread);
+      this.updateMarketState(tokenId, midpoint, volume, spread);
 
       const failResult = (reason: string): QuoteResult => ({
           tokenId,
@@ -790,25 +548,16 @@ export class TradeExecutorService {
       });
 
       try {
-          this.deps.logger.info(`⚡ [MM Quote] Processing ${opportunity.question.slice(0,25)}... (Mid: ${midpoint.toFixed(2)}, Spread: ${(spread*100).toFixed(1)}¢)`);
-
-          // 2. Check if market was previously marked as closed (fail-fast approach)
-          if (this.closedMarkets.has(conditionId)) {
-              // Check if TTL expired
-              const timestamp = this.closedMarketsTimestamps.get(conditionId);
-              if (timestamp && (Date.now() - timestamp) < this.CLOSED_MARKETS_TTL) {
-                  return failResult('market_previously_closed');
-              } else {
-                  // TTL expired, remove from cache
-                  this.closedMarkets.delete(conditionId);
-                  this.closedMarketsTimestamps.delete(conditionId);
-              }
+          // 1. Check if market is still active
+          const market = await this.validateMarketForMM(conditionId);
+          if (!market.valid) {
+              return failResult(market.reason || 'market_invalid');
           }
 
-          // 3. Cancel existing quotes for this token before placing new ones
+          // 2. Cancel existing quotes for this token before placing new ones
           await this.cancelExistingQuotes(tokenId);
 
-          // 4. Check inventory limits with dynamic position sizing
+          // 3. Check inventory limits with dynamic position sizing
           const currentInventory = await this.getTokenInventory(tokenId);
           const inventoryValueUsd = currentInventory * midpoint;
           
@@ -828,16 +577,10 @@ export class TradeExecutorService {
               return await this.postSingleSideQuote(opportunity, 'SELL', currentInventory);
           }
 
-          // 5. Calculate dynamic spreads with inventory skew and volatility adjustment
-          // Use cached market data or defaults - no API validation needed
-          const marketData = {
-              negRisk: false,
-              tickSize: '0.01',
-              minOrderSize: 5
-          };
-          const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, marketData);
+          // 4. Calculate dynamic spreads with inventory skew and volatility adjustment
+          const { bidPrice, askPrice } = this.calculateDynamicPrices(opportunity, currentInventory, market);
           
-          // 6. Calculate order sizes with inventory management
+          // 5. Calculate order sizes with inventory management
           const optimalSizes = await this.calculateOptimalSizes(
               opportunity, 
               currentInventory, 
@@ -854,16 +597,16 @@ export class TradeExecutorService {
               };
           }
 
-          // 7. Final size adjustments
+          // 6. Final size adjustments
           let finalBidSize = optimalSizes.bidSize;
           let finalAskSize = optimalSizes.askSize;
 
           // Check rewards min_size requirement
-          const minSize = rewardsMinSize || marketData.minOrderSize || 5;
+          const minSize = rewardsMinSize || market.minOrderSize || 5;
           if (finalBidSize > 0 && finalBidSize < minSize) finalBidSize = minSize;
           if (finalAskSize > 0 && finalAskSize < minSize && currentInventory >= minSize) finalAskSize = minSize;
 
-          // Check balance for bid
+          // 6. Check balance for bid
           const balance = await adapter.fetchBalance(proxyWallet);
           const availableForBid = Math.max(0, balance - this.pendingSpend);
           
@@ -871,7 +614,7 @@ export class TradeExecutorService {
               finalBidSize = availableForBid / bidPrice;
           }
 
-          // 8. Place orders using GTC
+          // 7. Place orders using GTC
           const result: QuoteResult = {
               tokenId,
               status: 'POSTED',
@@ -887,8 +630,8 @@ export class TradeExecutorService {
                   side: 'BUY',
                   price: bidPrice,
                   size: finalBidSize,
-                  negRisk: marketData.negRisk,
-                  tickSize: marketData.tickSize
+                  negRisk: market.negRisk,
+                  tickSize: market.tickSize
               });
 
               if (bidOrder.success) {
@@ -907,8 +650,8 @@ export class TradeExecutorService {
                   side: 'SELL',
                   price: askPrice,
                   size: finalAskSize,
-                  negRisk: marketData.negRisk,
-                  tickSize: marketData.tickSize
+                  negRisk: market.negRisk,
+                  tickSize: market.tickSize
               });
 
               if (askOrder.success) {
@@ -930,20 +673,13 @@ export class TradeExecutorService {
       } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
           logger.error(`[MM] Quote execution failed: ${err.message}`, err);
-          
-          // If error indicates market is closed, mark it to avoid repeated attempts
-          if (err.message.includes('closed') || err.message.includes('inactive') || err.message.includes('accepting_orders')) {
-              this.closedMarkets.add(conditionId);
-              this.closedMarketsTimestamps.set(conditionId, Date.now());
-              logger.warn(`[MM] Market ${conditionId} marked as closed due to: ${err.message}`);
-          }
-          
           return failResult(err.message);
       }
   }
 
   /**
    * Place a GTC limit order (required for liquidity rewards)
+   * Refactored to use adapter.createOrder for Safe/Relayer/Attribution support
    */
   private async placeGTCOrder(params: {
       tokenId: string;
@@ -963,12 +699,12 @@ export class TradeExecutorService {
           const response = await adapter.createOrder({
               marketId: params.conditionId,
               tokenId: params.tokenId,
-              outcome: params.side === 'BUY' ? 'YES' : 'NO', 
+              outcome: params.side === 'BUY' ? 'YES' : 'NO', // Outcome used for metadata
               side: params.side,
               sizeUsd: roundedPrice * params.size,
               sizeShares: params.size,
               priceLimit: roundedPrice,
-              orderType: 'GTC' 
+              orderType: 'GTC' // CRITICAL: This flag forces the maker lane in adapter
           });
 
           if (response.success) {
@@ -984,17 +720,28 @@ export class TradeExecutorService {
 
   /**
    * Cancel existing quotes for a token before placing new ones
+   * Per docs: cancelMarketOrders with asset_id
    */
   public async cancelExistingQuotes(tokenId: string): Promise<void> {
       const { adapter, logger } = this.deps;
-      logger.info(`[Executor] Purging existing quotes for token: ${tokenId}`);
+      const client = (adapter as any).getRawClient?.();
       
-      const orders = await adapter.getOpenOrders();
-      for (const order of orders) {
-          if (order.tokenId === tokenId || order.asset_id === tokenId) {
-              await adapter.cancelOrder(order.orderID || order.id);
-              logger.debug(`[MM] Cancelled order ${order.orderID || order.id} for token ${tokenId}`);
+      const existing = this.activeQuotes.get(tokenId);
+      if (!existing) return;
+
+      try {
+          const orderIds = [existing.bidOrderId, existing.askOrderId].filter(Boolean) as string[];
+          
+          if (orderIds.length > 0 && client) {
+              // Per docs: cancelOrders for multiple orders
+              await client.cancelOrders(orderIds);
+              logger.debug(`[MM] Cancelled ${orderIds.length} existing quotes for ${tokenId}`);
           }
+          
+          this.activeQuotes.delete(tokenId);
+      } catch (error) {
+          // Non-fatal - orders may have already been filled/cancelled
+          logger.debug(`[MM] Cancel existing quotes warning: ${error}`);
       }
   }
 
@@ -1009,24 +756,10 @@ export class TradeExecutorService {
       const { logger } = this.deps;
       const { tokenId, conditionId, midpoint, rewardsMaxSpread, rewardsMinSize } = opportunity;
 
-      // Check if market was previously marked as closed (fail-fast approach)
-      if (this.closedMarkets.has(conditionId)) {
-          // Check if TTL expired
-          const timestamp = this.closedMarketsTimestamps.get(conditionId);
-          if (timestamp && (Date.now() - timestamp) < this.CLOSED_MARKETS_TTL) {
-              return { tokenId, status: 'FAILED', reason: 'market_previously_closed' };
-          }
-          // TTL expired, remove from closed markets
-          this.closedMarkets.delete(conditionId);
-          this.closedMarketsTimestamps.delete(conditionId);
+      const market = await this.validateMarketForMM(conditionId);
+      if (!market.valid) {
+          return { tokenId, status: 'FAILED', reason: market.reason };
       }
-
-      // Use default market data - no API validation needed
-      const marketData = {
-          negRisk: false,
-          tickSize: '0.01',
-          minOrderSize: 5
-      };
 
       const offset = rewardsMaxSpread ? Math.min(this.mmConfig.spreadOffset, rewardsMaxSpread / 2) : this.mmConfig.spreadOffset;
       const price = side === 'BUY' 
@@ -1037,11 +770,32 @@ export class TradeExecutorService {
           ? Math.min(this.mmConfig.quoteSize / price, inventory)
           : this.mmConfig.quoteSize / price;
 
-      return {
+      const minSize = rewardsMinSize || market.minOrderSize || 5;
+      if (size < minSize) {
+          return { tokenId, status: 'SKIPPED', reason: `size_below_minimum: ${size} < ${minSize}` };
+      }
+
+      const result = await this.placeGTCOrder({
           tokenId,
-          [side === 'BUY' ? 'bidPrice' : 'askPrice']: price,
-          status: 'POSTED'
-      };
+          conditionId,
+          side,
+          price,
+          size,
+          negRisk: market.negRisk,
+          tickSize: market.tickSize
+      });
+
+      if (result.success) {
+          logger.success(`[MM] ${side} posted: ${size.toFixed(2)} @ ${(price * 100).toFixed(1)}¢`);
+          return {
+              tokenId,
+              status: 'POSTED',
+              [side === 'BUY' ? 'bidOrderId' : 'askOrderId']: result.orderId,
+              [side === 'BUY' ? 'bidPrice' : 'askPrice']: price
+          };
+      }
+
+      return { tokenId, status: 'FAILED', reason: result.error };
   }
 
   /**
@@ -1058,26 +812,23 @@ export class TradeExecutorService {
         const client = (adapter as any).getRawClient?.();
 
         try {
-            const market = await MARKET_RATE_LIMITER.add(async () => {
-                const client = (adapter as any).getRawClient?.();
-                return client?.getMarket(conditionId);
-            });
+            const market = await client.getMarket(conditionId);
             
             if (!market) return { valid: false, reason: 'market_not_found', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
-            if ((market as any).closed) return { valid: false, reason: 'market_closed', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
-            if (!(market as any).active) return { valid: false, reason: 'market_inactive', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
-            if (!(market as any).accepting_orders) return { valid: false, reason: 'not_accepting_orders', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            if (market.closed) return { valid: false, reason: 'market_closed', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            if (!market.active) return { valid: false, reason: 'market_inactive', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
+            if (!market.accepting_orders) return { valid: false, reason: 'not_accepting_orders', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
             
             // Skip markets without rewards
-            if (!(market as any).rewards?.rates) {
+            if (!market.rewards?.rates) {
                 return { valid: false, reason: 'no_rewards', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
             }
 
             return {
                 valid: true,
-                negRisk: (market as any).neg_risk || false,
-                tickSize: (market as any).minimum_tick_size?.toString() || '0.01',
-                minOrderSize: (market as any).minimum_order_size || 5
+                negRisk: market.neg_risk || false,
+                tickSize: market.minimum_tick_size?.toString() || '0.01',
+                minOrderSize: market.minimum_order_size || 5
             };
         } catch (error) {
             return { valid: false, reason: 'validation_error', negRisk: false, tickSize: '0.01', minOrderSize: 5 };
@@ -1109,6 +860,7 @@ export class TradeExecutorService {
       if (!client) return;
 
       try {
+          // Per docs: cancelAll() cancels all open orders
           await client.cancelAll();
           this.activeQuotes.clear();
           this.pendingSpend = 0;
@@ -1117,6 +869,10 @@ export class TradeExecutorService {
           logger.error(`[MM] Failed to cancel all quotes: ${error}`);
       }
   }
+
+  // ============================================================
+  // ORIGINAL COPY TRADING METHODS (PRESERVED)
+  // ============================================================
 
   private async checkMarketResolution(position: ActivePosition): Promise<{
     resolved: boolean;
@@ -1289,24 +1045,21 @@ export class TradeExecutorService {
 
     try {
       try {
-        const market = await MARKET_RATE_LIMITER.add(async () => {
-                const client = (adapter as any).getRawClient();
-                return client.getMarket(signal.marketId);
-            });
+        const market = await (adapter as any).getRawClient().getMarket(signal.marketId);
         
         if (!market) {
           logger.warn(`[Market Not Found] ${signal.marketId} - Skipping`);
           return failResult("market_not_found");
         }
-        if ((market as any).closed) {
+        if (market.closed) {
           logger.warn(`[Market Closed] ${signal.marketId} - Skipping`);
           return failResult("market_closed");
         }
-        if (!(market as any).active || !(market as any).accepting_orders) {
+        if (!market.active || !market.accepting_orders) {
           logger.warn(`[Market Inactive] ${signal.marketId} - Skipping`);
           return failResult("market_not_accepting_orders");
         }
-        if ((market as any).archived) {
+        if (market.archived) {
           logger.warn(`[Market Archived] ${signal.marketId} - Skipping`);
           return failResult("market_archived");
         }
@@ -1406,6 +1159,7 @@ export class TradeExecutorService {
       let usableBalanceForTrade = 0;
       let currentShareBalance = 0;
 
+      // Get current positions and trader balance first
       const [positions, traderBalance] = await Promise.all([
           adapter.getPositions(proxyWallet),
           this.getTraderBalance(signal.trader)
@@ -1425,7 +1179,7 @@ export class TradeExecutorService {
 
       // Calculate initial sizing with current balance
       let sizing = computeProportionalSizing({
-          yourUsdBalance: 0, 
+          yourUsdBalance: 0, // Will be updated below
           yourShareBalance: currentShareBalance,
           traderUsdBalance: traderBalance,
           traderTradeUsd: signal.sizeUsd,
@@ -1436,10 +1190,12 @@ export class TradeExecutorService {
           side: signal.side
       });
 
+      // Now handle balance checks and adjustments
       if (signal.side === 'BUY') {
           const chainBalance = await adapter.fetchBalance(proxyWallet);
           usableBalanceForTrade = Math.max(0, chainBalance - this.pendingSpend);
           
+          // Update sizing with actual usable balance
           sizing = computeProportionalSizing({
               yourUsdBalance: usableBalanceForTrade,
               yourShareBalance: currentShareBalance,
@@ -1452,6 +1208,7 @@ export class TradeExecutorService {
               side: signal.side
           });
 
+          // Adjust target size if needed
           if (usableBalanceForTrade < sizing.targetUsdSize) {
               sizing.targetUsdSize = Math.min(sizing.targetUsdSize, usableBalanceForTrade);
               if (signal.price > 0) {
@@ -1487,6 +1244,7 @@ export class TradeExecutorService {
 
       logger.info(`[Sizing] Whale: $${traderBalance.toFixed(0)} | Signal: $${signal.sizeUsd.toFixed(0)} (${signal.side}) | Target: $${sizing.targetUsdSize.toFixed(2)} (${sizing.targetShares} shares) | Reason: ${sizing.reason}`);
 
+      // FIX: Access safeManager from adapter via any-casting to bypass IExchangeAdapter interface restrictions and access internal Safe implementation details
       const anyAdapter = adapter as any;
       if (signal.side === 'BUY' && anyAdapter.safeManager) {
           const safeManager = anyAdapter.safeManager;
@@ -1496,8 +1254,10 @@ export class TradeExecutorService {
           try {
               this.deps.logger.info(`[Allowance] Checking USDC allowance for trade: $${sizing.targetUsdSize.toFixed(2)}`);
               await safeManager.setDynamicAllowance(TOKENS.USDC_BRIDGED, spender, requiredAmount);
-          } catch (e: any) {
-              return failResult(`allowance_error: ${e.message}`, 'FAILED');
+          } catch (e) {
+              const errorMsg = e instanceof Error ? e.message : String(e);
+              this.deps.logger.error(`[Allowance] Failed to set allowance: ${errorMsg}`);
+              return failResult(`allowance_error: ${errorMsg}`, 'FAILED');
           }
       }
 
@@ -1521,6 +1281,7 @@ export class TradeExecutorService {
           };
       }
 
+      // Update pending spend based on actual filled amount for BUY orders
       if (signal.side === 'BUY' && result.sharesFilled > 0) {
           const filledAmount = result.sharesFilled * (result.priceFilled || signal.price || 0);
           this.updatePendingSpend(filledAmount, true, result.orderId);
@@ -1535,9 +1296,9 @@ export class TradeExecutorService {
           reason: sizing?.reason
       };
 
-    } catch (err: any) {
+    } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      logger.error(`Failed to copy trade: ${errorMessage}`, err as any);
+      logger.error(`Failed to copy trade: ${errorMessage}`, err as Error);
       return {
             status: 'FAILED',
             executedAmount: 0,

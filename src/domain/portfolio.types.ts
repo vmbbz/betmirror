@@ -1,26 +1,25 @@
-import { ActivePosition } from './trade.types.js';
-
-export interface PositionBreakdown {
-  marketId: string;
-  outcome: string;
-  shares: number;
-  entryPrice: number;
-  currentPrice: number;
-  value: number;
-  pnl: number;
-}
+// Portfolio tracking types for performance analytics
 
 export interface PortfolioSnapshot {
   id: string;
   userId: string;
   timestamp: Date;
-  totalValue: number;
-  cashBalance: number;
-  positionsValue: number;
-  positionsCount: number;
-  totalPnL: number;
-  totalPnLPercent: number;
-  positionsBreakdown: PositionBreakdown[];
+  totalValue: number; // Total portfolio value (cash + positions)
+  cashBalance: number; // Available cash
+  positionsValue: number; // Value of all positions
+  positionsCount: number; // Number of active positions
+  totalPnL: number; // Cumulative P&L
+  totalPnLPercent: number; // P&L percentage
+  // Optional: Store positions breakdown for detailed analytics
+  positionsBreakdown?: Array<{
+    marketId: string;
+    outcome: string;
+    shares: number;
+    entryPrice: number;
+    currentPrice: number;
+    value: number;
+    pnl: number;
+  }>;
 }
 
 export interface PortfolioAnalytics {
@@ -33,4 +32,6 @@ export interface PortfolioAnalytics {
   totalReturnPercent: number;
   maxDrawdown: number;
   maxDrawdownPercent: number;
+  sharpeRatio?: number;
+  volatility?: number;
 }
